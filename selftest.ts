@@ -91612,6 +91612,7 @@ import { DEFORM_CURVE_END, deformAt, deformPercent, heldArray, SEQUENCE_MODES as
 import { drawOrderAt } from './src/core/draw_order.ts';
 import { eventsFired, type CoreEventRow } from './src/core/events.ts';
 import { physicsState, stepPhysics, stepSchedule, type CorePhysicsRecord } from './src/core/constraints_physics.ts';
+import { physicsScaleCases } from './tools/physics_scale_cases.ts';
 import { modeMatrix, worldTransforms, type CoreInheritMode, type WorldArithmetic } from './src/core/world.ts';
 import { ADMITTED_CONSTRAINT_KINDS, TRANSFORM_PROPERTIES, type ConstraintPlant, type CoreConstraintRecord, type CoreTransformRecord } from './src/core/constraints.ts';
 // The per-skin view (issue #932), its own statements so the CN controls land as one hunk.
@@ -105176,6 +105177,18 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
     // The environment the live tracks' physics answers and the rig moved from outside (issue #1416): `trackEnvironmentCases`.
     trackEnvironmentCases(say, built.filter((b) => b.exits.every((e) => e === 0)));
   });
+
+  // Cheap and asset-free: keep this case in the parent rather than loading a
+  // worker for it. The standalone command invokes the same native oracle.
+  if (parent) {
+    const result = physicsScaleCases();
+    say(
+      'CO58_PHYSICS_TRANSVERSE_SCALE_MODES_MATCH_THE_NATIVE_MATRIX_AND_THE_OMISSION_IS_DETECTED',
+      result.ok,
+      probeDetail(result.ok, result.problems, `${result.readings.length} mode/setup/state readings exact to native at tolerance 0; None/Uniform/Volume gravity walks all move scale; reciprocal, bounded compression, zero and reflection on aligned and rotated/sheared bones; transverse omission red for Uniform and Volume, None unchanged`),
+      'issue #1453: reading scaleY does not establish that the step applies it; compare the actual native matrices with a nonzero scale response and detect the old omission',
+    );
+  }
 
   unit('CO29+CO30', () => {
     // ===========================================================================

@@ -889,6 +889,18 @@ export function stepPhysics(r: CorePhysicsRecord, w: CoreWorld, length: number, 
     const k = 1 + (s.scaleOffset - s.scaleLag * z) * mix * r.scaleX;
     w.a *= k;
     w.c *= k;
+    // The transverse column follows the authored mode (issue #1453), after
+    // the X column: the native Volume branch bounds reciprocal compression
+    // below 0.7; it is not an area-preservation promise on that branch.
+    if (r.scaleYMode === 'Uniform') {
+      w.b *= k;
+      w.d *= k;
+    } else if (r.scaleYMode === 'Volume') {
+      const magnitude = Math.abs(k);
+      const transverse = magnitude >= 0.7 ? 1 / magnitude : 4 - 3.67347 * magnitude;
+      w.b *= transverse;
+      w.d *= transverse;
+    }
   }
   s.tx = l * w.a;
   s.ty = l * w.c;

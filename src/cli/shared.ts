@@ -956,6 +956,21 @@ export class SkillsInstallError extends Error {}
 /** `guide` asked for a rule or a section the guide does not have (issue #1397): a refusal by `GUIDE_RULE_KNOWN` or `GUIDE_SECTION_KNOWN`, whose message is the whole line. Exit 1. */
 export class GuideError extends Error {}
 
+/**
+ * A delegating command (`CommandDoc.delegate`, issue #1457) that could not hand
+ * over: the package it delegates to does not resolve, or resolves without the
+ * bin it names. Nothing ran, so the exit is `status` (2) and the message is the
+ * whole of what is printed after `rigc <command>: `.
+ */
+export class DelegateError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // usage / per-command help
 // ---------------------------------------------------------------------------
@@ -1374,6 +1389,15 @@ interface CommandDoc {
    * `diff`) can be moved to another side in one place.
    */
   spineFormat: boolean;
+  /**
+   * A command whose body is another package's bin (issue #1457): the dispatch
+   * hands it every argument after the name untouched — nothing is parsed as a
+   * flag, `--help` included, so its page is the delegate's own — and the
+   * delegate's exit code is the command's. `flags` is empty for that reason:
+   * rigc documents no flag of a program it does not own. A control that reads
+   * a command's flag table off `--help` reads it off the commands without this.
+   */
+  delegate?: { package: string; bin: string };
 }
 
 export const COMMANDS: CommandDoc[] = [
@@ -1900,6 +1924,16 @@ export const COMMANDS: CommandDoc[] = [
       `<workspace>/${DEFAULT_SKILLS_DIR}; Claude Code installs the plugin instead (README,`,
       '"Install it into your agent").',
     ],
+  },
+  {
+    name: 'review',
+    runtime: false,
+    spineFormat: false,
+    delegate: { package: '@rig-c/review', bin: 'rig-review' },
+    usage: [
+      "rigc review <dir> [...]      (@rig-c/review's rig-review, installed beside: every argument handed over untouched, its exit code returned — `rigc review open <dir>` prints a loopback URL to give a person, `rigc review --help` is rig-review's own usage)",
+    ],
+    flags: [],
   },
 ];
 
@@ -2741,6 +2775,8 @@ export interface CommandArgs {
   flags: Record<string, string>;
   lists: Record<string, string[]>;
   positional: string[];
+  /** Every argument after the command's name, as given — what a delegating command (`CommandDoc.delegate`) hands over. */
+  raw: readonly string[];
 }
 
 /** One command's body, as an entry registers it. */
@@ -2941,13 +2977,18 @@ export function runCli(entry: CliEntry, argv: readonly string[]): void {
       if (elsewhere !== undefined) throw commandNeedsRuntime(elsewhere, known, rest);
       throw new UsageError(`unknown command: ${command}`);
     }
+    // A delegating command reads nothing here: not a flag, not `--help` (issue #1457).
+    if (docs.find((doc) => doc.name === command)?.delegate !== undefined) {
+      entry.runs[command]({ flags: {}, lists: {}, positional: [], raw: rest });
+      return;
+    }
 
     const { flags, lists, positional } = parseArgs([...rest], REPEATABLE_FLAGS[command]);
     if (flags.help !== undefined) {
       console.log(commandHelp(command, docs));
       process.exit(0);
     }
-    entry.runs[command]({ flags, lists, positional });
+    entry.runs[command]({ flags, lists, positional, raw: rest });
   } catch (err) {
     refuse(err, command, USAGE, entry);
   }
@@ -3116,6 +3157,12 @@ function refuse(err: unknown, command: string | undefined, USAGE: string, entry:
     // The message is the whole line — `FAIL  GUIDE_RULE_KNOWN: …` or `FAIL  GUIDE_SECTION_KNOWN: …`, with its pointer.
     console.error(err.message);
     process.exit(1);
+  }
+  // A delegate that could not be handed the run (issue #1457): one line naming the package and what to run, nothing else —
+  // the usage under it would bury the one command that fixes it.
+  if (err instanceof DelegateError) {
+    console.error(`rigc ${command}: ${err.message}`);
+    process.exit(err.status);
   }
   throw err;
 }

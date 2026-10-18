@@ -2159,9 +2159,15 @@ function cmdDelegate(command: string, raw: readonly string[]): void {
     );
   }
   const ran = spawnSync(process.execPath, [bin, ...raw], { stdio: 'inherit' });
-  if (ran.error !== undefined) throw new DelegateError(`could not run ${bin}: ${ran.error.message}`, 1);
-  if (ran.signal !== null) process.kill(process.pid, ran.signal);
-  process.exit(ran.status ?? 1);
+  // ⚠️ The exit and the signal are read before `error`: Bun 1.2.0 — the declared minimum — sets `error` on every
+  // child that exits non-zero, so reading it first refused review's own exit 7 as "could not run". `error` is a
+  // launch that failed only where the child left neither a status nor a signal.
+  if (typeof ran.status === 'number') process.exit(ran.status);
+  if (ran.signal !== null) {
+    process.kill(process.pid, ran.signal);
+    return;
+  }
+  throw new DelegateError(`could not run ${bin}: ${ran.error?.message ?? 'it left no exit status and no signal'}`, 1);
 }
 
 /**

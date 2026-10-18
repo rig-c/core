@@ -1435,7 +1435,16 @@ function bundlerOnce(): { js: string; version: string; faults: string[] } {
 
 interface Ran {
   status: number;
+  /** stdout, stderr and the spawn's own error, in that order — what a step prints when it reports. */
   out: string;
+  /**
+   * The two streams on their own, for a step that asserts on what was written where (issue #1457). ⚠️ Not `out`:
+   * Bun 1.2.0's `spawnSync` hands back an `error` whose message is the child's stderr whenever a child exits
+   * non-zero having written to it (measured: `node -e` writing one line to stderr and exiting 2 — Bun 1.4.2 sets no
+   * `error`), so on the declared minimum Bun `out` carries that stderr twice.
+   */
+  stdout: string;
+  stderr: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -1472,7 +1481,7 @@ function run(cmd: string, args: string[], cwd: string, env?: Env): Ran {
   const stdout = typeof r.stdout === 'string' ? r.stdout : '';
   const stderr = typeof r.stderr === 'string' ? r.stderr : '';
   const failed = r.error === undefined ? '' : `\n${r.error.message}`;
-  return { status: typeof r.status === 'number' ? r.status : 1, out: `${stdout}${stderr}${failed}` };
+  return { status: typeof r.status === 'number' ? r.status : 1, out: `${stdout}${stderr}${failed}`, stdout, stderr };
 }
 
 /**
@@ -1864,7 +1873,7 @@ function tarballFor(
   const packed =
     source.kind === 'tree'
       ? run('npm', ['pack', ROOT, '--pack-destination', packDir, '--silent'], work)
-      : { status: 0, out: '' };
+      : { status: 0, out: '', stdout: '', stderr: '' };
   const tarballs = existsSync(packDir) ? readdirSync(packDir).filter((f) => f.endsWith('.tgz')) : [];
   if (packed.status !== 0 || tarballs.length !== 1) {
     faults.push(
@@ -2584,9 +2593,10 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
     // at the install, not in a second copy of the name.
     const refusal = run(bin, ['review', 'check', FULL_OUT], home);
     output += refusal.out;
-    const named = /^rigc review: (\S+) is not installed — npm i -D (\S+)\n$/.exec(refusal.out);
-    if (refusal.status !== 2 || named === null || named[1] !== named[2]) {
-      fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package exited ${refusal.status} printing ${JSON.stringify(refusal.out.slice(0, 600))}; exit 2 and the one line "rigc review: <package> is not installed — npm i -D <package>" were required`);
+    // Read off the two streams rather than `out` (see `Ran`): exit 2, nothing on stdout, and the one line on stderr.
+    const named = /^rigc review: (\S+) is not installed — npm i -D (\S+)\n$/.exec(refusal.stderr);
+    if (refusal.status !== 2 || refusal.stdout !== '' || named === null || named[1] !== named[2]) {
+      fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package exited ${refusal.status} printing ${JSON.stringify(refusal.stdout.slice(0, 300))} on stdout and ${JSON.stringify(refusal.stderr.slice(0, 600))} on stderr; exit 2, nothing on stdout and the one line "rigc review: <package> is not installed — npm i -D <package>" on stderr were required`);
     } else {
       const reviewPackage = named[1];
       const added = spec.installer === 'npm' ? run('npm', ['install', '-D', reviewPackage, '--no-audit', '--no-fund'], home) : run('bun', ['add', '-d', reviewPackage], home);

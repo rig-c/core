@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.60.0](https://github.com/rig-c/core/compare/v2.59.0...v2.60.0) (2026-10-18)
+
+
+### Features
+
+* **cli:** rigc review delegates to the installed @rig-c/review bin ([#1462](https://github.com/rig-c/core/issues/1462)) ([70ecefa](https://github.com/rig-c/core/commit/70ecefac03d8e5d89b7ff7e3a9835e24698a24f0))
+* **render:** render --seam — per-frame seam gap and ghost between two slots, a reading that never moves the exit status ([#1464](https://github.com/rig-c/core/issues/1464)) ([24b4714](https://github.com/rig-c/core/commit/24b471410f587c0df29cfe36f0e36d49583b15eb))
+
+
+### Bug Fixes
+
+* **stop:** name the link, the point and the remedy when a first-link bound passes a half turn ([#1460](https://github.com/rig-c/core/issues/1460)) ([3886df5](https://github.com/rig-c/core/commit/3886df552bcf4af5b322764b065be17cca2a199a)), closes [#1455](https://github.com/rig-c/core/issues/1455)
+
 ## [2.59.0](https://github.com/rig-c/core/compare/v2.58.1...v2.59.0) (2026-10-15)
 
 

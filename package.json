@@ -1,6 +1,6 @@
 {
   "name": "rig-c",
-  "version": "2.59.0",
+  "version": "2.60.0",
   "description": "AI-authored 2D rigging and animation, verified before it is written. rigc compiles a rig spec into skeleton data in the Spine 4.3 format, gates it with named assertions held to a spine-core round trip's verdicts, and emits nothing that fails. Ships as an agent skill.",
   "type": "module",
   "bin": {

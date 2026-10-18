@@ -38,6 +38,7 @@ import { FOLDS_FILE, foldLine, foldsFileOf, foldsOf, foldsText, setupFaultLine }
 import { AngleRangeError, angleRangeLine, type AngleRangeReading, angleRangesOf, type BonePair, readBonePairs } from '../anglerange.ts';
 import { outsideLine, outsideViewport, pinnedRecord, readViewportBox, viewportOfFramesFile, ViewportError } from '../viewportpin.ts';
 import { PASS_THROUGH_FILE, passFrameLine, type PassPair, passSummaryLine, passThroughFileOf, passThroughOf, passThroughText, PassThroughError, readPassPairs } from '../passthrough.ts';
+import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
 import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
@@ -562,6 +563,23 @@ function readPassThroughFlag(raw: string | undefined, facts: SkeletonFacts): Pas
 }
 
 /**
+ * `--seam <a>:<b>[,…]` read against the skeleton's slots (issue #1456,
+ * `../seam.ts`), or refused as a usage error before anything is posed: a
+ * malformed list, an empty name, a slot the skeleton does not have, a slot paired
+ * with itself, a pair named twice in either order — each by its entry.
+ * `undefined` without the flag.
+ */
+function readSeamFlag(raw: string | undefined, facts: SkeletonFacts): SeamPair[] | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    return readSeamPairs(raw, facts.slots.map((slot) => slot.name));
+  } catch (err) {
+    if (err instanceof SeamError) throw new UsageError(err.message);
+    throw err;
+  }
+}
+
+/**
  * `--angle-range`'s pairs, read against the skeleton's bones (issue #1414,
  * `../anglerange.ts`), or refused as a usage error before anything is posed: a
  * malformed list, an empty name, a bone the skeleton does not have, a bone read
@@ -685,6 +703,21 @@ export function cmdRender(flags: Record<string, string>): void {
     }
   }
 
+  // The seam reading (issue #1456) is its own flag for --folds' reason, and refused beside a subset for --pass-through's:
+  // it reads the two slots as the whole rig draws them.
+  const seam = flags.seam;
+  if (seam !== undefined) {
+    for (const flag of ['slot', 'hide'] as const) {
+      if (flags[flag] !== undefined) {
+        throw new UsageError(
+          `--seam takes no --${flag}: it reads the two slots as the whole rig draws them, which a subset of the drawn slots ` +
+            `would change. Run \`rigc render --seam\` on the whole rig for the reading, and --${flag} ${flags[flag]} ` +
+            'without --seam for the pictures — both land on the same grid',
+        );
+      }
+    }
+  }
+
   console.log('rigc render');
   console.log(`  ..    skeleton ${skeletonPath}`);
   console.log(`  ..    atlas    ${atlasPath}${atlasText === null ? ` — not there (${ATLAS_ABSENT})` : ''}`);
@@ -703,6 +736,7 @@ export function cmdRender(flags: Record<string, string>): void {
   const skin = readSkinFlag(flags, [...facts.skins]);
   const subset = readSlotSubsetFlags(flags, facts, skin);
   const passPairs = readPassThroughFlag(passThrough, facts);
+  const seamPairs = readSeamFlag(seam, facts);
   // The angle reading (issue #1414) reads bones, which a subset of the drawn slots does not change, so it takes --slot/--hide.
   const anglePairs = readAngleRangeFlag(flags['angle-range'], facts);
   // One object, so the framing and the frames cannot be posed under two
@@ -774,7 +808,7 @@ export function cmdRender(flags: Record<string, string>): void {
     // the export's grid is this frame set's by construction.
     // The bones ride along for --geometry and --angle-range, the whole attachments for --geometry and the two readings off them.
     const wantsBones = geometry || anglePairs !== undefined;
-    const wantsGeometry = geometry || folds || passPairs !== undefined;
+    const wantsGeometry = geometry || folds || passPairs !== undefined || seamPairs !== undefined;
     const sampling = !wantsBones && !wantsGeometry ? pose : { ...pose, ...(wantsBones ? { bones: true } : {}), ...(wantsGeometry ? { geometry: true } : {}) };
     const sampled: Map<string, Frame[]> =
       only === undefined
@@ -828,6 +862,34 @@ export function cmdRender(flags: Record<string, string>): void {
         }
       }
     }
+    // The seam reading, off the very pieces the frames are drawn from — one per set, every pair the flag names. A pair
+    // whose slot draws on no frame of any set drawn is refused, as --pass-through refuses it, rather than read as a SKIP.
+    const seamReadings = new Map<string, ReturnType<typeof seamFileOf>>();
+    if (seamPairs !== undefined) {
+      const draws = new Set<string>();
+      for (const frames of sampled.values()) for (const frame of frames) for (const piece of frame.pieces) draws.add(piece.slot);
+      for (const pair of seamPairs) {
+        for (const slot of [pair.a, pair.b]) {
+          if (!draws.has(slot)) {
+            throw new UsageError(
+              `--seam: slot ${JSON.stringify(slot)} draws on no frame of [${[...sampled.keys()].join(', ')}]${skin === undefined ? '' : ` under skin ${JSON.stringify(skin)}`} ` +
+                '— it shows no region or mesh there, so it has no drawing to read a seam of',
+            );
+          }
+        }
+      }
+      for (const [name, frames] of sampled) {
+        const animation = name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name;
+        const shown = frames.map((frame) => frame.attachments ?? []);
+        const read = frames.map((frame) => ({ index: frame.index, time: frame.time, pieces: frame.pieces, attachments: frame.attachments ?? [] }));
+        try {
+          seamReadings.set(name, seamFileOf(animation, fps, skin, seamsOf(seamPairs, poser.rest(skin, shown), read, pages)));
+        } catch (err) {
+          if (err instanceof SeamError) throw new UsageError(`--seam, ${JSON.stringify(name)}: ${err.message}`);
+          throw err;
+        }
+      }
+    }
     // The angle reading, off the very bones the frames were posed with — one per set, every pair the flag names.
     const angleReadings = new Map<string, AngleRangeReading[]>();
     if (anglePairs !== undefined) {
@@ -841,9 +903,9 @@ export function cmdRender(flags: Record<string, string>): void {
         }
       }
     }
-    return { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, angleReadings };
+    return { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings };
   });
-  const { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, angleReadings } = posed.value;
+  const { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings } = posed.value;
   console.log(`  ..    poser    ${posed.note}`);
   if (environment !== undefined) {
     const response = environmentResponse(skeletonText);
@@ -893,6 +955,8 @@ export function cmdRender(flags: Record<string, string>): void {
     if (foldReading !== undefined) writeFileSync(join(dir, FOLDS_FILE), foldsText(foldReading));
     const passReading = passReadings.get(name);
     if (passReading !== undefined) writeFileSync(join(dir, PASS_THROUGH_FILE), passThroughText(passReading));
+    const seamReading = seamReadings.get(name);
+    if (seamReading !== undefined) writeFileSync(join(dir, SEAM_FILE), seamText(seamReading));
     const duration = frames[frames.length - 1].time;
     sets.push({
       dir: dirName,
@@ -908,7 +972,9 @@ export function cmdRender(flags: Record<string, string>): void {
     const foldNote = foldReading === undefined ? '' : ` + ${FOLDS_FILE} (${folding} of ${foldReading.meshes.length} mesh(es) fold)`;
     const passing = passReading?.pairs.filter((p) => p.frames.length > 0).length ?? 0;
     const passNote = passReading === undefined ? '' : ` + ${PASS_THROUGH_FILE} (${passing} of ${passReading.pairs.length} pair(s) pass through)`;
-    const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}`;
+    const opening = seamReading?.pairs.filter((p) => p.opens.length > 0).length ?? 0;
+    const seamNote = seamReading === undefined ? '' : ` + ${SEAM_FILE} (${opening} of ${seamReading.pairs.length} pair(s) open)`;
+    const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}${seamNote}`;
     console.log(`  ..    ${name.padEnd(16)} ${frames.length} frame(s), ${how}${extras} -> ${dir}`);
     for (const mesh of foldReading?.meshes ?? []) {
       const key = `${mesh.slot}\u0000${mesh.attachment}`;
@@ -922,6 +988,7 @@ export function cmdRender(flags: Record<string, string>): void {
       console.log(`  ..    pass     ${passSummaryLine(passReading?.animation ?? null, fps, pair)}`);
       for (const frame of pair.frames) console.log(`  ..    pass     ${passFrameLine(passReading?.animation ?? null, pair, frame)}`);
     }
+    for (const pair of seamReading?.pairs ?? []) console.log(`  ..    seam     ${seamLine(seamReading?.animation ?? null, fps, pair)}`);
     for (const reading of angleReadings.get(name) ?? []) {
       console.log(`  ..    angle    ${angleRangeLine(name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name, fps, reading)}`);
     }

@@ -238,7 +238,7 @@ export function texelSize(piece: Piece, vertices: ArrayLike<number>, page: Plate
 }
 
 /** The cells `piece` draws at half opacity or more over `viewport`, row major, 1 where drawn. */
-function drawnCells(piece: Piece, page: Plate, viewport: Viewport): Uint8Array {
+export function drawnCells(piece: Piece, page: Plate, viewport: Viewport): Uint8Array {
   const cells = new Uint8Array(viewport.width * viewport.height);
   rasterisePiece(page, piece, projector(viewport), viewport, (px, py, _r, _g, _b, a) => {
     if (a >= DRAWN_ALPHA) cells[py * viewport.width + px] = 1;
@@ -251,7 +251,7 @@ function drawnCells(piece: Piece, page: Plate, viewport: Viewport): Uint8Array {
  * renderer's own traversal over a one-cell grid centred on the point, so the
  * test is the frame's pixel test and nothing re-derived beside it.
  */
-function drawsAt(piece: Piece, page: Plate, x: number, y: number, cell: number): boolean {
+export function drawsAt(piece: Piece, page: Plate, x: number, y: number, cell: number): boolean {
   const viewport: Viewport = { minX: x - cell / 2, minY: y - cell / 2, maxX: x + cell / 2, maxY: y + cell / 2, scale: 1 / cell, width: 1, height: 1 };
   let drawn = false;
   rasterisePiece(page, piece, projector(viewport), viewport, (_px, _py, _r, _g, _b, a) => {
@@ -427,7 +427,7 @@ function runsAt(
 const restKey = (slot: string, attachment: string): string => `${slot}\u0000${attachment}`;
 
 /** Whether two vertex lists are the same numbers — a piece drawn from its attachment whole, not cut by a clip. */
-function sameVertices(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+export function sameVertices(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;

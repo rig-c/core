@@ -136775,6 +136775,451 @@ function runPassThroughSuite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// seam — where two slots that meet stop meeting (issue #1456)
+// ---------------------------------------------------------------------------
+
+import { SEAM_FILE, type SeamFile, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
+
+/**
+ * How far the seam probe turns the skirt, in degrees: the issue's figure, past
+ * the 30° the probe's own `swing` reaches. Chosen, not measured.
+ */
+const SEAM_TURN = 40;
+
+/** The pairs the seam probe is read with: the skirt over the leg, and the two copies of the leg, which move together. */
+const SEAM_PROBE_PAIRS: readonly SeamPair[] = [
+  { a: 'skirt', b: 'leg' },
+  { a: 'leg_front', b: 'leg' },
+];
+
+/** A world box `[minX, minY, maxX, maxY]`. */
+type SeamProbeBox = [number, number, number, number];
+
+/**
+ * The probe's drawn rectangles, from `PASS_PLATE` alone: every plate is drawn one
+ * texel to a world unit inside its transparent margin, so the cell the reading
+ * grids by is one unit and a drawn rectangle is its plate's, inset by the margin.
+ * The band is the rectangle both draw at the setup pose.
+ */
+function seamProbeRects(): { skirt: SeamProbeBox; leg: SeamProbeBox; band: SeamProbeBox } {
+  const { skirt, leg, margin, hipY, thighX } = PASS_PLATE;
+  const s: SeamProbeBox = [-skirt.width / 2 + margin, hipY - skirt.height + margin, skirt.width / 2 - margin, hipY - margin];
+  const l: SeamProbeBox = [thighX - leg.width / 2 + margin, hipY - leg.height + margin, thighX + leg.width / 2 - margin, hipY - margin];
+  return { skirt: s, leg: l, band: [Math.max(s[0], l[0]), Math.max(s[1], l[1]), Math.min(s[2], l[2]), Math.min(s[3], l[3])] };
+}
+
+/** The leg's shift on `shift`: its own drawn width to the left, which carries its band out past the skirt's side and nowhere else. */
+const seamProbeShift = (): number => -(PASS_PLATE.leg.width - 2 * PASS_PLATE.margin);
+
+/**
+ * The mutant motion: the probe's own animations, and four more — `turn` holds the
+ * hip at `SEAM_TURN`; `apart` holds the leg pulled down by its plate's height,
+ * out of the skirt; `shift` holds the leg moved by `seamProbeShift`; `rigid`
+ * turns the root, which carries every slot, by `SEAM_TURN` and back over the
+ * swing's duration.
+ */
+function seamProbeMotion(motionText: string): string {
+  const motion = JSON.parse(motionText) as { animations: Record<string, unknown> };
+  const hold = (bone: string, property: string, v: number[]) => ({ duration: 1, loop: false, tracks: [{ bone, property, keys: [{ t: 0, v }, { t: 1, v }] }] });
+  motion.animations.turn = hold('hip', 'rotate', [SEAM_TURN]);
+  motion.animations.apart = hold('thigh', 'translate', [0, -PASS_PLATE.leg.height]);
+  motion.animations.shift = hold('thigh', 'translate', [seamProbeShift(), 0]);
+  const d = PASS_PLATE.duration;
+  motion.animations.rigid = { duration: d, loop: false, tracks: [{ bone: 'root', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: d / 2, v: [SEAM_TURN] }, { t: d, v: [0] }] }] };
+  return `${JSON.stringify(motion, null, 2)}\n`;
+}
+
+/** The SKIP rig: the probe with its thigh moved right by half the skirt and half the leg, so the two drawings share no cell. */
+function seamProbeApartRig(rigText: string): string {
+  const rig = JSON.parse(rigText) as { bones: Array<{ name: string; x?: number }> };
+  const thigh = rig.bones.find((b) => b.name === 'thigh');
+  if (thigh !== undefined) thigh.x = PASS_PLATE.skirt.width / 2 + PASS_PLATE.leg.width / 2;
+  return `${JSON.stringify(rig, null, 2)}\n`;
+}
+
+/** Each set's frame count at `fps`. */
+const seamProbeFrames = (set: string, fps: number): number => Math.round((set === 'rigid' || set === 'swing' || set === 'swing_behind' ? PASS_PLATE.duration : 1) * fps) + 1;
+
+type SeamReadings = ReadonlyMap<string, readonly SeamPairReading[]>;
+
+const seamPairOf = (readings: SeamReadings, set: string, a: string, b: string): SeamPairReading | undefined => readings.get(set)?.find((p) => p.a === a && p.b === b);
+
+/** Whether `inner` lies inside `outer`, up to the rounding of a posed corner. */
+const seamBoxInside = (inner: SeamProbeBox, outer: SeamProbeBox): boolean =>
+  inner[0] >= outer[0] - 1e-6 && inner[1] >= outer[1] - 1e-6 && inner[2] <= outer[2] + 1e-6 && inner[3] <= outer[3] + 1e-6;
+
+/** SM01's reading: what moves together, and what does not move, stays closed — read on every frame, and on none open. */
+function seamClosedFaults(readings: SeamReadings, fps: number): string[] {
+  const faults: string[] = [];
+  for (const set of ['rest', 'rigid']) {
+    const pair = seamPairOf(readings, set, 'skirt', 'leg');
+    const n = seamProbeFrames(set, fps);
+    if (pair === undefined) faults.push(`no reading of "skirt|leg" on "${set}"`);
+    else if (pair.status !== 'read' || pair.banded !== n || pair.opens.length !== 0) faults.push(`"skirt|leg" on "${set}" reads ${JSON.stringify({ status: pair.status, banded: pair.banded, opens: pair.opens })}, required read on all ${n} frame(s) and open on none`);
+  }
+  for (const [set, list] of readings) {
+    const pair = list.find((p) => p.a === 'leg_front' && p.b === 'leg');
+    if (pair === undefined || pair.status !== 'read' || pair.opens.length !== 0) faults.push(`"leg_front|leg" on "${set}" reads ${JSON.stringify(pair && { status: pair.status, opens: pair.opens })} — one plate on one bone, which never opens`);
+  }
+  return faults;
+}
+
+/** SM02's reading: the skirt turned past its swing opens a gap on every frame, in the joint — inside the band's hull as both pieces carry it. */
+function seamTurnFaults(readings: SeamReadings, fps: number): string[] {
+  const pair = seamPairOf(readings, 'turn', 'skirt', 'leg');
+  if (pair === undefined) return ['no reading of "skirt|leg" on "turn"'];
+  const faults: string[] = [];
+  const n = seamProbeFrames('turn', fps);
+  const got = pair.gap.frames.map((f) => f.index);
+  if (got.length !== n) faults.push(`"skirt|leg" on "turn" opens a gap on [${got.join(', ')}], required every frame 0-${n - 1}: the skirt is held ${SEAM_TURN}° off the leg`);
+  // The band's cell centres, carried by the leg (which does not move) and by the skirt (turned about the hip), bound the hull.
+  const { band } = seamProbeRects();
+  const c = Math.cos((SEAM_TURN * Math.PI) / 180);
+  const s = Math.sin((SEAM_TURN * Math.PI) / 180);
+  const corners = [
+    [band[0] + 0.5, band[1] + 0.5],
+    [band[2] - 0.5, band[1] + 0.5],
+    [band[0] + 0.5, band[3] - 0.5],
+    [band[2] - 0.5, band[3] - 0.5],
+  ];
+  const carried = [...corners, ...corners.map(([x, y]) => [c * x - s * (y - PASS_PLATE.hipY), PASS_PLATE.hipY + s * x + c * (y - PASS_PLATE.hipY)])];
+  const hull: SeamProbeBox = [Math.min(...carried.map((p) => p[0])) - 0.5, Math.min(...carried.map((p) => p[1])) - 0.5, Math.max(...carried.map((p) => p[0])) + 0.5, Math.max(...carried.map((p) => p[1])) + 0.5];
+  for (const f of pair.gap.frames) {
+    // One texel to a unit, up to the rounding of the area ratio the texel is read off.
+    if (!(f.px > 0) || Math.abs(f.cell - 1) > 1e-9) faults.push(`"turn" frame ${f.index} gap ${f.px} px at cell ${f.cell}, required some cells of one unit`);
+    if (!seamBoxInside(f.box, hull)) faults.push(`"turn" frame ${f.index} gap box ${JSON.stringify(f.box)} reaches outside the band's hull ${JSON.stringify(hull)} — read outside the joint`);
+  }
+  return faults;
+}
+
+/** SM03's reading: the leg pulled out of the skirt opens a gap on every frame, where its top was, below the skirt's hem. */
+function seamApartFaults(readings: SeamReadings, fps: number): string[] {
+  const pair = seamPairOf(readings, 'apart', 'skirt', 'leg');
+  if (pair === undefined) return ['no reading of "skirt|leg" on "apart"'];
+  const faults: string[] = [];
+  const n = seamProbeFrames('apart', fps);
+  const got = pair.gap.frames.map((f) => f.index);
+  if (got.length !== n) faults.push(`"skirt|leg" on "apart" opens a gap on [${got.join(', ')}], required every frame 0-${n - 1}: the leg is held ${PASS_PLATE.leg.height} units down, out of the skirt`);
+  const { skirt, leg } = seamProbeRects();
+  const stub: SeamProbeBox = [leg[0], leg[1], leg[2], skirt[1]];
+  for (const f of pair.gap.frames) {
+    if (!(f.px > 0)) faults.push(`"apart" frame ${f.index} gap of ${f.px} px`);
+    if (!seamBoxInside(f.box, stub)) faults.push(`"apart" frame ${f.index} gap box ${JSON.stringify(f.box)} is not inside ${JSON.stringify(stub)}, the leg's drawing below the hem where the skirt's view still finds it`);
+  }
+  return faults;
+}
+
+/** SM04's reading: the leg shifted shows its band past the skirt's side — a ghost of exactly that rectangle on every frame, and no gap. */
+function seamShiftFaults(readings: SeamReadings, fps: number): string[] {
+  const pair = seamPairOf(readings, 'shift', 'skirt', 'leg');
+  if (pair === undefined) return ['no reading of "skirt|leg" on "shift"'];
+  const faults: string[] = [];
+  const n = seamProbeFrames('shift', fps);
+  const { skirt, band } = seamProbeRects();
+  const want: SeamProbeBox = [band[0] + seamProbeShift(), band[1], skirt[0], band[3]];
+  const px = (want[2] - want[0]) * (want[3] - want[1]);
+  if (pair.gap.frames.length !== 0) faults.push(`"skirt|leg" on "shift" opens a gap on [${pair.gap.frames.map((f) => f.index).join(', ')}] — the leg covers everything between the band's two places`);
+  if (pair.ghost.frames.length !== n) faults.push(`"skirt|leg" on "shift" shows a ghost on [${pair.ghost.frames.map((f) => f.index).join(', ')}], required every frame 0-${n - 1}`);
+  for (const f of pair.ghost.frames) {
+    if (f.px !== px) faults.push(`"shift" frame ${f.index} ghost ${f.px} px, the probe's numbers give ${px} — the band's part past the skirt's side`);
+    if (f.box.some((v, i) => Math.abs(v - want[i]) > 1e-6)) faults.push(`"shift" frame ${f.index} ghost box ${JSON.stringify(f.box)}, the probe's numbers give ${JSON.stringify(want)}`);
+  }
+  if (pair.maxPx !== (pair.ghost.frames.length === 0 ? 0 : px) || JSON.stringify(pair.opens) !== JSON.stringify(pair.ghost.frames.map((f) => f.index))) faults.push(`"skirt|leg" on "shift" carries opens ${JSON.stringify(pair.opens)} and maxPx ${pair.maxPx}, not its ghost frames' and their most`);
+  return faults;
+}
+
+/** SM05's reading: two drawings that share no cell at the setup pose are a SKIP on every set — nothing measured, never a pass. */
+function seamSkipFaults(readings: SeamReadings, fps: number): string[] {
+  const faults: string[] = [];
+  if (readings.size === 0) faults.push('no set read');
+  for (const [set, list] of readings) {
+    const pair = list.find((p) => p.a === 'skirt' && p.b === 'leg');
+    const n = seamProbeFrames(set, fps);
+    if (pair === undefined || pair.status !== 'skip' || pair.drawn !== n || pair.banded !== 0 || pair.opens.length !== 0) {
+      faults.push(`"skirt|leg" on "${set}" with the leg beside the skirt reads ${JSON.stringify(pair && { status: pair.status, drawn: pair.drawn, banded: pair.banded })}, required skip — both draw on all ${n} frame(s), and share no cell`);
+    }
+  }
+  return faults;
+}
+
+function runSeamSuite(): number {
+  console.log('\n── seam: where two slots that meet stop meeting (issue #1456) ──');
+  let bad = 0;
+  const say = (name: string, ok: boolean, detail: string, why: string): void => {
+    bad += reportCase(name, ok, detail, why);
+  };
+  const fps = PROTOCOL_FPS;
+  const probe = passThroughFixture();
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-seam-'));
+  const pre: string[] = [];
+  const motionPath = join(work, 'seam_probe.motion.json');
+  writeFileSync(motionPath, seamProbeMotion(readFileSync(probe.motionPath, 'utf8')));
+  const apartRigPath = join(work, 'seam_apart.rig.json');
+  writeFileSync(apartRigPath, seamProbeApartRig(readFileSync(probe.rigPath, 'utf8')));
+  const built = join(work, 'spine');
+  const apartBuilt = join(work, 'spine-apart');
+  for (const [rig, out] of [[probe.rigPath, built], [apartRigPath, apartBuilt]] as const) {
+    const run = runCli(['build', '--rig', rig, '--motion', motionPath, '--images', probe.imagesDir, '--out', out]);
+    if (run.status !== 0) pre.push(`${rig} did not build (exit ${String(run.status)}): ${(run.stdout + run.stderr).trim().slice(-400)}`);
+  }
+  const dir = (name: string): string => join(work, name);
+  const flag = SEAM_PROBE_PAIRS.map((p) => `${p.a}:${p.b}`).join(',');
+  const render = (candidate: string, name: string, extra: string[]): ReturnType<typeof runCli> | null =>
+    pre.length > 0 ? null : runCli(['render', '--candidate', candidate, '--max', '64', ...extra, '--out', dir(name)]);
+  const seamed = render(built, 'seam', ['--seam', flag]);
+  const again = render(built, 'again', ['--seam', flag]);
+  const spine = render(built, 'spine-poser', ['--seam', flag, '--poser', 'spine']);
+  const plain = render(built, 'plain', []);
+  const skipped = render(apartBuilt, 'skip', ['--seam', 'skirt:leg']);
+  for (const [name, run] of [['--seam', seamed], ['--seam again', again], ['--seam --poser spine', spine], ['plain', plain], ['--seam, the leg beside the skirt', skipped]] as const) {
+    if (run !== null && run.status !== 0) pre.push(`render ${name} exited ${String(run.status)}: ${run.stderr.trim().slice(0, 300)}`);
+  }
+  const sets = ['swing', 'swing_behind', 'rest', 'squash', 'turn', 'apart', 'shift', 'rigid'];
+  const fileOf = (root: string, set: string): SeamFile | null => {
+    const path = join(root, set, SEAM_FILE);
+    return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as SeamFile) : null;
+  };
+  const cli = new Map<string, readonly SeamPairReading[]>();
+  const cliSkip = new Map<string, readonly SeamPairReading[]>();
+  if (pre.length === 0) {
+    for (const set of sets) {
+      const file = fileOf(dir('seam'), set);
+      if (file === null) pre.push(`render --seam wrote no ${SEAM_FILE} for "${set}"`);
+      else cli.set(set, file.pairs);
+      const skip = fileOf(dir('skip'), set);
+      if (skip === null) pre.push(`render --seam on the leg beside the skirt wrote no ${SEAM_FILE} for "${set}"`);
+      else cliSkip.set(set, skip.pairs);
+    }
+  }
+  // The design of the probe, checked before anything is read off it: the shift moves the band clear of the skirt and
+  // no more than its own width, and the SKIP rig's leg is beside the skirt.
+  {
+    const { skirt, band } = seamProbeRects();
+    if (!(band[0] + seamProbeShift() < skirt[0] && band[2] + seamProbeShift() > skirt[0] - (band[2] - band[0]))) pre.push('the shift does not carry the band past the skirt\'s side by less than its width');
+    if (!(band[0] < band[2] && band[1] < band[3])) pre.push(`the probe's band ${JSON.stringify(band)} is empty — the leg does not hang inside the skirt`);
+    // The SKIP rig's leg is drawn from its thigh less half its plate, inside its margin.
+    const legLeft = PASS_PLATE.skirt.width / 2 + PASS_PLATE.leg.width / 2 - PASS_PLATE.leg.width / 2 + PASS_PLATE.margin;
+    if (!(legLeft > skirt[2])) pre.push(`the SKIP rig's leg is drawn from x ${legLeft}, not beside the skirt's drawn right edge ${skirt[2]}`);
+  }
+  const lines = (seamed?.stdout ?? '').split('\n');
+
+  // The library over spine-core's poses of the same builds: the reading recomputed, and the mutants planted, off the
+  // pieces and the rest table a second poser hands it.
+  const library = (candidate: string, pairs: readonly SeamPair[], plant: SeamPlant = {}): Map<string, readonly SeamPairReading[]> => {
+    const out = new Map<string, readonly SeamPairReading[]>();
+    if (pre.length > 0) return out;
+    const posable = posableFromText(readFileSync(join(candidate, 'skeleton.json'), 'utf8'), readFileSync(join(candidate, 'skeleton.atlas'), 'utf8'), candidate);
+    const poser = spinePoser(posable.data);
+    for (const set of sets) {
+      const frames = sampleAnimation(poser, set, fps, { geometry: true });
+      const rest = poser.rest(undefined, frames.map((f) => f.attachments ?? []));
+      const read = frames.map((f) => ({ index: f.index, time: f.time, pieces: f.pieces, attachments: f.attachments ?? [] }));
+      out.set(set, seamsOf(pairs, rest, read, posable.pages, plant));
+    }
+    return out;
+  };
+  const clean = library(built, SEAM_PROBE_PAIRS);
+  const cleanSkip = library(apartBuilt, [{ a: 'skirt', b: 'leg' }]);
+
+  // SM01 — the positive control: what does not move, and what moves together, reads closed on every frame.
+  {
+    const probes = pre.length > 0 ? [...pre] : seamClosedFaults(cli, fps);
+    if (pre.length === 0 && !lines.some((l) => l.includes(`seam     "rest": seam "skirt" | "leg" stays closed on all ${seamProbeFrames('rest', fps)} frame(s) read`))) probes.push('no line says "skirt" | "leg" stays closed on "rest"');
+    const ok = probes.length === 0;
+    say(
+      'SM01_A_SEAM_AT_REST_OR_MOVED_WHOLE_STAYS_CLOSED',
+      ok,
+      probeDetail(ok, probes, `"skirt|leg" on "rest" and on "rigid" — the root turning every slot ${SEAM_TURN}° and back — and "leg_front|leg" on every set read on every frame and open on none`),
+      'issue #1456 Bar 1: a pair that stays closed reports 0 frames; a reading that compared the frame with the setup pose in the world would read a limb that swings whole as torn',
+    );
+  }
+
+  // SM02 — a segment turned past its range opens a gap on every frame, over the joint.
+  {
+    const probes = pre.length > 0 ? [...pre] : seamTurnFaults(cli, fps);
+    if (pre.length === 0 && !lines.some((l) => /seam {5}"turn": seam "skirt" \| "leg" opens on \d+ of \d+ frame\(s\) read .* gap on \d+ frame\(s\)/.test(l))) probes.push('no line says "skirt" | "leg" opens a gap on "turn"');
+    const ok = probes.length === 0;
+    say(
+      'SM02_A_SEGMENT_TURNED_PAST_ITS_RANGE_OPENS_A_GAP_OVER_THE_JOINT',
+      ok,
+      probeDetail(ok, probes, `"turn" holds the skirt ${SEAM_TURN}° off the leg: a gap on every frame, each box inside the band's hull as the leg and the turned skirt carry it — derived from the probe's numbers, not read off a run`),
+      'issue #1456 Bar 1: a mutant that rotates one segment 40° past its range reports gap frames with a box over the joint',
+    );
+  }
+
+  // SM03 — a joint pulled apart opens a gap where the two still overlapped.
+  {
+    const probes = pre.length > 0 ? [...pre] : seamApartFaults(cli, fps);
+    const ok = probes.length === 0;
+    say(
+      'SM03_A_JOINT_PULLED_APART_OPENS_A_GAP',
+      ok,
+      probeDetail(ok, probes, `"apart" holds the leg ${PASS_PLATE.leg.height} units down, out of the skirt: a gap on every frame, inside the leg's drawing below the skirt's hem`),
+      'issue #1456: background appearing between two pieces pulled apart is the plainest tear; it is read from either piece\'s view, so the one that still finds the overlap there names it',
+    );
+  }
+
+  // SM04 — the band shifted clear of its partner shows a ghost of exactly the part that cleared.
+  {
+    const probes = pre.length > 0 ? [...pre] : seamShiftFaults(cli, fps);
+    const ok = probes.length === 0;
+    say(
+      'SM04_A_SHIFTED_BAND_SHOWS_A_GHOST_AND_NO_GAP',
+      ok,
+      probeDetail(ok, probes, `"shift" moves the leg ${seamProbeShift()} units: a ghost on every frame of exactly the band's part past the skirt's side — its cell count and box from the probe's numbers — and no gap`),
+      'issue #1456 Bar 1: a mutant that shifts the overlap band reports ghost frames',
+    );
+  }
+
+  // SM05 — no shared band is a SKIP, by name, never a pass.
+  {
+    const probes = pre.length > 0 ? [...pre] : seamSkipFaults(cliSkip, fps);
+    if (pre.length === 0 && !(skipped?.stdout ?? '').includes('seam "skirt" | "leg": SKIP — the two drawings share no cell at the setup pose')) probes.push('no line says SKIP for "skirt" | "leg" with the leg beside the skirt');
+    const ok = probes.length === 0;
+    say(
+      'SM05_TWO_DRAWINGS_THAT_NEVER_MEET_ARE_A_SKIP',
+      ok,
+      probeDetail(ok, probes, 'the probe with its leg moved beside the skirt: "skirt|leg" is skip on every set — both draw on every frame and share no cell — and its line says SKIP and why'),
+      'CLAUDE.md: an assertion with nothing to measure reports SKIP, never a pass — a pair that never met cannot be said to have stayed closed',
+    );
+  }
+
+  // SM06 — one reading on both posers, and the library's over a second poser's frames.
+  {
+    const probes = [...pre];
+    if (pre.length === 0) {
+      for (const set of sets) {
+        if (JSON.stringify(clean.get(set)) !== JSON.stringify(cli.get(set))) probes.push(`"${set}": seamsOf over spine-core's poses is not render --seam's ${SEAM_FILE}, posed by the core`);
+        const spineFile = join(dir('spine-poser'), set, SEAM_FILE);
+        if (!existsSync(spineFile) || !readFileSync(spineFile).equals(readFileSync(join(dir('seam'), set, SEAM_FILE)))) probes.push(`"${set}": render --seam --poser spine wrote a ${SEAM_FILE} that is not the core's bytes`);
+        if (JSON.stringify(cleanSkip.get(set)) !== JSON.stringify(cliSkip.get(set))) probes.push(`"${set}": seamsOf over spine-core's poses of the SKIP rig is not render --seam's ${SEAM_FILE}`);
+      }
+    }
+    const ok = probes.length === 0;
+    say(
+      'SM06_THE_READING_IS_ONE_ON_BOTH_POSERS',
+      ok,
+      probeDetail(ok, probes, `every set's ${SEAM_FILE}: the core's render, --poser spine's render and seamsOf over spine-core's frames and rest table read the same, byte for byte`),
+      'issue #1456 Bar 2: the figures come from the posed vertices and the atlas alpha, which both posers hand over — two answers would be a reading of the poser',
+    );
+  }
+
+  // SM07 — deterministic: a second run writes the same bytes.
+  {
+    const probes = [...pre];
+    if (pre.length === 0) {
+      for (const set of sets) {
+        const a = join(dir('seam'), set, SEAM_FILE);
+        const b = join(dir('again'), set, SEAM_FILE);
+        if (!existsSync(b) || !readFileSync(a).equals(readFileSync(b))) probes.push(`"${set}": a second render --seam wrote a ${SEAM_FILE} that is not the first's bytes`);
+      }
+      const strip = (out: string): string[] => out.split('\n').filter((l) => /\.\. {4}seam /.test(l));
+      if (JSON.stringify(strip(seamed?.stdout ?? '')) !== JSON.stringify(strip(again?.stdout ?? ''))) probes.push('a second render --seam printed other seam lines');
+    }
+    const ok = probes.length === 0;
+    say(
+      'SM07_TWO_RUNS_ARE_BYTE_IDENTICAL',
+      ok,
+      probeDetail(ok, probes, `two renders of one build with one --seam: every ${SEAM_FILE} and every seam line the same, byte for byte`),
+      'issue #1456 Bar 3: determinism is a contract — a consumer that diffs two runs must see the rig, not the reading',
+    );
+  }
+
+  // SM08 — the flag moves no other byte, and without it nothing is read.
+  {
+    const probes = [...pre];
+    if (pre.length === 0) {
+      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile()).sort();
+      const plainFiles = files(dir('plain'));
+      const extra = files(dir('seam')).filter((f) => !plainFiles.includes(f));
+      const want = sets.map((s) => `${s}/${SEAM_FILE}`).sort();
+      if (JSON.stringify(extra) !== JSON.stringify(want)) probes.push(`render --seam wrote [${extra.join(', ')}] beyond the plain render's files, required [${want.join(', ')}]`);
+      for (const f of plainFiles) if (!readFileSync(join(dir('plain'), f)).equals(readFileSync(join(dir('seam'), f)))) probes.push(`${f} differs between the plain render and render --seam`);
+      if (/\.\. {4}seam /.test(plain?.stdout ?? '') || plainFiles.some((f) => f.endsWith(SEAM_FILE))) probes.push('a run without --seam printed a seam line or wrote a seam file');
+    }
+    const ok = probes.length === 0;
+    say(
+      'SM08_THE_FLAG_MOVES_NO_OTHER_BYTE',
+      ok,
+      probeDetail(ok, probes, `--seam adds one ${SEAM_FILE} per set and every other file — frames, sheets, frames.json — is the plain render's bytes; without it no file and no line`),
+      'issue #1456: no flag, no moved byte',
+    );
+  }
+
+  // SM09 — a reading, never a gate: seams that open leave the exit status 0.
+  {
+    const probes = [...pre];
+    if (pre.length === 0) {
+      const opened = [...cli.values()].flat().filter((p) => p.opens.length > 0).length;
+      if (opened === 0) probes.push('no pair opened on any set — the exit status was never put to the question');
+      for (const [name, run] of [['--seam', seamed], ['--seam --poser spine', spine]] as const) if (run?.status !== 0) probes.push(`render ${name} exited ${String(run?.status)} with seams open`);
+    }
+    const ok = probes.length === 0;
+    say(
+      'SM09_AN_OPEN_SEAM_NEVER_MOVES_THE_EXIT_STATUS',
+      ok,
+      probeDetail(ok, probes, 'render --seam exits 0 on both posers with gaps and ghosts read on several sets'),
+      "issue #1456: the owner's ruling — tearing can be intentional, so this is a warning and never a gate",
+    );
+  }
+
+  // SM10 — a malformed list, an unknown slot, a slot with itself, a pair named twice, a slot that never draws and a
+  // subset are refused by name, nothing written.
+  {
+    const probes = [...pre];
+    if (pre.length === 0) {
+      let n = 0;
+      for (const [value, extra, said] of [
+        ['skirt:nope', [], 'names slot "nope", which this skeleton does not have; its slots are [leg, skirt, leg_front]'],
+        ['skirt', [], 'entry 0 "skirt" has 0 ":"'],
+        ['skirt:leg:leg', [], 'has 2 ":"'],
+        ['skirt:leg,,leg_front:leg', [], 'entry 1 is empty'],
+        [':leg', [], 'names no first slot'],
+        ['skirt:skirt', [], 'pairs slot "skirt" with itself'],
+        ['skirt:leg,leg:skirt', [], 'entry 1 names "leg:skirt" again'],
+        ['skirt:leg', ['--hide', 'leg_front'], '--seam takes no --hide'],
+      ] as const) {
+        const out = dir(`refused_${n++}`);
+        const run = runCli(['render', '--candidate', built, '--seam', value, ...extra, '--max', '64', '--out', out]);
+        if (run.status !== 2 || !run.stderr.includes(said)) probes.push(`--seam ${value} ${extra.join(' ')}: exit ${String(run.status)}, stderr ${JSON.stringify(run.stderr.trim().split('\n')[0])} — required exit 2 and "${said}"`);
+        if (existsSync(out)) probes.push(`--seam ${value} ${extra.join(' ')} was refused and still wrote ${out}`);
+      }
+    }
+    const ok = probes.length === 0;
+    say(
+      'SM10_A_MALFORMED_OR_UNKNOWN_PAIR_IS_REFUSED_BY_NAME',
+      ok,
+      probeDetail(ok, probes, 'an unknown slot (with the slots there are), an entry with no ":" or two, an empty entry, an empty name, a slot with itself, a pair named twice the other way round and --hide beside the flag each exit 2 naming the entry, and write nothing'),
+      'issue #1456: a pair the reading cannot read is an input error, not a finding — a typo would otherwise print a clean bill for a slot nobody asked about',
+    );
+  }
+
+  // SM11–SM16 — each planted wrong reading goes red, by the control that reads it.
+  for (const [code, plant, reader, what, skip] of [
+    ['SM11_A_SEAM_READ_IN_THE_WORLD_IS_RED', { world: true }, seamClosedFaults, 'SM01', false],
+    ['SM12_A_GAP_READ_OUTSIDE_THE_BAND_HULL_IS_RED', { noHull: true }, seamTurnFaults, 'SM02', false],
+    ['SM13_A_GAP_BOTH_VIEWS_MUST_FIND_IS_RED', { bothViews: true }, seamApartFaults, 'SM03', false],
+    ['SM14_A_GHOST_READ_OFF_ANY_ART_IS_RED', { ghostAnyArt: true }, seamShiftFaults, 'SM04', false],
+    ['SM15_A_PAIR_WITH_NO_BAND_READ_AS_CLOSED_IS_RED', { skipAsRead: true }, seamSkipFaults, 'SM05', true],
+    ['SM16_A_READING_THAT_NEVER_FIRES_IS_RED', { never: true }, seamTurnFaults, 'SM02', false],
+  ] as const) {
+    const unplanted = skip ? cleanSkip : clean;
+    const cleanFaults = pre.length > 0 ? pre : reader(unplanted, fps);
+    const planted = pre.length > 0 ? [] : reader(skip ? library(apartBuilt, [{ a: 'skirt', b: 'leg' }], plant) : library(built, SEAM_PROBE_PAIRS, plant), fps);
+    say(
+      code,
+      cleanFaults.length === 0 && planted.length > 0,
+      cleanFaults.length > 0 ? `the unplanted reading is already red: ${cleanFaults[0]}` : planted.length === 0 ? `${JSON.stringify(plant)} planted and ${what}'s reading found nothing` : `${JSON.stringify(plant)} planted: ${what}'s reading names it — ${planted[0]}; unplanted it reads clean`,
+      code === 'SM16_A_READING_THAT_NEVER_FIRES_IS_RED'
+        ? 'issue #1456: a definition that never fires cannot pass — the planted control is a positive-rate floor'
+        : 'issue #1456: a control nobody has seen fail is not a control — the plausible wrong readings are planted and caught by name',
+    );
+  }
+
+  return bad;
+}
+
+// ---------------------------------------------------------------------------
 // render-viewport — a box given rather than fitted (issue #1414)
 // ---------------------------------------------------------------------------
 
@@ -139713,6 +140158,7 @@ function main(): void {
   tally.of('inspect', runInspectSuite);
   tally.of('folds', runFoldsSuite);
   tally.of('pass-through', runPassThroughSuite);
+  tally.of('seam', runSeamSuite);
   tally.of('whirl', runWhirlSuite);
   tally.of('render-viewport', runRenderViewportSuite);
   tally.of('angle-range', runAngleRangeSuite);

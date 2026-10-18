@@ -38,7 +38,8 @@ import { checkAgainstFrames, type CheckOptions, CheckPlates, type CheckReport } 
 import { compile, CompileError, droppedStateReason, headerBoundsOf, type CompileOptions } from '../compile.ts';
 import { depthStepLevels, type FoldLimit, type TurnCeiling } from '../depth.ts';
 import { FOLDS_FILE } from '../folds.ts';
-import { PASS_THROUGH_FILE, PASS_THROUGH_RUN } from '../passthrough.ts';
+import { DRAWN_ALPHA, PASS_THROUGH_FILE, PASS_THROUGH_RUN } from '../passthrough.ts';
+import { SEAM_FILE } from '../seam.ts';
 import { readViewportBox, ViewportError } from '../viewportpin.ts';
 import { parseJsonWithPosition } from '../json-position.ts';
 import { RUNG_IDS } from '../ladder.ts';
@@ -1023,6 +1024,13 @@ const FLAG_MEANINGS: Record<string, string> = {
     'world units, one texel of the coarser drawing to a step — each with the depth and the world box. One line per pair, and one per frame that passes through. ' +
     'The order is the declaration: the first name must draw over the second for a frame to be read. A reading, not a gate. ' +
     'An unknown slot, a slot that draws on no frame, a malformed list and a pair named twice are refused by name. Not with --slot/--hide',
+  seam:
+    `also read, for each <slot>:<slot> pair, where the two drawings stop meeting, and write ${SEAM_FILE} into each frame directory: ` +
+    'per pair, the frames with a gap — background inside the hull of the band the two drawings share at the setup pose, carried to the frame by both — ' +
+    'and the frames with a ghost — the band of one drawing showing where, from its partner\'s point of view, nothing was drawn at the setup pose — each with ' +
+    `its cell count, area and world box. Cells are one texel of the coarser drawing, drawn at ${DRAWN_ALPHA} of 255 or more. One line per pair; a pair whose ` +
+    'drawings share no cell at the setup pose is a SKIP. A reading, not a gate: the exit status never moves. An unknown slot, a slot with itself, ' +
+    'a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name. Not with --slot/--hide',
   'angle-range':
     'also read, for each <bone>:<relative-to> pair, the range of the first bone\'s world direction against the second\'s over each set\'s ' +
     'frames — its rotationX less the other\'s, followed from frame to frame so a sweep past ±180° reads as itself — and print one line per ' +
@@ -1234,6 +1242,7 @@ const FLAG_VALUES: Record<string, string> = {
   poser: 'core|spine',
   environment: '<schedule.json>',
   'pass-through': '<cloth>:<leg>[,<cloth>:<leg>…]',
+  seam: '<slot>:<slot>[,<slot>:<slot>…]',
   'angle-range': '<bone>:<relative-to>[,…]',
   'viewport-from': '<frames.json|dir>',
   reference: '<dir|skeleton.json>',
@@ -1686,10 +1695,11 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --slot <name[,name…]> | --hide <name[,name…]>   (a subset of the slots, on the whole rig\'s grid)',
       'rigc render … --environment <schedule.json>   (the wind and gravity the physics answers, in time)',
       'rigc render … --pass-through <cloth>:<leg>[,…]   (the frames where a cloth drawn over a leg passes through it)',
+      'rigc render … --seam <slot>:<slot>[,…]   (the frames where two slots that meet open a gap or show a ghost)',
       'rigc render … --angle-range <bone>:<relative-to>[,…]   (how far a bone turns against another, per animation)',
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'angle-range', 'environment', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'seam', 'angle-range', 'environment', 'poser', 'out'],
     overrides: {
       out: { value: '<dir>', meaning: 'directory to write the frame series into (default `render/`)' },
       fps: {

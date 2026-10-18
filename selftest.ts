@@ -66529,8 +66529,13 @@ function runCliSuite(): number {
   // positive control: a flag the help spells WITH a value must still be refused
   // when it is given none.
   {
-    /** Command names as the tool itself lists them, from the `usage:` block of a bare invocation. */
-    const commands = [...new Set([...runCli([]).stderr.matchAll(/^ {2}rigc ([a-z][a-z-]*) /gm)].map((m) => m[1]))];
+    /**
+     * Command names as the tool itself lists them, from the `usage:` block of a bare invocation — less the ones
+     * whose `--help` is another program's page (`delegate`, issue #1457), which have no flag table of rigc's to read.
+     */
+    const commands = [...new Set([...runCli([]).stderr.matchAll(/^ {2}rigc ([a-z][a-z-]*) /gm)].map((m) => m[1]))].filter(
+      (name) => COMMANDS.find((doc) => doc.name === name)?.delegate === undefined,
+    );
 
     /**
      * One command's flag table, split into the switches and the value-takers.
@@ -69115,7 +69120,8 @@ function runCliSuite(): number {
       let pairs = 0;
       const cases: Array<{ viaHelp: string[]; viaFlag: string[]; page: string | null }> = [
         { viaHelp: ['help'], viaFlag: ['--help'], page: 'usage:' },
-        ...names.map((name) => ({ viaHelp: ['help', name], viaFlag: [name, '--help'], page: runs.has(name) ? 'flags:' : null })),
+        // A delegating command's page is its delegate's (issue #1457): the two spellings are still compared, and RV02 reads the page.
+        ...names.map((name) => ({ viaHelp: ['help', name], viaFlag: [name, '--help'], page: runs.has(name) && COMMANDS.find((doc) => doc.name === name)?.delegate === undefined ? 'flags:' : null })),
       ];
       for (const { viaHelp, viaFlag, page } of cases) {
         const a = runEntryIn(root, entry, viaHelp, work);
@@ -69211,7 +69217,8 @@ function runCliSuite(): number {
       },
       { label: 'prints the usage', to: "  if (KNOWN_COMMANDS.includes(name)) return ['--help'];" },
     ];
-    const coreRuns = new Set(entryCommands(false).map((doc) => doc.name));
+    // Less a delegating command (issue #1457): its page is not rigc's, so neither plant can change it.
+    const coreRuns = new Set(entryCommands(false).filter((doc) => doc.delegate === undefined).map((doc) => doc.name));
     const fired: string[] = [];
     for (const plant of plants) {
       const root = absentTree(join(work, `plant-${plant.label.replace(/ /g, '-')}`));
@@ -69244,7 +69251,136 @@ function runCliSuite(): number {
   }
   // The build report document (issue #1213): `build --report` and `repack --report`, through both entries.
   buildReportControls(say);
+  reviewDelegateControls(say);
   return bad;
+}
+
+/**
+ * RV01–RV03: `rigc review` hands its arguments to `@rig-c/review`'s bin, or refuses by name (issue #1457).
+ *
+ * The package itself is never installed here: a stub with the same name and bin stands in for it, echoing the
+ * argv it was handed as JSON and exiting with a code of its own, so what reaches it and what comes back are read
+ * rather than assumed. RV01 is the refusal, on a copy of the tree (`absentTree`) run from a directory with no
+ * `node_modules` above it; RV02 is its positive control — the same command line beside the stub is not refused,
+ * and arrives verbatim — and RV03 holds the stated resolution order: the working directory first, rig-c's own
+ * root second.
+ */
+function reviewDelegateControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const delegate = COMMANDS.find((doc) => doc.name === 'review')?.delegate;
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-review-'));
+  const refusal = 'rigc review: @rig-c/review is not installed — npm i -D @rig-c/review\n';
+  type Ran = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string };
+  const runFrom = (cwd: string, script: string, args: string[]): Ran => {
+    const r = spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8', env: { ...process.env, NODE_PATH: '' } });
+    return { status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr };
+  };
+  const shown = (r: Ran): string => `exit ${String(r.status)}${r.signal === null ? '' : ` by ${r.signal}`}, stdout ${JSON.stringify(r.stdout.slice(0, 160))}, stderr ${JSON.stringify(r.stderr.slice(0, 160))}`;
+  /** A stand-in for the package under `<dir>/node_modules`: prints its argv as JSON, then dies by SIGTERM when told to, or exits `code`. */
+  const stub = (dir: string, code: number): void => {
+    if (delegate === undefined) return;
+    const root = join(dir, 'node_modules', ...delegate.package.split('/'));
+    mkdirSync(join(root, 'bin'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), `${JSON.stringify({ name: delegate.package, version: '0.0.0', bin: { [delegate.bin]: 'bin/stub.ts' } }, null, 2)}\n`);
+    writeFileSync(
+      join(root, 'bin', 'stub.ts'),
+      `const argv = process.argv.slice(2);\nconsole.log(JSON.stringify(argv));\nif (argv[0] === '--die-by-signal') process.kill(process.pid, 'SIGTERM');\nelse process.exit(${code});\n`,
+    );
+  };
+  /** Whether `<dir>` or an ancestor holds the package — the state RV01 needs absent, checked rather than assumed. */
+  const reaches = (dir: string): string | null => {
+    if (delegate === undefined) return null;
+    for (let at = dir; ; at = dirname(at)) {
+      if (existsSync(join(at, 'node_modules', delegate.package, 'package.json'))) return at;
+      if (dirname(at) === at) return null;
+    }
+  };
+
+  const nowhere = join(work, 'nowhere');
+  mkdirSync(nowhere, { recursive: true });
+  const project = join(work, 'project');
+  mkdirSync(project, { recursive: true });
+  stub(project, 7);
+
+  // --- RV01: not installed → the refusal, exit 2, nothing else -------------------
+  const faults01: string[] = [];
+  const tree = absentTree(join(work, 'absent'));
+  if (delegate === undefined) faults01.push('the command table has no `review` row with a delegate');
+  for (const at of [nowhere, tree]) {
+    const holder = reaches(at);
+    if (holder !== null) faults01.push(`${at} reaches ${delegate?.package ?? 'the package'} through ${holder}/node_modules, so this run cannot be the absent state`);
+  }
+  const cases01: string[][] = [['review', 'check', 'build'], ['review', '--help'], ['review'], ['help', 'review']];
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const args of cases01) {
+      // cli.ts links spine-core, which the copy does not have; its refusal is read in the checkout, from `nowhere`.
+      const r = entry === 'cli.ts' ? runFrom(nowhere, join(import.meta.dir, entry), args) : runFrom(nowhere, join(tree, entry), args);
+      if (r.status !== 2 || r.stdout !== '' || r.stderr !== refusal) faults01.push(`${entry} ${args.join(' ')}: ${shown(r)}`);
+    }
+  }
+  if (faults01.length === 0 && reaches(import.meta.dir) !== null) faults01.push(`the checkout reaches the package (${String(reaches(import.meta.dir))}), so cli.ts's refusal was not read in the absent state`);
+  say(
+    'RV01_REVIEW_WITH_THE_PACKAGE_ABSENT_IS_REFUSED_BY_NAME_EXIT_2_AND_NOTHING_ELSE',
+    faults01.length === 0,
+    probeDetail(
+      faults01.length === 0,
+      faults01,
+      `${cases01.length} command line(s) on each entry (cli_core.ts in a copy with an empty node_modules), run from a directory nothing above holds the package in, NODE_PATH empty: exit 2, stdout empty, stderr exactly ${JSON.stringify(refusal.trim())}`,
+      (count) => `${count} fault(s):`,
+    ),
+    'issue #1457: core does not depend on @rig-c/review, so the one thing `rigc review` can say without it is which package to install — and printing anything more, or exiting as a review would, reads as a review that ran',
+  );
+
+  // --- RV02: beside the package, every argument arrives untouched and its exit comes back ---------------------
+  const faults02: string[] = [];
+  const handed = ['open', 'a dir with spaces', '--help', '--animation', 'wave', '--', '-x', ''];
+  const cases02: Array<{ args: string[]; argv: string[]; status: number | null; signal: NodeJS.Signals | null }> = [
+    { args: ['review', ...handed], argv: handed, status: 7, signal: null },
+    { args: ['review', '--help'], argv: ['--help'], status: 7, signal: null },
+    { args: ['help', 'review'], argv: ['--help'], status: 7, signal: null },
+    { args: ['review'], argv: [], status: 7, signal: null },
+    { args: ['review', '--die-by-signal'], argv: ['--die-by-signal'], status: null, signal: 'SIGTERM' },
+  ];
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const c of cases02) {
+      const r = runFrom(project, join(import.meta.dir, entry), c.args);
+      if (r.status !== c.status || r.signal !== c.signal || r.stdout !== `${JSON.stringify(c.argv)}\n` || r.stderr !== '') {
+        faults02.push(`${entry} ${JSON.stringify(c.args)}: ${shown(r)} — exit ${String(c.status)}${c.signal === null ? '' : ` by ${c.signal}`} and stdout ${JSON.stringify(JSON.stringify(c.argv))} were required`);
+      }
+    }
+  }
+  say(
+    'RV02_REVIEW_HANDS_EVERY_ARGUMENT_TO_THE_INSTALLED_BIN_UNTOUCHED_AND_RETURNS_ITS_EXIT',
+    faults02.length === 0,
+    probeDetail(
+      faults02.length === 0,
+      faults02,
+      `${cases02.length} command line(s) on each entry beside a stub ${delegate?.package ?? ''} bin, among them ${JSON.stringify(handed)}: the stub's argv equal to the arguments after \`review\` (\`help review\` as \`review --help\`), its exit 7 returned, its SIGTERM died by, nothing else printed`,
+      (count) => `${count} fault(s):`,
+    ),
+    "issue #1457: the positive control for RV01 — a refusal that fired on every machine would pass it — and the bar that rigc parses none of review's arguments: `--help` is review's, and so is an argument with a space in it",
+  );
+
+  // --- RV03: the working directory first, rig-c's own root second ------------------------------------------
+  const faults03: string[] = [];
+  const side = join(work, 'side');
+  const installed = absentTree(join(side, 'node_modules', 'rig-c'));
+  stub(side, 5);
+  const fromRoot = runFrom(nowhere, join(installed, 'cli_core.ts'), ['review', 'check']);
+  if (fromRoot.status !== 5 || fromRoot.stdout !== '["check"]\n') faults03.push(`from a directory holding nothing, an install of rig-c beside the package: ${shown(fromRoot)}; the package beside it (exit 5) was required`);
+  const fromCwd = runFrom(project, join(installed, 'cli_core.ts'), ['review', 'check']);
+  if (fromCwd.status !== 7 || fromCwd.stdout !== '["check"]\n') faults03.push(`from a project holding its own, the same install: ${shown(fromCwd)}; the project's (exit 7) was required`);
+  say(
+    'RV03_REVIEW_RESOLVES_FROM_THE_WORKING_DIRECTORY_FIRST_AND_FROM_RIG_C_S_ROOT_SECOND',
+    faults03.length === 0,
+    probeDetail(
+      faults03.length === 0,
+      faults03,
+      "one install of rig-c with a stub beside it (exit 5) and a project with its own (exit 7): run from nowhere it reaches the one beside it, run from the project the project's",
+      (count) => `${count} fault(s):`,
+    ),
+    "the order is stated in src/cli/core_commands.ts (`resolveDelegate`): a project's own install is what `npm i -D` made, and the copy beside rig-c is for a command run from elsewhere",
+  );
+  rmSync(work, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------

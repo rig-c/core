@@ -553,7 +553,7 @@ runtime resolves from the package's own location.
 
 | an install with | `rigc` runs | `rigc --version` prints (stdout, then stderr) |
 | --- | --- | --- |
-| no `@esotericsoftware/spine-core` (what `npm install rig-c` gives) | `cli_core.ts` — `build` and `repack` (gated without the parse, `A00_ROUNDTRIP_PARSE` a SKIP), `explain`, `ingest`, `split`, `diff`, `check`, `render`, `inspect`, `pose`, `chainfit`, `guide`, `skills`; every other command refused by name | the version, then `entry: cli_core.ts — @esotericsoftware/spine-core absent — …` |
+| no `@esotericsoftware/spine-core` (what `npm install rig-c` gives) | `cli_core.ts` — `build` and `repack` (gated without the parse, `A00_ROUNDTRIP_PARSE` a SKIP), `explain`, `ingest`, `split`, `diff`, `check`, `render`, `inspect`, `pose`, `chainfit`, `guide`, `skills`, `review`; every other command refused by name | the version, then `entry: cli_core.ts — @esotericsoftware/spine-core absent — …` |
 | `@esotericsoftware/spine-core` installed beside it | `cli.ts` — every command, `build` through the round trip | the version, then `entry: cli.ts — @esotericsoftware/spine-core <version> present` |
 
 The commands in the first row are the set the command table derives — a
@@ -1147,7 +1147,12 @@ that has a `package.json` of its own, and runs it in three phases (issue
    and `rigc check` run without it on the
    round-tripped build — the same bytes as the core entry's, by the comparison
    above, and read from that side so a broken core build goes red at one step
-   rather than three.
+   rather than three. `rigc review check` runs on the same build
+   ([#1457](https://github.com/rig-c/core/issues/1457)): first with nothing
+   beside the package, where it has to be refused in one line naming the review
+   package, exit 2; then with the package that line names installed the way it
+   says, unpinned, where it has to exit 0 — `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED`
+   and `SMOKE_REVIEW_CHECKS_THE_BUILD`.
    `rigc skills install` and the without-Bun shim check run in this phase.
 
 What that proves: the `bin` shim resolves and hands off, and picks its entry by

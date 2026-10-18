@@ -141,6 +141,11 @@ bun cli.ts inspect --candidate path/to/spine --show art,bones,names --dim --out 
 # them, ask a human — the one loop step this toolchain cannot run for you:
 bun cli.ts vote --candidate path/to/spine-a --candidate path/to/spine-b   # -> ballot.html
 bun cli.ts vote --record vote-<id>.json                                   # -> votes.jsonl
+
+# …and when the build is for a person to look at rather than for you to choose
+# between, hand it over: with @rig-c/review installed beside rigc, give the person
+# the loopback URL this prints (rigc review --help is review's own usage):
+bun cli.ts review open path/to/spine
 ```
 
 `build` compiles, runs the named assertions — through a `@esotericsoftware/spine-core`

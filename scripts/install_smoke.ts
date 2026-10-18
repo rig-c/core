@@ -1267,6 +1267,8 @@ const CORE_POSE_STEP = 'core-pose';
 const CORE_POSE_CASE = 'SMOKE_CORE_POSES_FROM_AN_INSTALL_WITH_NO_SPINE_CORE';
 const CORE_BROWSER_STEP = 'core-browser';
 const CORE_BROWSER_CASE = 'SMOKE_CORE_BUNDLES_FOR_A_BROWSER_WITH_NO_NODE_MODULE';
+/** `rigc review` from the install (issue #1457): refused by name before the review package is installed, `review check` exit 0 after. */
+const REVIEW_STEP = 'review';
 /** The fixture bone whose world matrix both steps print: the last of the chain, under a rotated parent, so the matrix is not the identity. */
 const CORE_PROBE_BONE = 'hand';
 /** Where the bundle lands, beside `--out` and never in it. */
@@ -2574,6 +2576,35 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
     } else {
       fault('render', 'SMOKE_CORE_ENTRY_RENDERS_THE_BUILD: the full entry wrote no build/skeleton.model.json, so there is no build for the core entry to render');
     }
+
+    // Issue #1457: `rigc review` from the install, the runtime gone. The package is not a dependency, so first the
+    // refusal — one line, exit 2 — and then the package that line names, installed the way it says (no version: the
+    // command a reader runs is the one checked), and `rigc review check` over the round-tripped build, which has to
+    // exit 0. The name is read off the refusal rather than written here, so a refusal naming the wrong package fails
+    // at the install, not in a second copy of the name.
+    const refusal = run(bin, ['review', 'check', FULL_OUT], home);
+    output += refusal.out;
+    const named = /^rigc review: (\S+) is not installed — npm i -D (\S+)\n$/.exec(refusal.out);
+    if (refusal.status !== 2 || named === null || named[1] !== named[2]) {
+      fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package exited ${refusal.status} printing ${JSON.stringify(refusal.out.slice(0, 600))}; exit 2 and the one line "rigc review: <package> is not installed — npm i -D <package>" were required`);
+    } else {
+      const reviewPackage = named[1];
+      const added = spec.installer === 'npm' ? run('npm', ['install', '-D', reviewPackage, '--no-audit', '--no-fund'], home) : run('bun', ['add', '-d', reviewPackage], home);
+      output += added.out;
+      const reviewManifest = join(home, 'node_modules', ...reviewPackage.split('/'), 'package.json');
+      if (!existsSync(reviewManifest)) {
+        fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: ${spec.installer === 'npm' ? 'npm i -D' : 'bun add -d'} ${reviewPackage} exited ${added.status} and left no ${reviewManifest}. ${added.out.trim().slice(0, 2000)}`);
+      } else {
+        const reviewVersion = (JSON.parse(readFileSync(reviewManifest, 'utf8')) as { version?: string }).version ?? '(no version field)';
+        const checked = run(bin, ['review', 'check', FULL_OUT], home);
+        output += checked.out;
+        if (checked.status !== 0) {
+          fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: \`rigc review check ${FULL_OUT}\` with ${reviewPackage} ${reviewVersion} installed beside the package exited ${checked.status}, and 0 was required. ${checked.out.trim().slice(0, 2000)}`);
+        } else {
+          notes.push(`without ${RUNTIME}: rigc review refused by name until ${reviewPackage} was installed, then \`review check ${FULL_OUT}\` through ${reviewPackage} ${reviewVersion} exited 0 (${checked.out.trim().split('\n').join(' / ').slice(0, 240)})`);
+        }
+      }
+    }
   }
 
   // The skills, the way an agent host needs them (issue #831): the INSTALLED
@@ -2675,7 +2706,7 @@ exit codes:
      here says the package is broken
 
 cases:
-  clean          a correct package installs WITHOUT spine-core and its rigc runs the core entry, whose build has to exit 0 and write its files; with spine-core installed beside it the same rigc builds through the round trip, writing the same bytes as the core entry's build of the same fixture, resolves every \`exports\` entry and every shipped path, reads every observed symbol through its entry and calls the ones a dependant was seen calling; with spine-core taken away again it imports every observed entry as stated, compares meshes of that build through ${NAME}/meshcompare, poses its setup pose through ${NAME}/core and through a vite browser bundle of that entry holding no node module, renders and checks that build, links its skills, and the bin shim names Bun when bun is absent
+  clean          a correct package installs WITHOUT spine-core and its rigc runs the core entry, whose build has to exit 0 and write its files; with spine-core installed beside it the same rigc builds through the round trip, writing the same bytes as the core entry's build of the same fixture, resolves every \`exports\` entry and every shipped path, reads every observed symbol through its entry and calls the ones a dependant was seen calling; with spine-core taken away again it imports every observed entry as stated, compares meshes of that build through ${NAME}/meshcompare, poses its setup pose through ${NAME}/core and through a vite browser bundle of that entry holding no node module, renders and checks that build, refuses \`rigc review\` by name until the review package that refusal names is installed and then runs \`rigc review check\` on that build, links its skills, and the bin shim names Bun when bun is absent
   unusual-path   the same, installed at an absolute path with spaces and non-ASCII in it
   drop-plate     tools/plate.ts out of \`files\`  — the smoke has to go RED naming it
   drop-src-module  src/validate.ts out of the packed tree — the smoke has to go RED naming it

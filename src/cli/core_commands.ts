@@ -45,9 +45,10 @@ import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
-import { ATLAS_ABSENT, COMMANDS, type CommandRun, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPoserFlag, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
+import { ATLAS_ABSENT, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPoserFlag, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 
 const MESH_KIND_NOTES: Record<CompileResult['meshes'][number]['kind'], string> = {
@@ -2104,6 +2105,72 @@ export const MODEL_AND_TEXT_GATE: BuildGate = {
 };
 
 /**
+ * Where a delegated package's `package.json` resolves, or `null` (issue #1457).
+ *
+ * ⚖️ Node's `node_modules` lookup — `<dir>/node_modules/<package>` for the
+ * directory and then each of its ancestors, nearest first — from two places in
+ * this order, the first answer winning:
+ *
+ *   1. the working directory — the project `npm i -D <package>` installed it
+ *      into, which is what the refusal tells a caller to run, so a project's
+ *      own install is the one its command line reaches;
+ *   2. this package's root — where an install of rig-c sits beside it in the
+ *      same `node_modules` and the command was run from somewhere else.
+ *
+ * 🚨 Walked here rather than asked of the runtime's resolver: Bun's resolves a
+ * package it cannot find, from a directory with no `node_modules` above it, by
+ * installing it on demand into its global cache — measured, a directory with
+ * none resolved `@rig-c/review` there — so "not installed" would never be
+ * refused, and asking would reach the network. `NODE_PATH` and the global
+ * folders are not read: what the refusal tells a caller to run never puts a
+ * package there. The bin is read off the `package.json` found, not resolved.
+ */
+function resolveDelegate(name: string): string | null {
+  for (const from of [process.cwd(), PACKAGE_ROOT]) {
+    for (let dir = resolve(from); ; dir = dirname(dir)) {
+      const manifest = join(dir, 'node_modules', name, 'package.json');
+      if (existsSync(manifest)) return manifest;
+      if (dirname(dir) === dir) break;
+    }
+  }
+  return null;
+}
+
+/**
+ * A delegating command's body (`CommandDoc.delegate`, issue #1457): resolve the
+ * package's bin and run it under the Bun running this — the bin is a Bun script
+ * — with every argument untouched and stdio inherited, then exit with its code,
+ * or die by its signal the way `bin/rigc.cjs` does, so a caller reads what it
+ * would have read running the bin itself. Not installed, it is refused by name
+ * with the one command that installs it, exit 2, and nothing else is printed.
+ */
+function cmdDelegate(command: string, raw: readonly string[]): void {
+  const delegate = COMMANDS.find((c) => c.name === command)?.delegate;
+  if (delegate === undefined) throw new Error(`internal: ${command} names no delegate`);
+  const manifest = resolveDelegate(delegate.package);
+  if (manifest === null) throw new DelegateError(`${delegate.package} is not installed — npm i -D ${delegate.package}`, 2);
+  const bins = (readJsonFile(manifest) as { bin?: unknown }).bin;
+  const relativeBin = typeof bins === 'object' && bins !== null ? (bins as Record<string, unknown>)[delegate.bin] : undefined;
+  const bin = typeof relativeBin === 'string' ? join(dirname(manifest), relativeBin) : null;
+  if (bin === null || !existsSync(bin)) {
+    throw new DelegateError(
+      `${delegate.package} at ${dirname(manifest)} ${bin === null ? `declares no "${delegate.bin}" bin` : `declares the "${delegate.bin}" bin ${String(relativeBin)}, which is not there`} — npm i -D ${delegate.package}`,
+      2,
+    );
+  }
+  const ran = spawnSync(process.execPath, [bin, ...raw], { stdio: 'inherit' });
+  // ⚠️ The exit and the signal are read before `error`: Bun 1.2.0 — the declared minimum — sets `error` on every
+  // child that exits non-zero, so reading it first refused review's own exit 7 as "could not run". `error` is a
+  // launch that failed only where the child left neither a status nor a signal.
+  if (typeof ran.status === 'number') process.exit(ran.status);
+  if (ran.signal !== null) {
+    process.kill(process.pid, ran.signal);
+    return;
+  }
+  throw new DelegateError(`could not run ${bin}: ${ran.error?.message ?? 'it left no exit status and no signal'}`, 1);
+}
+
+/**
  * split — one authored mesh's pieces, proposed as one mesh each (issue #1414).
  *
  * Reads the two spec files and nothing else: a mesh of several pieces does not
@@ -2182,4 +2249,5 @@ export const CORE_COMMAND_RUNS: Readonly<Record<string, CommandRun>> = {
   chainfit: ({ flags }) => cmdChainFit(flags),
   guide: ({ flags, positional }) => cmdGuide(flags, positional),
   skills: ({ flags, positional }) => cmdSkills(flags, positional),
+  review: ({ raw }) => cmdDelegate('review', raw),
 };

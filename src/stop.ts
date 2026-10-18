@@ -119,6 +119,13 @@ const TWIN_FIELDS = ['length', 'x', 'y', 'rotation', 'scaleX', 'scaleY', 'shearX
 /** A degree bound a clamp can reach: a local rotation read off a world copy is in (-180, 180]. */
 const BOUND = 180;
 
+/** What the first link's bound refusal names: the link's hang and root, and the point — world, at the setup pose. */
+interface FirstLink {
+  hang: number;
+  root: readonly [number, number];
+  point: readonly [number, number];
+}
+
 /** An angle in (-540, 540) brought into (-180, 180] by at most one whole turn. */
 function halfTurn(deg: number): number {
   if (deg > 180) return deg - 360;
@@ -332,13 +339,36 @@ export function expandStops(spec: RigSpec, where: string, plant: StopPlant = {})
     properties: { rotate: { offset: lo, to: { rotate: { offset: lo, max: hi, scale: 1 } } } },
     mixRotate: 1,
   });
-  const bounds = (stop: ReadStop, rest: number, sign: number, range: { inward: number; outward: number }, field: string, what: string): [number, number] => {
+  /**
+   * The first link's half of a bound refusal (issue #1455): where its rest
+   * angle came from, and what to move. Every figure is one the expansion
+   * already read — the link's root and hang and the point, in the exact frame's
+   * world (Spine world, y up) at the setup pose — and the bound is
+   * `|rest| + end`, since inward's sign is the opposite of rest's.
+   */
+  const aimed = (stop: ReadStop, rest: number, end: 'inward' | 'outward', at: FirstLink): string => {
+    const e = stop[end];
+    const off = Math.abs(rest);
+    const sum = off + e;
+    const geometry =
+      `. "${stop.links[0]}" hangs at ${at.hang}° from its root at [${at.root.join(', ')}], and "${stop.names.point}" ("at" [${stop.at.join(', ')}] on "${stop.against}") ` +
+      `sits at [${at.point.join(', ')}] — Spine world, y up, at the setup pose — so the aim from that root to the point lies ${off}° off the hang (rest ${rest}°): ` +
+      `|rest| ${off}° + "${end}" ${e}° is ${sum}°`;
+    if (sum < -BOUND) return `${geometry}, below -${BOUND}°. State "${end}" at least ${-BOUND - off}°`;
+    if (e >= BOUND) return `${geometry}, above ${BOUND}°, and no point lowers it: |rest| is above 0° for every point a stop accepts. State "${end}" below ${BOUND}°`;
+    return (
+      `${geometry}, above ${BOUND}°. Move "${stop.names.point}" to within ${BOUND - e}° (${BOUND}° − "${end}") of the direction "${stop.links[0]}" hangs in from its root, ${at.hang}°, ` +
+      `or state "${end}" at most ${BOUND - off}°`
+    );
+  };
+  const bounds = (stop: ReadStop, rest: number, sign: number, range: { inward: number; outward: number }, field: string, what: string, first?: FirstLink): [number, number] => {
     const a = rest - sign * range.outward;
     const b = rest - sign * range.inward;
     for (const [end, value] of [['outward', a], ['inward', b]] as const) {
       if (Math.abs(value) > BOUND) {
+        const why = first === undefined ? '' : aimed(stop, rest, end, first);
         throw new CompileError(
-          `${stop.who}: "${field}${end}" ${range[end]} puts ${what}'s bound at ${value}°, past ±${BOUND}° — the clamp reads a local rotation in (-180, 180], so a bound past it is never reached and the range it states is not the one that holds`, 'CE_STOP_LOCAL_BOUND_RANGE',
+          `${stop.who}: "${field}${end}" ${range[end]} puts ${what}'s bound at ${value}°, past ±${BOUND}° — the clamp reads a local rotation in (-180, 180], so a bound past it is never reached and the range it states is not the one that holds${why}`, 'CE_STOP_LOCAL_BOUND_RANGE',
         );
       }
     }
@@ -407,7 +437,7 @@ export function expandStops(spec: RigSpec, where: string, plant: StopPlant = {})
     // Inward turns the link toward the aim line: counter-clockwise when the link
     // lies clockwise of it (a negative rest angle), clockwise otherwise.
     const sign = (rest < 0 ? 1 : -1) * (plant.swapRange ? -1 : 1);
-    const [lo, hi] = bounds(stop, rest, sign, stop, '', `"${names.drawn[0]}"`);
+    const [lo, hi] = bounds(stop, rest, sign, stop, '', `"${names.drawn[0]}"`, { hang: halfTurn(linkFrame.worldRotation), root: [linkFrame.worldX, linkFrame.worldY], point });
 
     const frame: RigBone = { name: names.frame, parent };
     if (link.x !== undefined) frame.x = link.x;

@@ -137790,9 +137790,37 @@ const stopBone = (rig: StopJson, name: string): StopJson => (rig.bones as StopJs
  * `motion` is the probe's motion spec, edited by the one refusal that is the
  * compiler's rather than the expansion's.
  */
+/**
+ * The whole refusal a point at `at` on `thigh` must draw when the first link's
+ * outward bound passes a half turn (issue #1455), worked by hand from
+ * `LEG_STOP_PLATE` the way `legStopHandNetwork` works the network — `hip` and
+ * `thigh` unrotated at one height, `hem0_ctl` stated at −90° — and never by
+ * calling the expansion, or the control would be the message agreeing with
+ * itself.
+ */
+function legStopBoundRefusal(at: readonly [number, number]): string {
+  const { skirt, root, hipY, thighX, outward } = LEG_STOP_PLATE;
+  const degrees = (r: number): number => r / (Math.PI / 180);
+  const hang = -90;
+  const rootWorld = [root[0] - skirt.width / 2, hipY - root[1]];
+  const point = [thighX + at[0], hipY + at[1]];
+  const aim = degrees(Math.atan2(point[1] - rootWorld[1], point[0] - rootWorld[0]));
+  const rest = hang - aim;
+  const sign = rest < 0 ? 1 : -1;
+  const off = Math.abs(rest);
+  return (
+    `stop "hem": "outward" ${outward} puts "hem0_d"'s bound at ${rest - sign * outward}°, past ±180° — the clamp reads a local rotation in (-180, 180], so a bound past it is never reached and the range it states is not the one that holds. ` +
+    `"hem0" hangs at ${hang}° from its root at [${rootWorld.join(', ')}], and "hem_touch" ("at" [${at.join(', ')}] on "thigh") sits at [${point.join(', ')}] — Spine world, y up, at the setup pose — ` +
+    `so the aim from that root to the point lies ${off}° off the hang (rest ${rest}°): |rest| ${off}° + "outward" ${outward}° is ${off + outward}°, above 180°. ` +
+    `Move "hem_touch" to within ${180 - outward}° (180° − "outward") of the direction "hem0" hangs in from its root, ${hang}°, or state "outward" at most ${180 - off}°`
+  );
+}
+
 function legStopRefusals(): Array<{ code: string; edit: (rig: StopJson, motion: StopJson) => void; says: string; what: string }> {
   const { skirt, root, thighX, touch } = LEG_STOP_PLATE;
   const rootX = root[0] - skirt.width / 2;
+  /** The probe's point mirrored about `thigh`'s origin height: as far above the hem's root as the hem tip is below the hip. */
+  const above: [number, number] = [touch[0], -touch[1]];
   const physicsOn = (rig: StopJson, bone: string): void => {
     (rig.constraints as StopJson[]).push({ type: 'physics', name: `${bone}_phys`, bone, rotate: 1, mix: 1 });
   };
@@ -137842,6 +137870,12 @@ function legStopRefusals(): Array<{ code: string; edit: (rig: StopJson, motion: 
       edit: (_rig, motion) => void (motion.physics = { hem1_extra: { bone: 'hem1', rotate: 1 } }),
       says: 'drives "hem1", a link stop "hem" holds, from the physics table',
       what: 'a motion-table physics constraint on "hem1"',
+    },
+    {
+      code: 'LG33_A_POINT_ABOVE_THE_LINKS_ROOT_IS_REFUSED_WITH_ITS_GEOMETRY_AND_REMEDY',
+      edit: (rig) => void (stopEntry(rig).at = [...above]),
+      says: legStopBoundRefusal(above),
+      what: `"at" [${above.join(', ')}], above "hem0"'s root — the whole message, link, both world positions, rest, outward, 180° and the remedy`,
     },
   ];
 }
@@ -137968,7 +138002,7 @@ function runLegStopSuite(): number {
     );
   }
 
-  // LG04–LG29 — Bar 3: each malformed stop is refused naming the field and the value.
+  // LG04–LG29, LG33 — Bar 3: each malformed stop is refused naming the field and the value.
   for (const refusal of legStopRefusals()) {
     const rig = read(probe.rigPath);
     const motion = read(probe.motionPath);
@@ -138019,6 +138053,58 @@ function runLegStopSuite(): number {
       ok,
       ok ? `${JSON.stringify(plant)} planted: LG01's comparison names it — the skeleton is not the hand-written network's${reading}; unplanted it is` : probes.join('\n          '),
       'issue #1413: a control nobody has seen fail is not a control — the plausible wrong networks are planted and caught',
+    );
+  }
+
+  // LG34 — issue #1455 Bar 1: a leg that rises from behind the cloth, as on a
+  // prone figure. `rise` hangs from `thigh` at the probe's point (the knee) and
+  // points straight up, so its local +x runs up the screen: the point at its far
+  // end (the ankle) lies above the hem's root and is refused with the geometry
+  // and the remedy; the point at its origin (the knee) lies below it, builds
+  // through the whole gate and holds the hem off the leg on every frame.
+  {
+    const { touch, leg, outward } = LEG_STOP_PLATE;
+    const risingRig = (at: [number, number]): StopJson => {
+      const rig = read(probe.rigPath);
+      (rig.bones as StopJson[]).push({ name: 'rise', parent: 'thigh', x: touch[0], y: touch[1], rotation: 90, length: leg.height });
+      Object.assign(stopEntry(rig), { against: 'rise', at });
+      return rig;
+    };
+    const probes: string[] = [];
+    let refusal: string | null = null;
+    try {
+      compile(optsOf(written('rising_ankle', risingRig([leg.height, 0]))));
+    } catch (err) {
+      refusal = err instanceof CompileError ? err.message : `NOT a CompileError: ${(err as Error).message}`;
+    }
+    // The far end's world position goes through a 90° rotation, whose cosine is
+    // not 0 in doubles, so this control names the parts LG33 cannot already
+    // hold — the link, the point's name and "at" on the rising bone, and the
+    // remedy — and leaves the whole-message figures to LG33's exact frame.
+    const wants = [
+      `"outward" ${outward} puts "hem0_d"'s bound at`,
+      '"hem0" hangs at -90° from its root at',
+      `"hem_touch" ("at" [${leg.height}, 0] on "rise") sits at`,
+      `Move "hem_touch" to within ${180 - outward}° (180° − "outward") of the direction "hem0" hangs in from its root, -90°`,
+    ];
+    if (refusal === null) probes.push(`the point at the rising leg's far end [${leg.height}, 0] compiled clean`);
+    else for (const want of wants) if (!refusal.includes(want)) probes.push(`the point at the rising leg's far end was refused without ${JSON.stringify(want)}: ${refusal}`);
+    const knee = builtAndRead('rising_knee', written('rising_knee', risingRig([0, 0])));
+    for (const poser of ['core', 'spine'] as const) {
+      const r = knee[poser];
+      if (typeof r === 'string') probes.push(r);
+      else {
+        if (r.over !== total) probes.push(`the knee probe on --poser ${poser}: the cloth was read on ${r.over} frame(s), required all ${total}`);
+        if (r.frames.length > 0) probes.push(`the knee probe on --poser ${poser} passes through on frame(s) [${r.frames.map((f) => f.index).join(', ')}]`);
+      }
+    }
+    if (!knee.same) probes.push(`the knee probe's ${PASS_THROUGH_FILE} is not one file on the two posers`);
+    const ok = probes.length === 0;
+    say(
+      'LG34_A_RISING_LEG_REFUSES_THE_POINT_ABOVE_THE_ROOT_AND_HOLDS_FROM_THE_ONE_BELOW',
+      ok,
+      probeDetail(ok, probes, `on "rise", a bone at the knee pointing up: "at" [${leg.height}, 0] (the ankle, above "hem0"'s root) is refused with ${refusal ?? 'nothing'}; "at" [0, 0] (the knee, below it) builds through the whole gate and "skirt:leg" passes through on ${passingOf(knee.core)} — on the core and on spine-core, one ${PASS_THROUGH_FILE} on both`),
+      'issue #1455 Bar 1: a prone figure\'s shin rises from behind the cloth, so the point a hanging leg puts at its far end lands above the chain — the refusal has to say where, and the knee has to be the point that holds',
     );
   }
 

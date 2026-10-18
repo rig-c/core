@@ -262,7 +262,38 @@ sincere about it. rigc exists to convert that silence into a named failure.
   conversion lives in `src/transform.ts` (`cropToSpineY`, `toBoneLocal`,
   `screenToSpineDegrees`). Do not open-code it anywhere else.
 - Conventional Commits, English subject and body. Commit each finished unit.
-- Pushing, tagging and publishing are the owner's call.
+- Pushing, tagging and cutting a release are the sub-commander's call, delegated
+  by the owner; the publishing credentials and npm trusted publishing stay the
+  owner's.
+
+## Working with the command post
+
+This repository is commanded by one session at a time, and a command post (HQ)
+issues its work. The protocol between them lived in chat and eroded every time a
+session rotated — the reader rule above, measured on ourselves. So it is here.
+
+- **One issue = one PR.** The issue is the order: decision, bars, what is out of
+  scope. A message that changes an order is copied to the issue.
+- **A feature PR is opened and reported, and merged only after HQ's sign.** A
+  `release:` PR from release-please merges on the sub-commander's own call, and
+  so does the cut it makes. AI review runs at most once per PR.
+- **The report**, sent when an issue lands or stops: ① the PR and its merge SHA
+  ② a verification table — command, exit code, figures ③ every claim in the
+  issue that was contradicted, with the measurement ④ what was rejected, with
+  the reason ⑤ `STOP` and what blocks, when blocked.
+- 🚨 **Figures and names in a report or a document come from
+  `git diff origin/main...HEAD` and the run's own output, read in the same turn
+  as the report** — never from the session's memory of the work. Compaction
+  keeps an early scratch figure at the same weight as the final code, and that
+  is the measured way a report comes to describe a branch that does not exist.
+- **Artefacts for HQ go to the absolute path the card names, in the private
+  workspace — never under a public tree.** `git status -s` runs before every
+  report, and any tracked file touched is named in it.
+- **No private names on a public surface** — issues, PRs, commits, code and
+  docs carry no private corpus, character or game name and no local path. A
+  card handed down for this repository is written to that line too.
+- **A prose cap in a card applies to prose, not to tables.** A table is the
+  measurement; cutting rows to meet a word count deletes evidence.
 
 ## Verification — run these before you call a unit finished
 

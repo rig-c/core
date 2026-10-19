@@ -137513,7 +137513,21 @@ function runPassThroughSuite(): number {
 // overlaps — which slot a frame drew over which (issue #1480), run inside the pass-through suite
 // ---------------------------------------------------------------------------
 
-import { OVERLAPS_FILE, overlapsFileOf, overlapsOf, overlapsPlateFile, type OverlapPlant, type OverlapsFile, overlapsText } from './src/overlaps.ts';
+import {
+  type FrameDraw,
+  OVERLAPS_FILE,
+  type OverlapPlant,
+  type OverlapPlatePlant,
+  type OverlapReading,
+  type OverlapsFile,
+  overlapPlateLabelled,
+  overlapsFileOf,
+  overlapsOf,
+  overlapsPlateFile,
+  overlapsText,
+  PLATE_COLOURS,
+  type PlateLabel,
+} from './src/overlaps.ts';
 import { viewportOfFramesFile } from './src/viewportpin.ts';
 
 /** The overlap probe's sets and the arm's x at a time; every one is `OVERLAP_PLATE`'s numbers alone. */
@@ -137878,6 +137892,163 @@ function runOverlapControls(say: (name: string, ok: boolean, detail: string, why
       'issue #1480: a subset of the drawn slots drops the pairs the slots left out are in, so a reading beside one would describe part of the rig',
     );
   }
+
+  // OX07 — two slots whose contours touch, tops level, get disjoint label boxes, read off the writer's own list.
+  {
+    const slots = ['arm_b', 'torso'];
+    const { reading, viewport: vp } = overlapLabelReading(64, 48, [
+      { slot: 'arm_b', rect: [4, 10, 16, 25] },
+      { slot: 'torso', rect: [16, 10, 30, 30] },
+    ]);
+    const labelsOf = (plant: OverlapPlatePlant): PlateLabel[] => overlapPlateLabelled(reading, 0, slots, vp, plant)?.labels ?? [];
+    const placed = labelsOf({});
+    const probes = overlapLabelBoxFaults(placed, vp.width, vp.height, slots);
+    const planted = overlapLabelBoxFaults(labelsOf({ atTop: true }), vp.width, vp.height, slots);
+    const ok = probes.length === 0 && planted.length > 0;
+    say(
+      'OX07_A_CLOSE_PAIR_GETS_LABELS_THAT_DO_NOT_MEET',
+      ok,
+      probes.length > 0
+        ? probeDetail(false, probes, '')
+        : planted.length === 0
+          ? 'placement planted off {"atTop":true} and the boxes still read disjoint — the pair does not crowd'
+          : `"arm_b" and "torso" touch at x 16 with level tops: the writer's boxes ${placed.map((l) => `"${l.name}" ${JSON.stringify(l.box)}`).join(', ')} are disjoint and inside the plate; red under {"atTop":true} (${planted[0]})`,
+      'issue #1484 Bar 1 and Bar 3: labels crowded where contours meet, and a plate the agent cannot read is noise; the bar is the writer\'s boxes, not an eye',
+    );
+  }
+
+  // OX08 — a label spells the slot's name in the case it is given, glyph for glyph, and the font has lowercase of its own.
+  {
+    const slots = ['arm_b', 'torso'];
+    const { reading, viewport: vp } = overlapLabelReading(96, 48, [
+      { slot: 'arm_b', rect: [4, 16, 20, 40] },
+      { slot: 'torso', rect: [56, 16, 80, 40] },
+    ]);
+    const colours = slots.map((_, i) => PLATE_COLOURS[i % PLATE_COLOURS.length]);
+    const read = (plant: OverlapPlatePlant, draw: typeof drawGlyphs = drawGlyphs): string[] => {
+      const out = overlapPlateLabelled(reading, 0, slots, vp, plant);
+      return out === null ? ['the writer drew no plate'] : overlapLabelCaseFaults(out.plate, out.labels, slots, colours, draw);
+    };
+    const probes = read({});
+    const plantedPlate = read({ upper: true });
+    const plantedFont = read({}, (text, x, y, scale, plot) => drawGlyphs(text.toUpperCase(), x, y, scale, plot));
+    const ok = probes.length === 0 && plantedPlate.length > 0 && plantedFont.some((f) => f.startsWith('the font draws'));
+    say(
+      'OX08_A_LABEL_SPELLS_THE_SLOT_NAME_IN_ITS_OWN_CASE',
+      ok,
+      probes.length > 0
+        ? probeDetail(false, probes, '')
+        : !ok
+          ? `a plant went unseen: {"upper":true} ${plantedPlate[0] ?? 'found nothing'}; the font read through an upper-casing map ${plantedFont.find((f) => f.startsWith('the font draws')) ?? 'found nothing'}`
+          : `"arm_b" and "torso" print as given, every pixel of each box the font's own; a–z each a glyph of its own; red under {"upper":true} (${plantedPlate[0]}) and under an upper-casing font (${plantedFont.find((f) => f.startsWith('the font draws'))})`,
+      'issue #1484 Bar 1: the lines print arm_b and the plate printed ARM_B — the picture has to spell what the line says',
+    );
+  }
+
+  // OX09 — a label every contour candidate of which is taken goes to the nearest free spot on a leader line; with no spot left it says so.
+  {
+    const slots = ['torso', 'arm'];
+    const rects = (h: number): Array<{ slot: string; rect: [number, number, number, number] }> => [
+      { slot: 'torso', rect: [0, 4, 29, h - 1] },
+      { slot: 'arm', rect: [14, 4, 14, 4] },
+    ];
+    const roomy = overlapLabelReading(30, 16, rects(16));
+    const cramped = overlapLabelReading(30, 12, rects(12));
+    const read = (plant: OverlapPlatePlant): string[] => {
+      const faults: string[] = [];
+      const a = overlapPlateLabelled(roomy.reading, 0, slots, roomy.viewport, plant)?.labels ?? [];
+      faults.push(...overlapLabelBoxFaults(a, 30, 16, slots).map((f) => `30x16: ${f}`));
+      if (a[1] !== undefined && !a[1].leader) faults.push(`30x16: "arm" sits at ${JSON.stringify(a[1].box)} with no leader line — every candidate along its one-pixel contour crowds "torso"`);
+      const b = overlapPlateLabelled(cramped.reading, 0, slots, cramped.viewport, plant)?.labels ?? [];
+      if (b.length === 2 && labelBoxesMeet(b[0].box, b[1].box) && !b[1].crowded) faults.push(`30x12: "arm" ${JSON.stringify(b[1].box)} meets "torso" ${JSON.stringify(b[0].box)} and is not marked crowded`);
+      if (b.length !== 2) faults.push(`30x12: the writer placed ${b.length} label(s), required 2`);
+      return faults;
+    };
+    const probes = read({});
+    const planted = read({ atTop: true });
+    const ok = probes.length === 0 && planted.length > 0;
+    say(
+      'OX09_A_LABEL_WITH_NO_FREE_CANDIDATE_TAKES_A_LEADER_LINE_OR_SAYS_IT_IS_CROWDED',
+      ok,
+      probes.length > 0
+        ? probeDetail(false, probes, '')
+        : planted.length === 0
+          ? 'placement planted off {"atTop":true} and the reader found nothing'
+          : `a one-pixel "arm" inside "torso" on a 30x16 plate takes a leader line to a box clear of "torso"'s; on 30x12, with no free spot, its label is marked crowded; red under {"atTop":true} (${planted[0]})`,
+      'issue #1484: the leader line is the rule\'s last resort, so it is held to a frame where nothing else fits — and a plate too small for its labels says so rather than overprinting in silence',
+    );
+  }
+}
+
+
+/**
+ * A hand-made frame for the plate's label controls: slots as inclusive pixel
+ * rectangles `[x0, y0, x1, y1]`, drawn in the order given, on a `width` ×
+ * `height` plate — a reading with no poser, so the label rule is read on
+ * contours whose every pixel is known.
+ */
+function overlapLabelReading(width: number, height: number, rects: ReadonlyArray<{ slot: string; rect: [number, number, number, number] }>): { reading: OverlapReading; viewport: Viewport } {
+  const lists: Array<number[] | null> = new Array<number[] | null>(width * height).fill(null);
+  rects.forEach(({ rect: [x0, y0, x1, y1] }, id) => {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const at = y * width + x;
+        lists[at] = [...(lists[at] ?? []), id];
+      }
+    }
+  });
+  const draw: FrameDraw = { slots: rects.map((r) => r.slot), lists };
+  return { reading: { frames: [], pairs: [], plated: new Map([[0, draw]]) }, viewport: { minX: 0, minY: 0, maxX: width, maxY: height, scale: 1, width, height } };
+}
+
+/** Whether two inclusive boxes `[x0, y0, x1, y1]` share a pixel. */
+const labelBoxesMeet = (a: readonly number[], b: readonly number[]): boolean => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+
+/** OX07's reading: every pair of label boxes the writer returned is disjoint, every box inside the plate, none marked crowded, one per slot. */
+function overlapLabelBoxFaults(labels: readonly PlateLabel[], width: number, height: number, slots: readonly string[]): string[] {
+  const faults: string[] = [];
+  if (JSON.stringify(labels.map((l) => l.name)) !== JSON.stringify(slots)) faults.push(`the writer placed labels [${labels.map((l) => l.name).join(', ')}], required one per slot [${slots.join(', ')}]`);
+  for (let i = 0; i < labels.length; i++) {
+    const [x0, y0, x1, y1] = labels[i].box;
+    if (x0 < 0 || y0 < 0 || x1 >= width || y1 >= height) faults.push(`"${labels[i].name}"'s box ${JSON.stringify(labels[i].box)} leaves the ${width}x${height} plate`);
+    if (labels[i].crowded) faults.push(`"${labels[i].name}" is marked crowded`);
+    for (let j = i + 1; j < labels.length; j++) if (labelBoxesMeet(labels[i].box, labels[j].box)) faults.push(`"${labels[i].name}" ${JSON.stringify(labels[i].box)} and "${labels[j].name}" ${JSON.stringify(labels[j].box)} intersect`);
+  }
+  return faults;
+}
+
+/** The pixels `text` lights at (x0, y0) through `draw`, as `x,y` keys. */
+function glyphPixels(text: string, x0: number, y0: number, draw: typeof drawGlyphs = drawGlyphs): Set<string> {
+  const lit = new Set<string>();
+  draw(text, x0, y0, 1, (x, y) => lit.add(`${x},${y}`));
+  return lit;
+}
+
+/**
+ * OX08's reading: each label is the slot's name as given, and the plate's ink
+ * of the label's colour inside its box is exactly the pixels that name lights
+ * in the font there (the labels sit on the white background, clear of every
+ * contour, so no other ink is in the box); and the font itself draws every
+ * lowercase letter as a glyph of its own — not the capital's, not the
+ * unknown-character block.
+ */
+function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slots: readonly string[], colours: readonly RGBA[], draw: typeof drawGlyphs = drawGlyphs): string[] {
+  const faults: string[] = [];
+  labels.forEach((label, i) => {
+    if (label.name !== slots[i]) faults.push(`label ${i} reads ${JSON.stringify(label.name)}, the slot is ${JSON.stringify(slots[i])}`);
+    const want = glyphPixels(slots[i], label.box[0], label.box[1]);
+    const colour = colours[i].join();
+    let wrong = 0;
+    for (let y = label.box[1]; y <= label.box[3]; y++) for (let x = label.box[0]; x <= label.box[2]; x++) if ((plate.get(x, y).join() === colour) !== want.has(`${x},${y}`)) wrong++;
+    if (wrong > 0) faults.push(`"${slots[i]}"'s box ${JSON.stringify(label.box)} has ${wrong} pixel(s) whose ink is not the font's "${slots[i]}" there`);
+  });
+  const block = [...glyphPixels('\u0001', 0, 0, draw)].sort().join(' ');
+  for (const letter of 'abcdefghijklmnopqrstuvwxyz') {
+    const lower = [...glyphPixels(letter, 0, 0, draw)].sort().join(' ');
+    if (lower === [...glyphPixels(letter.toUpperCase(), 0, 0, draw)].sort().join(' ')) faults.push(`the font draws "${letter}" as "${letter.toUpperCase()}"`);
+    else if (lower === block) faults.push(`the font draws "${letter}" as the unknown-character block`);
+  }
+  return faults;
 }
 
 // ---------------------------------------------------------------------------

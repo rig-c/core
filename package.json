@@ -91,6 +91,7 @@
     "explain": "bun cli.ts explain",
     "selftest": "bun selftest.ts",
     "smoke": "bun scripts/install_smoke.ts",
+    "verify:nova": "bun scripts/verify_nova.ts",
     "typecheck": "bunx tsc --noEmit",
     "typecheck:runs": "bunx tsc --noEmit -p tsconfig.runs.json",
     "lint": "bunx eslint .",

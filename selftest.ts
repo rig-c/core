@@ -706,6 +706,7 @@ import { compareCut4c5Facts, comparePosedFacts, sumPosedTallies, CUT_4C5_FAMILIE
 import { compareSteppedPoses, coreRefusalOf, documentedCoreRefusal, STEPPED_FACT_FAMILIES, type SteppedFactFamily } from './tools/verdict_gate.ts';
 import { MERGED_TALLY_SPEC, PREPUBLISH_TALLY_VARIABLE, tallyDecision, treeHead, type MergedTally, type TallyTree } from './scripts/prepublish_gate.ts';
 import { ALIASES } from './scripts/alias_tarball.ts';
+import { VERIFY_NOVA_REMOTE } from './scripts/verify_nova.ts';
 import { judgeSquash, parseFaults, squashSubject, squashText } from './scripts/commit_parse.ts';
 import { rigFactsDerivationsOf, modelRigFacts, RIG_FACT_FAMILIES, rigFactsDerivations, rigFactsSpelling, sumTallies, type DerivationTally, type RigFactFamily, type RigFacts } from './tools/rig_facts.ts';
 import {
@@ -83908,6 +83909,66 @@ function runCurrencySuite(): number {
     say('CUR129_THE_DOCUMENTED_RELEASE_SAMPLE_REFUSES_EACH_MISSING_INPUT_BEFORE_PACK_OR_INSTALL', probes.length === 0,
       probeDetail(probes.length === 0, probes, `${cases.length} readings of the exact RELEASING block: ${cases.join('; ')}`),
       'issue #1447: an obsolete example command cannot measure a dependant; the public scarf config names animations.json and each wrapper directory requires layers.json, so the documented step must name any missing sample asset before running the comparison');
+  }
+
+  // CUR130 — `verify:nova` hands the pool runner its three values and the prepared remote command, or refuses
+  // by name before running it; and the remote command gives an upload with no `.git` one that lists it (issue #1474).
+  {
+    const probes: string[] = [];
+    const cases: string[] = [];
+    const work = mkdtempSync(join(harnessTemp(), 'rigc-verify-nova-'));
+    try {
+      const marker = join(work, 'runner.args');
+      const runner = join(work, 'nova-run.sh');
+      writeFileSync(runner, `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done > '${marker}'\nexit 3\n`);
+      chmodSync(runner, 0o755);
+      const hand = (args: string[], env: NodeJS.ProcessEnv): { status: number | null; stderr: string; reached: string[] | null } => {
+        rmSync(marker, { force: true });
+        const r = spawnSync(process.execPath, [join(root, 'scripts', 'verify_nova.ts'), ...args], { cwd: work, encoding: 'utf8', env });
+        return { status: r.status, stderr: r.stderr, reached: existsSync(marker) ? readFileSync(marker, 'utf8').trimEnd().split('\n') : null };
+      };
+      const env = { ...process.env, NOVA_RUN: runner };
+      const full = ['--label', '#1474 full selftest', '--owner', 'a squad', '--session', 'a-session-id'];
+      const ok = hand(full, env);
+      const expected = ['--label', '#1474 full selftest', '--owner', 'a squad', '--session', 'a-session-id', '--', 'bash', '-c', VERIFY_NOVA_REMOTE];
+      if (ok.status !== 3 || ok.reached?.join('\n') !== expected.join('\n')) probes.push(`all three given: exit ${String(ok.status)}, the runner was handed ${JSON.stringify(ok.reached)}; required exit 3 (the runner's) and ${JSON.stringify(expected)}`);
+      else cases.push("all three given: the runner's exit 3 returned, the three values and the remote command passed through");
+      for (const field of ['label', 'owner', 'session']) {
+        for (const [what, args] of [
+          ['absent', full.filter((_, k) => !(full[k] === `--${field}` || full[k - 1] === `--${field}`))],
+          ['"unknown"', full.map((a, k) => (full[k - 1] === `--${field}` ? 'unknown' : a))],
+          ['blank', full.map((a, k) => (full[k - 1] === `--${field}` ? ' ' : a))],
+        ] as const) {
+          const r = hand([...args], env);
+          if (r.status !== 2 || r.reached !== null || !r.stderr.startsWith(`verify:nova: --${field} is missing, blank or "unknown"`)) probes.push(`--${field} ${what}: exit ${String(r.status)}, runner reached ${r.reached !== null}, stderr ${JSON.stringify(r.stderr.slice(0, 160))}; required exit 2 naming --${field} before the runner`);
+          else cases.push(`--${field} ${what}: refused by name, the runner not started`);
+        }
+      }
+      const nowhere = hand(full, { ...process.env, NOVA_RUN: join(work, 'not-there.sh') });
+      if (nowhere.status !== 2 || !nowhere.stderr.includes('NOVA_RUN names') || nowhere.reached !== null) probes.push(`NOVA_RUN naming nothing: exit ${String(nowhere.status)}, stderr ${JSON.stringify(nowhere.stderr.slice(0, 160))}; required exit 2 naming NOVA_RUN`);
+      else cases.push('NOVA_RUN naming nothing: refused by name');
+
+      // The remote command, on an upload with no `.git`: `bun` is a stand-in that records its calls and, on
+      // `run selftest`, what `git ls-files` lists — the call the cli suite died on.
+      const upload = join(work, 'upload');
+      const fakeBin = join(work, 'bin');
+      mkdirSync(upload, { recursive: true });
+      mkdirSync(fakeBin, { recursive: true });
+      writeFileSync(join(upload, 'sent.txt'), 'x\n');
+      writeFileSync(join(fakeBin, 'bun'), `#!/bin/sh\necho "$*" >> '${join(work, 'bun.calls')}'\nif [ "$2" = selftest ]; then git ls-files > '${join(work, 'listed')}'; exit 5; fi\n`);
+      chmodSync(join(fakeBin, 'bun'), 0o755);
+      const remote = spawnSync('bash', ['-c', VERIFY_NOVA_REMOTE], { cwd: upload, encoding: 'utf8', env: { ...process.env, PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`, GIT_CONFIG_GLOBAL: '/dev/null' } });
+      const calls = existsSync(join(work, 'bun.calls')) ? readFileSync(join(work, 'bun.calls'), 'utf8').trimEnd().split('\n') : [];
+      const listed = existsSync(join(work, 'listed')) ? readFileSync(join(work, 'listed'), 'utf8').trimEnd().split('\n') : [];
+      if (remote.status !== 5 || calls.join('\n') !== 'run fetch-examples\nrun selftest' || listed.join('\n') !== 'sent.txt') {
+        probes.push(`the remote command on an upload with no .git: exit ${String(remote.status)}, bun called ${JSON.stringify(calls)}, git ls-files listed ${JSON.stringify(listed)}; required exit 5 (the selftest's), fetch-examples then selftest, and ["sent.txt"] — ${remote.stderr.trim().slice(0, 200)}`);
+      } else cases.push("the remote command on an upload with no .git: git ls-files lists what was sent, fetch-examples runs before selftest, and the selftest's exit 5 is the job's");
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+    say('CUR130_VERIFY_NOVA_PREPARES_THE_UPLOAD_AND_REFUSES_A_JOB_WITH_NO_LABEL_OWNER_OR_SESSION_BEFORE_SENDING_IT', probes.length === 0,
+      probeDetail(probes.length === 0, probes, `${cases.length} reading(s): ${cases.join('; ')}`),
+      'issue #1474: the pool uploads a tree with no .git and no examples/, so the full selftest is sent through a hand that prepares both; a job the pool would refuse after the upload is refused here before it');
   }
 
   return bad;

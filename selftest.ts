@@ -76714,6 +76714,8 @@ function runCurrencySuite(): number {
       disagreements: Disagreement[];
       /** git declining to answer, which must not read as a clean tree. */
       gitBroke: string | null;
+      /** How many files git listed as text — zero over a tree with text in it is a scan that measured nothing. */
+      gitText: number;
       /**
        * Tracked symlinks whose target is another path of the same universe, left
        * out of both partitions (issue #831, `AGENTS.md` -> `CLAUDE.md`). git
@@ -76796,7 +76798,7 @@ function runCurrencySuite(): number {
 
     const scanDir = (dir: string, universe: readonly string[], gitArgs: readonly string[]): OpaqueScan => {
       const { text: gitText, broke } = askGit(dir, gitArgs);
-      const out: OpaqueScan = { read: 0, text: 0, opaque: 0, unread: [], sightings: [], disagreements: [], gitBroke: broke, links: [] };
+      const out: OpaqueScan = { read: 0, text: 0, opaque: 0, unread: [], sightings: [], disagreements: [], gitBroke: broke, gitText: gitText.size, links: [] };
       const members = new Set(universe);
       /** A link that resolves — a dangling one is read below and reported unreadable, as before. */
       const isLinkWithin = (path: string): boolean => {
@@ -76843,6 +76845,9 @@ function runCurrencySuite(): number {
         ? ['not one file was read, so every clause below was measured against nothing and this scan cannot say a tree is clean']
         : []),
       ...(scan.gitBroke === null ? [] : [scan.gitBroke]),
+      ...(scan.gitBroke === null && scan.text > 0 && scan.gitText === 0
+        ? [`git listed no file as text while ${scan.text} decode as UTF-8, so its partition was not read — a pattern it never received (issue #1477) answers "no files" rather than failing`]
+        : []),
       ...firstFew(scan.unread, 'unreadable'),
       ...firstFew(
         scan.sightings.map(
@@ -76876,7 +76881,10 @@ function runCurrencySuite(): number {
         ? `git could not list the tracked files (${listed.error?.message ?? `exit ${String(listed.status)}: ${listed.stderr.toString('utf8').trim()}`})`
         : null;
     const tracked = treeFault === null ? listed.stdout.toString('utf8').split('\u0000').filter((entry) => entry !== '') : [];
-    const liveScan = scanDir(root, tracked, ['grep', '-I', '-l', '-z', '-e', '']);
+    // `^` and not the empty pattern (issue #1477): both match every line, so they list the same files, but Bun
+    // 1.2.0 — the declared minimum — drops an empty argument when it starts a process, and `-e ''` reached git
+    // as a bare `-e` (exit 129, 0 files). A pattern no Bun can drop is the only one this scan can rely on.
+    const liveScan = scanDir(root, tracked, ['grep', '-I', '-l', '-z', '-e', '^']);
 
     // The controls, planted in a throwaway directory out of THIS tree's own
     // files, so no shape below is a fabricated stand-in and no offset is a
@@ -76937,7 +76945,7 @@ function runCurrencySuite(): number {
         const opaqueName = opaqueVictim ?? 'four bytes no tracked file supplied, because this tree has no binary in it';
 
         const planted = scanDir(dir, ['pristine.txt', 'deep.txt', 'front.txt', 'opaque.bin'], [
-          'grep', '--no-index', '-I', '-l', '-z', '-e', '',
+          'grep', '--no-index', '-I', '-l', '-z', '-e', '^',
         ]);
         const named = planted.sightings.map((hit) => hit.path).sort();
         const differed = planted.disagreements.map((row) => row.path).sort();
@@ -76965,7 +76973,7 @@ function runCurrencySuite(): number {
         }
         // ⑤ the floor, seen to fire: a scan that reads nothing must not report a
         //    clean tree.
-        if (faultsOf(scanDir(dir, [], ['grep', '--no-index', '-I', '-l', '-z', '-e', ''])).length === 0) {
+        if (faultsOf(scanDir(dir, [], ['grep', '--no-index', '-I', '-l', '-z', '-e', '^'])).length === 0) {
           controlFaults.push(
             'a scan given no files at all came back clean, so a scan that stopped finding files would go quiet ' +
               'rather than red',
@@ -76991,7 +76999,7 @@ function runCurrencySuite(): number {
       probes.length === 0,
       probes.length === 0
         ? `${liveScan.read} tracked file(s) read — ${liveScan.text} decode as UTF-8 end to end and ${liveScan.opaque} ` +
-          `do not — and not one of the ${liveScan.text} carries a NUL. Git partitions the same ${liveScan.read} the ` +
+          `do not — and not one of the ${liveScan.text} carries a NUL. Git lists ${liveScan.gitText} as text and partitions the same ${liveScan.read} the ` +
           `same way, with no file either of them reads differently` +
           (liveScan.links.length === 0
             ? ''

@@ -2342,30 +2342,127 @@ export function emptyArgumentRefusal(pkg: string, raw: readonly string[], keeps:
 }
 
 /**
+ * One argument as a POSIX shell reads it back (issue #1486): left bare when it is made only of characters no shell
+ * treats specially, otherwise single-quoted with each `'` spelled `'\''`. The empty argument is `''`. Deterministic
+ * — the same argument always prints the same word — so a guidance line naming the flags a caller gave is one string.
+ */
+export function shellWord(arg: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
+  return `'${arg.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * What a delegating command hands its bin, and the build directory it was pointed at (issue #1486). A delegate that
+ * names a `bareTarget` subcommand treats a first argument that is none of its `subcommands` and does not start with
+ * `-` (`--help`, `-h`, `--` and every flag pass through) as a target: `rigc review <dir> …` hands over
+ * `open <dir> …`. Every other command line — no argument at all, an empty first argument, or a subcommand — is handed
+ * over as given, and `target` is `null`.
+ */
+export function delegateArguments(delegate: { subcommands?: readonly string[]; bareTarget?: string }, raw: readonly string[]): { argv: string[]; target: string | null } {
+  const first = raw[0];
+  if (delegate.bareTarget === undefined || first === undefined || first === '' || first.startsWith('-') || (delegate.subcommands ?? []).includes(first)) {
+    return { argv: [...raw], target: null };
+  }
+  return { argv: [delegate.bareTarget, ...raw], target: first };
+}
+
+/**
+ * The refusal for a delegated package that does not resolve (issue #1486): `REVIEW_NOT_INSTALLED` and two guidance
+ * lines — the command that installs it, and the one that runs it once without installing, carrying `argv` (what the
+ * bin would have been handed, a bare target already spelled `open <dir>`) word for word. With nothing to carry, the
+ * second line names the target it needs as `<output>`. Nothing reads the terminal, so it is the same on a TTY and
+ * off one, and rigc runs neither line: an install and a one-off fetch both change state the caller did not ask for.
+ */
+export function notInstalledRefusal(pkg: string, argv: readonly string[]): string {
+  const words = argv.length === 0 ? ['open', '<output>'] : argv.map(shellWord);
+  return (
+    `REVIEW_NOT_INSTALLED: ${pkg} is not installed beside this project or beside rig-c, and rigc does not install it — ` +
+    `install it, or run it once without installing:\n` +
+    `bun add -d ${pkg}\n` +
+    `bunx ${pkg} ${words.join(' ')}`
+  );
+}
+
+/**
+ * The refusal for a delegated package whose manifest declares a Bun floor the running Bun is under, or `null`
+ * (issue #1486). The floor is read off the resolved package's own `engines.bun`, never written here: a package that
+ * declares none has no floor to hold. Only `>=X.Y.Z` is read; any other range shape is refused by name rather than
+ * guessed at (`REVIEW_BUN_RANGE_UNREAD`). A running version with a pre-release tag is below its own release, as
+ * semver orders them.
+ */
+export function bunFloorRefusal(pkg: string, engines: unknown, running: string): string | null {
+  if (engines === undefined) return null;
+  const isObject = typeof engines === 'object' && engines !== null && !Array.isArray(engines);
+  const range = isObject ? (engines as Record<string, unknown>).bun : undefined;
+  if (isObject && range === undefined) return null;
+  const floor = typeof range === 'string' ? /^\s*>=\s*(\d+)\.(\d+)\.(\d+)\s*$/.exec(range) : null;
+  if (floor === null) {
+    const what = isObject ? `engines.bun ${JSON.stringify(range)}` : `engines ${JSON.stringify(engines)}`;
+    return `REVIEW_BUN_RANGE_UNREAD: ${pkg} declares ${what}, and rigc reads only ">=X.Y.Z" — it did not guess whether Bun ${running} satisfies it`;
+  }
+  const found = /^(\d+)\.(\d+)\.(\d+)(-\S*)?/.exec(running);
+  const below = ((): boolean => {
+    if (found === null) return true;
+    for (let i = 1; i <= 3; i++) {
+      const a = Number(found[i]);
+      const b = Number(floor[i]);
+      if (a !== b) return a < b;
+    }
+    return found[4] !== undefined;
+  })();
+  return below ? `REVIEW_BUN_TOO_OLD: Bun ${running}, ${pkg} needs ${range as string}` : null;
+}
+
+/**
  * A delegating command's body (`CommandDoc.delegate`, issue #1457): resolve the
  * package's bin and run it under the Bun running this — the bin is a Bun script
- * — with every argument untouched and stdio inherited, then exit with its code,
- * or die by its signal the way `bin/rigc.cjs` does, so a caller reads what it
- * would have read running the bin itself. Not installed, it is refused by name
- * with the one command that installs it, exit 2, and nothing else is printed.
+ * — with stdio inherited, then exit with its code, or die by its signal the way
+ * `bin/rigc.cjs` does, so a caller reads what it would have read running the bin
+ * itself: stdout is the bin's byte for byte, stderr the bin's plus only the
+ * launcher's own refusals, the exit code the bin's.
+ *
+ * Issue #1486 put four things in front of the spawn, in this order, each a
+ * refusal by name with exit 2 and nothing on stdout: a bare target that is not a
+ * directory (`REVIEW_OUTPUT_MISSING <path>`, read before the install because a
+ * guidance line pointing at nothing is no guidance); the package absent
+ * (`REVIEW_NOT_INSTALLED` and two guidance lines — never an install, never a
+ * `bunx`); a Bun below the package's declared floor (`REVIEW_BUN_TOO_OLD`); an
+ * empty argument this Bun would drop (issue #1465). The argument list is the
+ * caller's, a bare target prefixed with `open`, and nothing else: no
+ * `--reference` is derived, because no build rigc writes records the clip it was
+ * retargeted from.
  */
 function cmdDelegate(command: string, raw: readonly string[]): void {
   const delegate = COMMANDS.find((c) => c.name === command)?.delegate;
   if (delegate === undefined) throw new Error(`internal: ${command} names no delegate`);
+  const { argv, target } = delegateArguments(delegate, raw);
+  if (target !== null && !(existsSync(target) && statSync(target).isDirectory())) {
+    throw new DelegateError(
+      `REVIEW_OUTPUT_MISSING ${target}: ${existsSync(target) ? 'it is not a directory' : 'nothing is there'} — \`rigc review <dir>\` opens a build's output directory, ` +
+        `and the first argument is read as one because it is none of ${(delegate.subcommands ?? []).join(', ')} and does not start with "-" (\`rigc review -- <arg>\` hands it over as it is)`,
+      2,
+    );
+  }
   const manifest = resolveDelegate(delegate.package);
-  if (manifest === null) throw new DelegateError(`${delegate.package} is not installed — npm i -D ${delegate.package}`, 2);
-  const bins = (readJsonFile(manifest) as { bin?: unknown }).bin;
+  if (manifest === null) throw new DelegateError(notInstalledRefusal(delegate.package, argv), 2);
+  const read = readJsonFile(manifest) as { bin?: unknown; engines?: unknown };
+  const bins = read.bin;
   const relativeBin = typeof bins === 'object' && bins !== null ? (bins as Record<string, unknown>)[delegate.bin] : undefined;
   const bin = typeof relativeBin === 'string' ? join(dirname(manifest), relativeBin) : null;
   if (bin === null || !existsSync(bin)) {
     throw new DelegateError(
-      `${delegate.package} at ${dirname(manifest)} ${bin === null ? `declares no "${delegate.bin}" bin` : `declares the "${delegate.bin}" bin ${String(relativeBin)}, which is not there`} — npm i -D ${delegate.package}`,
+      `${delegate.package} at ${dirname(manifest)} ${bin === null ? `declares no "${delegate.bin}" bin` : `declares the "${delegate.bin}" bin ${String(relativeBin)}, which is not there`} — bun add -d ${delegate.package}`,
       2,
     );
   }
-  const dropped = emptyArgumentRefusal(delegate.package, raw, spawnKeepsEmptyArguments, process.versions.bun ?? 'unknown');
+  const old = bunFloorRefusal(delegate.package, read.engines, process.versions.bun ?? 'unknown');
+  if (old !== null) throw new DelegateError(old, 2);
+  const dropped = emptyArgumentRefusal(delegate.package, argv, spawnKeepsEmptyArguments, process.versions.bun ?? 'unknown');
   if (dropped !== null) throw new DelegateError(dropped, 2);
-  const ran = spawnSync(process.execPath, [bin, ...raw], { stdio: 'inherit' });
+  // 🔒 The `--` is Bun's, not the bin's: Bun 1.2.0 and 1.4.2 alike drop one `--` standing right after the script, so
+  // `rigc review -- <dir>` reached the bin as `<dir>` (measured, issue #1486). One given here is the one dropped, and
+  // the arguments after it arrive as they were.
+  const ran = spawnSync(process.execPath, [bin, '--', ...argv], { stdio: 'inherit' });
   // ⚠️ The exit and the signal are read before `error`: Bun 1.2.0 — the declared minimum — sets `error` on every
   // child that exits non-zero, so reading it first refused review's own exit 7 as "could not run". `error` is a
   // launch that failed only where the child left neither a status nor a signal.

@@ -1267,7 +1267,7 @@ const CORE_POSE_STEP = 'core-pose';
 const CORE_POSE_CASE = 'SMOKE_CORE_POSES_FROM_AN_INSTALL_WITH_NO_SPINE_CORE';
 const CORE_BROWSER_STEP = 'core-browser';
 const CORE_BROWSER_CASE = 'SMOKE_CORE_BUNDLES_FOR_A_BROWSER_WITH_NO_NODE_MODULE';
-/** `rigc review` from the install (issue #1457): refused by name before the review package is installed, `review check` exit 0 after. */
+/** `rigc review` from the install (issues #1457, #1486): refused REVIEW_NOT_INSTALLED, the project untouched, before the review package is installed; `review check` exit 0 after. */
 const REVIEW_STEP = 'review';
 /** The fixture bone whose world matrix both steps print: the last of the chain, under a rotated parent, so the matrix is not the identity. */
 const CORE_PROBE_BONE = 'hand';
@@ -2586,17 +2586,20 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
       fault('render', 'SMOKE_CORE_ENTRY_RENDERS_THE_BUILD: the full entry wrote no build/skeleton.model.json, so there is no build for the core entry to render');
     }
 
-    // Issue #1457: `rigc review` from the install, the runtime gone. The package is not a dependency, so first the
-    // refusal — one line, exit 2 — and then the package that line names, installed the way it says (no version: the
+    // Issues #1457 and #1486: `rigc review` from the install, the runtime gone. The package is not a dependency, so
+    // first the refusal — REVIEW_NOT_INSTALLED and its two guidance lines, exit 2, and the project untouched (rigc
+    // never installs) — and then the package those lines name, installed the way the first says (no version: the
     // command a reader runs is the one checked), and `rigc review check` over the round-tripped build, which has to
     // exit 0. The name is read off the refusal rather than written here, so a refusal naming the wrong package fails
     // at the install, not in a second copy of the name.
+    const manifestBefore = readFileSync(join(home, 'package.json'), 'utf8');
     const refusal = run(bin, ['review', 'check', FULL_OUT], home);
     output += refusal.out;
-    // Read off the two streams rather than `out` (see `Ran`): exit 2, nothing on stdout, and the one line on stderr.
-    const named = /^rigc review: (\S+) is not installed — npm i -D (\S+)\n$/.exec(refusal.stderr);
-    if (refusal.status !== 2 || refusal.stdout !== '' || named === null || named[1] !== named[2]) {
-      fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package exited ${refusal.status} printing ${JSON.stringify(refusal.stdout.slice(0, 300))} on stdout and ${JSON.stringify(refusal.stderr.slice(0, 600))} on stderr; exit 2, nothing on stdout and the one line "rigc review: <package> is not installed — npm i -D <package>" on stderr were required`);
+    // Read off the two streams rather than `out` (see `Ran`): exit 2, nothing on stdout, and the three lines on stderr.
+    const named = /^rigc review: REVIEW_NOT_INSTALLED: (\S+) is not installed [^\n]*\nbun add -d (\S+)\nbunx (\S+) (.*)\n$/.exec(refusal.stderr);
+    const touched = readFileSync(join(home, 'package.json'), 'utf8') !== manifestBefore;
+    if (refusal.status !== 2 || refusal.stdout !== '' || named === null || named[1] !== named[2] || named[1] !== named[3] || named[4] !== `check ${FULL_OUT}` || touched) {
+      fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package exited ${refusal.status} printing ${JSON.stringify(refusal.stdout.slice(0, 300))} on stdout and ${JSON.stringify(refusal.stderr.slice(0, 600))} on stderr${touched ? ', and changed package.json' : ''}; exit 2, nothing on stdout, package.json unchanged and the lines "rigc review: REVIEW_NOT_INSTALLED: <package> is not installed …", "bun add -d <package>" and "bunx <package> check ${FULL_OUT}" on stderr were required`);
     } else {
       const reviewPackage = named[1];
       const added = spec.installer === 'npm' ? run('npm', ['install', '-D', reviewPackage, '--no-audit', '--no-fund'], home) : run('bun', ['add', '-d', reviewPackage], home);
@@ -2605,10 +2608,26 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
       if (!existsSync(reviewManifest)) {
         fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: ${spec.installer === 'npm' ? 'npm i -D' : 'bun add -d'} ${reviewPackage} exited ${added.status} and left no ${reviewManifest}. ${added.out.trim().slice(0, 2000)}`);
       } else {
-        const reviewVersion = (JSON.parse(readFileSync(reviewManifest, 'utf8')) as { version?: string }).version ?? '(no version field)';
+        const reviewRead = JSON.parse(readFileSync(reviewManifest, 'utf8')) as { version?: string; engines?: { bun?: unknown } };
+        const reviewVersion = reviewRead.version ?? '(no version field)';
+        // The floor the installed review declares (issue #1486), compared here on its own rather than through the
+        // launcher's code: under a Bun below it — the declared-minimum job — the launcher's refusal is the run.
+        const floor = typeof reviewRead.engines?.bun === 'string' ? /^\s*>=\s*(\d+)\.(\d+)\.(\d+)\s*$/.exec(reviewRead.engines.bun) : null;
+        const running = (/^(\d+)\.(\d+)\.(\d+)/.exec(String(process.versions.bun)) ?? []).slice(1, 4).map(Number);
+        const below = floor !== null && running.length === 3 && ((): boolean => {
+          for (let i = 0; i < 3; i++) if (running[i] !== Number(floor[i + 1])) return running[i] < Number(floor[i + 1]);
+          return false;
+        })();
         const checked = run(bin, ['review', 'check', FULL_OUT], home);
         output += checked.out;
-        if (checked.status !== 0) {
+        const tooOld = `rigc review: REVIEW_BUN_TOO_OLD: Bun ${String(process.versions.bun)}, ${reviewPackage} needs ${String(reviewRead.engines?.bun)}\n`;
+        if (below) {
+          if (checked.status !== 2 || checked.stdout !== '' || checked.stderr !== tooOld) {
+            fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: \`rigc review check ${FULL_OUT}\` under Bun ${String(process.versions.bun)}, below the ${String(reviewRead.engines?.bun)} ${reviewPackage} ${reviewVersion} declares, exited ${checked.status} printing ${JSON.stringify(checked.stdout.slice(0, 300))} on stdout and ${JSON.stringify(checked.stderr.slice(0, 600))} on stderr; exit 2, nothing on stdout and ${JSON.stringify(tooOld)} were required`);
+          } else {
+            notes.push(`without ${RUNTIME}: rigc review refused by name until ${reviewPackage} was installed, then refused REVIEW_BUN_TOO_OLD under Bun ${String(process.versions.bun)} (${reviewPackage} ${reviewVersion} needs ${String(reviewRead.engines?.bun)})`);
+          }
+        } else if (checked.status !== 0) {
           fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: \`rigc review check ${FULL_OUT}\` with ${reviewPackage} ${reviewVersion} installed beside the package exited ${checked.status}, and 0 was required. ${checked.out.trim().slice(0, 2000)}`);
         } else {
           notes.push(`without ${RUNTIME}: rigc review refused by name until ${reviewPackage} was installed, then \`review check ${FULL_OUT}\` through ${reviewPackage} ${reviewVersion} exited 0 (${checked.out.trim().split('\n').join(' / ').slice(0, 240)})`);
@@ -2716,7 +2735,7 @@ exit codes:
      here says the package is broken
 
 cases:
-  clean          a correct package installs WITHOUT spine-core and its rigc runs the core entry, whose build has to exit 0 and write its files; with spine-core installed beside it the same rigc builds through the round trip, writing the same bytes as the core entry's build of the same fixture, resolves every \`exports\` entry and every shipped path, reads every observed symbol through its entry and calls the ones a dependant was seen calling; with spine-core taken away again it imports every observed entry as stated, compares meshes of that build through ${NAME}/meshcompare, poses its setup pose through ${NAME}/core and through a vite browser bundle of that entry holding no node module, renders and checks that build, refuses \`rigc review\` by name until the review package that refusal names is installed and then runs \`rigc review check\` on that build, links its skills, and the bin shim names Bun when bun is absent
+  clean          a correct package installs WITHOUT spine-core and its rigc runs the core entry, whose build has to exit 0 and write its files; with spine-core installed beside it the same rigc builds through the round trip, writing the same bytes as the core entry's build of the same fixture, resolves every \`exports\` entry and every shipped path, reads every observed symbol through its entry and calls the ones a dependant was seen calling; with spine-core taken away again it imports every observed entry as stated, compares meshes of that build through ${NAME}/meshcompare, poses its setup pose through ${NAME}/core and through a vite browser bundle of that entry holding no node module, renders and checks that build, refuses \`rigc review\` by name (REVIEW_NOT_INSTALLED, the project untouched) until the review package that refusal names is installed and then runs \`rigc review check\` on that build, links its skills, and the bin shim names Bun when bun is absent
   unusual-path   the same, installed at an absolute path with spaces and non-ASCII in it
   drop-plate     tools/plate.ts out of \`files\`  — the smoke has to go RED naming it
   drop-src-module  src/validate.ts out of the packed tree — the smoke has to go RED naming it

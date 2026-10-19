@@ -1418,8 +1418,12 @@ interface CommandDoc {
    * delegate's exit code is the command's. `flags` is empty for that reason:
    * rigc documents no flag of a program it does not own. A control that reads
    * a command's flag table off `--help` reads it off the commands without this.
+   *
+   * `bareTarget` and `subcommands` (issue #1486): a first argument that is none
+   * of `subcommands` and does not start with `-` is a target, handed over as
+   * `<bareTarget> <target> …` — the one rewrite the launcher makes.
    */
-  delegate?: { package: string; bin: string };
+  delegate?: { package: string; bin: string; bareTarget?: string; subcommands?: readonly string[] };
 }
 
 export const COMMANDS: CommandDoc[] = [
@@ -1952,9 +1956,12 @@ export const COMMANDS: CommandDoc[] = [
     name: 'review',
     runtime: false,
     spineFormat: false,
-    delegate: { package: '@rig-c/review', bin: 'rig-review' },
+    // rig-review's own first words: every one of them, `--help`, `-h` and `--` (rig-review's way to its legacy bare
+    // form) pass through; anything else first is a build directory, handed over as `open <dir>` (issue #1486).
+    delegate: { package: '@rig-c/review', bin: 'rig-review', bareTarget: 'open', subcommands: ['open', 'check', 'feedback', 'control', 'strip', 'compare'] },
     usage: [
-      "rigc review <dir> [...]      (@rig-c/review's rig-review, installed beside: every argument handed over untouched, its exit code returned — `rigc review open <dir>` prints a loopback URL to give a person, `rigc review --help` is rig-review's own usage)",
+      "rigc review <dir> [--reference <video>] [--animation <name>] [--compare <dir>]   (rig-review open <dir> …: prints a loopback URL to give a person)",
+      "rigc review open|check|feedback|control|strip|compare|--help …   (@rig-c/review's rig-review, installed beside: every argument handed over untouched, its stdout and exit code returned; rigc never installs it)",
     ],
     flags: [],
   },

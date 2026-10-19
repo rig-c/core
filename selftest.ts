@@ -69447,7 +69447,11 @@ function runBuildRefusalSuite(): number {
 function reviewDelegateControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
   const delegate = COMMANDS.find((doc) => doc.name === 'review')?.delegate;
   const work = mkdtempSync(join(harnessTemp(), 'rigc-review-'));
-  const refusal = 'rigc review: @rig-c/review is not installed — npm i -D @rig-c/review\n';
+  /** RV01's and RV06's refusal, written out here rather than read off the launcher: the code and the two guidance lines, the second carrying `bunxArgs` (issue #1486). */
+  const notInstalled = (bunxArgs: string): string =>
+    'rigc review: REVIEW_NOT_INSTALLED: @rig-c/review is not installed beside this project or beside rig-c, and rigc does not install it — install it, or run it once without installing:\n' +
+    'bun add -d @rig-c/review\n' +
+    `bunx @rig-c/review ${bunxArgs}\n`;
   type Ran = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string };
   const runFrom = (cwd: string, script: string, args: string[]): Ran => {
     const r = spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8', env: { ...process.env, NODE_PATH: '' } });
@@ -69488,12 +69492,17 @@ function reviewDelegateControls(say: (name: string, ok: boolean, detail: string,
     const holder = reaches(at);
     if (holder !== null) faults01.push(`${at} reaches ${delegate?.package ?? 'the package'} through ${holder}/node_modules, so this run cannot be the absent state`);
   }
-  const cases01: string[][] = [['review', 'check', 'build'], ['review', '--help'], ['review'], ['help', 'review']];
+  const cases01: Array<{ args: string[]; bunx: string }> = [
+    { args: ['review', 'check', 'build'], bunx: 'check build' },
+    { args: ['review', '--help'], bunx: '--help' },
+    { args: ['review'], bunx: 'open <output>' },
+    { args: ['help', 'review'], bunx: '--help' },
+  ];
   for (const entry of ['cli.ts', 'cli_core.ts']) {
-    for (const args of cases01) {
+    for (const c of cases01) {
       // cli.ts links spine-core, which the copy does not have; its refusal is read in the checkout, from `nowhere`.
-      const r = entry === 'cli.ts' ? runFrom(nowhere, join(import.meta.dir, entry), args) : runFrom(nowhere, join(tree, entry), args);
-      if (r.status !== 2 || r.stdout !== '' || r.stderr !== refusal) faults01.push(`${entry} ${args.join(' ')}: ${shown(r)}`);
+      const r = entry === 'cli.ts' ? runFrom(nowhere, join(import.meta.dir, entry), c.args) : runFrom(nowhere, join(tree, entry), c.args);
+      if (r.status !== 2 || r.stdout !== '' || r.stderr !== notInstalled(c.bunx)) faults01.push(`${entry} ${c.args.join(' ')}: ${shown(r)} — stderr ${JSON.stringify(notInstalled(c.bunx))} was required`);
     }
   }
   if (faults01.length === 0 && reaches(import.meta.dir) !== null) faults01.push(`the checkout reaches the package (${String(reaches(import.meta.dir))}), so cli.ts's refusal was not read in the absent state`);
@@ -69503,10 +69512,10 @@ function reviewDelegateControls(say: (name: string, ok: boolean, detail: string,
     probeDetail(
       faults01.length === 0,
       faults01,
-      `${cases01.length} command line(s) on each entry (cli_core.ts in a copy with an empty node_modules), run from a directory nothing above holds the package in, NODE_PATH empty: exit 2, stdout empty, stderr exactly ${JSON.stringify(refusal.trim())}`,
+      `${cases01.length} command line(s) on each entry (cli_core.ts in a copy with an empty node_modules), run from a directory nothing above holds the package in, NODE_PATH empty: exit 2, stdout empty, stderr exactly REVIEW_NOT_INSTALLED and the two guidance lines, the second carrying what the bin would have been handed (\`open <output>\` when nothing was)`,
       (count) => `${count} fault(s):`,
     ),
-    'issue #1457: core does not depend on @rig-c/review, so the one thing `rigc review` can say without it is which package to install — and printing anything more, or exiting as a review would, reads as a review that ran',
+    'issues #1457 and #1486: core does not depend on @rig-c/review, so what `rigc review` can say without it is how to get it — installed, or once without installing — and printing anything more, or exiting as a review would, reads as a review that ran',
   );
 
   // The selftest's own reading of whether this Bun hands an empty argument to a child, taken without the
@@ -69608,6 +69617,196 @@ function reviewDelegateControls(say: (name: string, ok: boolean, detail: string,
     probeDetail(faults05.length === 0, faults05, `Bun ${String(process.versions.bun)}: the probe says ${live ? 'keeps' : 'drops'}, and a script started with ["a", "", "b"] printed ${measured}`, (count) => `${count} fault(s):`),
     'issue #1465 Bar 2: the forced answers prove what the refusal does with each; this proves the probe gives the true one on the Bun running it',
   );
+
+  // --- RV06–RV10: the launcher (issue #1486) -----------------------------------------------------------------
+  const md5 = (file: string): string => createHash('md5').update(readFileSync(file)).digest('hex');
+  const listing = (dir: string): string => JSON.stringify(readdirSync(dir, { recursive: true }).map(String).sort());
+
+  // --- RV06: absent → REVIEW_NOT_INSTALLED and the two lines carrying the flags received, the project untouched ---
+  // 🔒 Nothing on the launcher's path reads `process.stdin.isTTY` (or any terminal state): the refusal is built from
+  // the package name and the argument list alone, so the run here, whose stdin is not a terminal, is the TTY run too.
+  const faults06: string[] = [];
+  const bare = join(work, 'bare-project');
+  mkdirSync(join(bare, 'out'), { recursive: true });
+  mkdirSync(join(bare, 'other build'), { recursive: true });
+  writeFileSync(join(bare, 'package.json'), `${JSON.stringify({ name: 'a-project', private: true, devDependencies: {} }, null, 2)}\n`);
+  writeFileSync(join(bare, 'bun.lock'), '{\n  "lockfileVersion": 1,\n  "workspaces": { "": { "name": "a-project" } },\n  "packages": {}\n}\n');
+  const bareHolder = reaches(bare);
+  if (bareHolder !== null) faults06.push(`${bare} reaches the package through ${bareHolder}/node_modules, so this run cannot be the absent state`);
+  const cases06: Array<{ args: string[]; bunx: string }> = [
+    { args: ['review', 'out', '--reference', 'reference.mp4', '--animation', 'wave', '--compare', 'other build'], bunx: "open out --reference reference.mp4 --animation wave --compare 'other build'" },
+    { args: ['review', 'out', '--animation', "it's"], bunx: "open out --animation 'it'\\''s'" },
+    { args: ['review', 'open', 'out', '--reference', 'a clip.mp4'], bunx: "open out --reference 'a clip.mp4'" },
+    { args: ['review', 'feedback', 'out'], bunx: 'feedback out' },
+  ];
+  const tree06 = absentTree(join(work, 'absent06'));
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const c of cases06) {
+      const before = { pkg: md5(join(bare, 'package.json')), lock: md5(join(bare, 'bun.lock')), tree: listing(bare) };
+      const r = runFrom(bare, entry === 'cli.ts' ? join(import.meta.dir, entry) : join(tree06, entry), c.args);
+      const after = { pkg: md5(join(bare, 'package.json')), lock: md5(join(bare, 'bun.lock')), tree: listing(bare) };
+      if (r.status !== 2 || r.stdout !== '' || r.stderr !== notInstalled(c.bunx)) faults06.push(`${entry} ${JSON.stringify(c.args)}: ${shown(r)} — stderr ${JSON.stringify(notInstalled(c.bunx))} was required`);
+      if (after.pkg !== before.pkg || after.lock !== before.lock) faults06.push(`${entry} ${JSON.stringify(c.args)}: package.json md5 ${before.pkg} → ${after.pkg}, bun.lock md5 ${before.lock} → ${after.lock}; both unchanged were required`);
+      if (after.tree !== before.tree) faults06.push(`${entry} ${JSON.stringify(c.args)}: the project's listing changed, ${before.tree} → ${after.tree}`);
+    }
+  }
+  say(
+    'RV06_REVIEW_ABSENT_PRINTS_THE_TWO_GUIDANCE_LINES_WITH_THE_FLAGS_RECEIVED_AND_TOUCHES_NOTHING',
+    faults06.length === 0,
+    probeDetail(
+      faults06.length === 0,
+      faults06,
+      `${cases06.length} command line(s) on each entry in a project holding a package.json and a bun.lock and no @rig-c/review: exit 2, stdout empty, stderr REVIEW_NOT_INSTALLED, \`bun add -d @rig-c/review\` and \`bunx @rig-c/review <what it received>\` shell-quoted word for word; package.json and bun.lock md5 and the project's listing unchanged`,
+      (count) => `${count} fault(s):`,
+    ),
+    "issue #1486 Bars 1–2: the launcher never installs — not with `bun add`, not with a `bunx` fallback, not after a prompt — so the run that finds nothing has to leave the project byte for byte as it was and hand the caller both ways to proceed",
+  );
+
+  // --- RV07: a Bun below the package's declared floor is refused by name before the spawn ---------------------
+  const faults07: string[] = [];
+  const running = String(process.versions.bun);
+  const floorProject = (name: string, engines: unknown): string => {
+    const dir = join(work, name);
+    mkdirSync(dir, { recursive: true });
+    stub(dir, 7);
+    if (delegate !== undefined) {
+      const manifest = join(dir, 'node_modules', ...delegate.package.split('/'), 'package.json');
+      writeFileSync(manifest, `${JSON.stringify({ ...(JSON.parse(readFileSync(manifest, 'utf8')) as object), engines }, null, 2)}\n`);
+    }
+    return dir;
+  };
+  const floorCases: Array<{ dir: string; status: number; stdout: string; stderr: string }> = [
+    { dir: floorProject('floor-high', { bun: '>=99.0.0' }), status: 2, stdout: '', stderr: `rigc review: REVIEW_BUN_TOO_OLD: Bun ${running}, @rig-c/review needs >=99.0.0\n` },
+    { dir: floorProject('floor-here', { bun: `>=${running.replace(/-.*$/, '')}` }), status: 7, stdout: '["check"]\n', stderr: '' },
+    { dir: floorProject('floor-none', { node: '>=20' }), status: 7, stdout: '["check"]\n', stderr: '' },
+    { dir: floorProject('floor-caret', { bun: '^1.3.0' }), status: 2, stdout: '', stderr: `rigc review: REVIEW_BUN_RANGE_UNREAD: @rig-c/review declares engines.bun "^1.3.0", and rigc reads only ">=X.Y.Z" — it did not guess whether Bun ${running} satisfies it\n` },
+  ];
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const c of floorCases) {
+      const r = runFrom(c.dir, join(import.meta.dir, entry), ['review', 'check']);
+      if (r.status !== c.status || r.stdout !== c.stdout || r.stderr !== c.stderr) faults07.push(`${entry} in ${basename(c.dir)}: ${shown(r)} — exit ${c.status}, stdout ${JSON.stringify(c.stdout)}, stderr ${JSON.stringify(c.stderr)} were required`);
+    }
+  }
+  const order: Array<[string, string, boolean]> = [
+    ['1.3.0', '>=1.3.0', false],
+    ['1.2.9', '>=1.3.0', true],
+    ['1.3.0-canary.1', '>=1.3.0', true],
+    ['1.10.0', '>=1.9.0', false],
+    ['2.0.0', '>=1.99.99', false],
+    ['1.2.0', '>= 1.3.0', true],
+  ];
+  for (const [bun, range, old] of order) {
+    const said = bunFloorRefusal('@rig-c/review', { bun: range }, bun);
+    if ((said !== null) !== old || (said !== null && said !== `REVIEW_BUN_TOO_OLD: Bun ${bun}, @rig-c/review needs ${range}`)) faults07.push(`Bun ${bun} against ${JSON.stringify(range)}: ${JSON.stringify(said)}, ${old ? 'the refusal' : 'no refusal'} was required`);
+  }
+  say(
+    'RV07_A_BUN_BELOW_THE_PACKAGES_DECLARED_FLOOR_IS_REFUSED_BY_NAME_AND_THE_BIN_NEVER_STARTS',
+    faults07.length === 0,
+    probeDetail(
+      faults07.length === 0,
+      faults07,
+      `on each entry, stubs declaring engines.bun ">=99.0.0" (refused REVIEW_BUN_TOO_OLD naming Bun ${running}, exit 2, the stub's stdout absent), ">=${running.replace(/-.*$/, '')}" and no bun key (both run, exit 7), "^1.3.0" (refused REVIEW_BUN_RANGE_UNREAD); and ${order.length} orderings read numerically, a pre-release below its release`,
+      (count) => `${count} fault(s):`,
+    ),
+    "issue #1486 Bar 1: review declares its floor in its own manifest, so the launcher reads it there rather than restating it — and a range shape it does not read is refused, not guessed at",
+  );
+
+  // --- RV08: review's stdout is rigc's stdout, byte for byte (the URL line) --------------------------------------
+  const faults08: string[] = [];
+  const urlProject = join(work, 'url-project');
+  mkdirSync(join(urlProject, 'out'), { recursive: true });
+  stub(urlProject, 0);
+  if (delegate !== undefined) {
+    writeFileSync(
+      join(urlProject, 'node_modules', ...delegate.package.split('/'), 'bin', 'stub.ts'),
+      "const argv = process.argv.slice(2);\nprocess.stdout.write(`http://127.0.0.1:4318/instances/${argv.length}/?open=${encodeURIComponent(argv.join(' '))}\\n`);\nprocess.stderr.write('Review started; feedback: rig-review feedback out\\n');\nprocess.exit(argv[0] === 'open' ? 0 : 3);\n",
+    );
+  }
+  const urlBin = delegate === undefined ? '' : join(urlProject, 'node_modules', ...delegate.package.split('/'), 'bin', 'stub.ts');
+  const urlCases: Array<{ rigc: string[]; bin: string[] }> = [
+    { rigc: ['review', 'out', '--animation', 'wave'], bin: ['open', 'out', '--animation', 'wave'] },
+    { rigc: ['review', 'open', 'out'], bin: ['open', 'out'] },
+    { rigc: ['review', 'check', 'out'], bin: ['check', 'out'] },
+  ];
+  for (const c of urlCases) {
+    const direct = spawnSync(process.execPath, [urlBin, ...c.bin], { cwd: urlProject });
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const via = spawnSync(process.execPath, [join(import.meta.dir, entry), ...c.rigc], { cwd: urlProject, env: { ...process.env, NODE_PATH: '' } });
+      if (!Buffer.from(via.stdout).equals(Buffer.from(direct.stdout)) || !Buffer.from(via.stderr).equals(Buffer.from(direct.stderr)) || via.status !== direct.status) {
+        faults08.push(`${entry} ${JSON.stringify(c.rigc)}: exit ${String(via.status)}, stdout ${JSON.stringify(String(via.stdout))}, stderr ${JSON.stringify(String(via.stderr))}; the bin run as ${JSON.stringify(c.bin)} gave exit ${String(direct.status)}, stdout ${JSON.stringify(String(direct.stdout))}, stderr ${JSON.stringify(String(direct.stderr))}`);
+      }
+    }
+  }
+  say(
+    'RV08_REVIEWS_STDOUT_STDERR_AND_EXIT_ARE_RIGCS_BYTE_FOR_BYTE',
+    faults08.length === 0,
+    probeDetail(
+      faults08.length === 0,
+      faults08,
+      `${urlCases.length} command line(s) on each entry beside a stub that prints a loopback URL on stdout and a line on stderr: rigc's three equal to the stub's own, run directly with what rigc hands it, byte for byte`,
+      (count) => `${count} fault(s):`,
+    ),
+    'issue #1486 Bar 2: an agent reads the URL off stdout and gives it to a person, so a launcher line on stdout — an announcement, a trailing newline — breaks the one thing the command is for',
+  );
+
+  // --- RV09: a bare target is `open <dir>`; every one of review's own first words passes through ------------------
+  const faults09: string[] = [];
+  mkdirSync(join(project, 'out'), { recursive: true });
+  mkdirSync(join(project, 'a build'), { recursive: true });
+  const cases09: Array<{ args: string[]; argv: string[] }> = [
+    { args: ['out'], argv: ['open', 'out'] },
+    { args: ['out', '--reference', 'reference.mp4', '--animation', 'wave', '--compare', 'a build'], argv: ['open', 'out', '--reference', 'reference.mp4', '--animation', 'wave', '--compare', 'a build'] },
+    { args: ['a build', '--animation', 'wave'], argv: ['open', 'a build', '--animation', 'wave'] },
+    ...['open', 'check', 'feedback', 'control', 'strip', 'compare'].map((word) => ({ args: [word, 'out'], argv: [word, 'out'] })),
+    { args: ['-h'], argv: ['-h'] },
+    { args: ['--', 'out'], argv: ['--', 'out'] },
+  ];
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const c of cases09) {
+      const r = runFrom(project, join(import.meta.dir, entry), ['review', ...c.args]);
+      if (r.status !== 7 || r.stdout !== `${JSON.stringify(c.argv)}\n` || r.stderr !== '') faults09.push(`${entry} review ${JSON.stringify(c.args)}: ${shown(r)} — the stub handed ${JSON.stringify(c.argv)}, exit 7, stderr empty were required`);
+    }
+  }
+  say(
+    'RV09_A_BARE_TARGET_IS_HANDED_OVER_AS_OPEN_AND_REVIEWS_OWN_FIRST_WORDS_PASS_THROUGH',
+    faults09.length === 0,
+    probeDetail(
+      faults09.length === 0,
+      faults09,
+      `${cases09.length} command line(s) on each entry beside the stub: \`review <dir> …\` reaches it as \`open <dir> …\` with --reference/--animation/--compare 1:1 and nothing added (no --reference without one given, nothing announced); open, check, feedback, control, strip, compare, -h and -- unchanged`,
+      (count) => `${count} fault(s):`,
+    ),
+    "issue #1486 Bar 3's two halves the tree can answer: a given --reference is the one handed over, and none is added when none is given — and rig-review's first words, read off its own dispatch, are not mistaken for a target",
+  );
+
+  // --- RV10: a bare target that is not a directory is refused by name, before the package is looked for ----------
+  const faults10: string[] = [];
+  writeFileSync(join(project, 'a-file.json'), '{}\n');
+  writeFileSync(join(bare, 'a-file.json'), '{}\n');
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const [cwd, where] of [[project, 'beside the stub'], [bare, 'with the package absent']] as const) {
+      for (const [target, why] of [['nowhere-here', 'nothing is there'], ['a-file.json', 'it is not a directory']] as const) {
+        const r = runFrom(cwd, join(import.meta.dir, entry), ['review', target, '--animation', 'wave']);
+        const want = `rigc review: REVIEW_OUTPUT_MISSING ${target}: ${why} — `;
+        if (r.status !== 2 || r.stdout !== '' || !r.stderr.startsWith(want) || r.stderr.split('\n').length !== 2) faults10.push(`${entry} ${where}, review ${target}: ${shown(r)} — exit 2, stdout empty and the one line starting ${JSON.stringify(want)} were required`);
+      }
+    }
+  }
+  say(
+    'RV10_A_BARE_TARGET_THAT_IS_NOT_A_DIRECTORY_IS_REFUSED_REVIEW_OUTPUT_MISSING',
+    faults10.length === 0,
+    probeDetail(
+      faults10.length === 0,
+      faults10,
+      'on each entry, beside the stub and with the package absent, a target with nothing at it and a target that is a file: exit 2, stdout empty, one line REVIEW_OUTPUT_MISSING <path> with the reason, the stub never started',
+      (count) => `${count} fault(s):`,
+    ),
+    'issue #1486 Bar 4: the bin would refuse it too, in its own words and after a start; refused here, by name, the guidance lines never point a caller at nothing',
+  );
+
+  // No RV11: a `--reference` filled from a build's record is not built — no build rigc writes records the clip
+  // it was retargeted from — and a control that could only ever SKIP would read as a gate kept. RV09 holds the
+  // two halves that exist (a given --reference wins; none given, none added and nothing announced).
   rmSync(work, { recursive: true, force: true });
 }
 
@@ -119071,7 +119270,7 @@ function runRenderEnvironmentSuite(): number {
 // render's physics line (issue #1467)
 // ---------------------------------------------------------------------------
 import { physicsLine, PHYSICS_NONE_LINE, physicsSteppedOf } from './src/cli/core_commands.ts';
-import { emptyArgumentRefusal, spawnKeepsEmptyArguments } from './src/cli/core_commands.ts';
+import { bunFloorRefusal, emptyArgumentRefusal, spawnKeepsEmptyArguments } from './src/cli/core_commands.ts';
 import { environmentResponse } from './src/environment.ts';
 
 /**

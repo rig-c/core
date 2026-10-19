@@ -1,0 +1,92 @@
+/**
+ * `writeWhole(fd, text)`: every byte of `text`, UTF-8, onto `fd`, or a named
+ * refusal — the writer a command uses for a document too large to trust to
+ * `console.log` (issue #1487).
+ *
+ * ⚖️ Why not `console.log`: on Bun 1.2.0, the declared minimum, one ~322 KB
+ * line with non-ASCII in it came out 330,634 bytes for 330,632, a stray
+ * `\xe2\x00` at a 64 KiB chunk boundary — to a file, a pipe and a slow pipe
+ * alike. And on a stdout whose pipe is non-blocking (a parent set `O_NONBLOCK`
+ * on it), it stopped near 64 KiB on 1.2.0 *and* 1.4.2 with exit 0.
+ *
+ * ⚖️ Why a loop and not one `writeSync(fd, text)`: on that non-blocking pipe
+ * `writeSync` returns a short count — 65,536 of 330,632 — and throws nothing,
+ * so a single call drops the rest in silence on both Buns. Each call here
+ * writes from where the last one stopped.
+ *
+ * ⚖️ Why not `process.stdout.write` and a wait for `drain`: whole on 1.4.2,
+ * but on 1.2.0 over the non-blocking pipe it wrote more bytes than it was
+ * given (397,312 and climbing, diverging at byte 69,633) and never exited.
+ *
+ * A pipe that is full answers `EAGAIN` (or a zero count): the loop waits —
+ * 1 ms, doubling to {@link STALL_WAIT_CAP_MS} — and tries again, and after
+ * {@link MAX_STALLS} answers in a row with no byte taken it refuses with
+ * {@link StdoutWriteError}. `EPIPE` — the reader closed its end, as `| head`
+ * does — stops the write quietly, which is what `console.log` did there (exit 0
+ * on both Buns, measured): the reader has what it asked for. Any other error
+ * (`EBADF`, `EIO`) refuses at once.
+ * The wait is `Atomics.wait` on a cell nothing notifies: a delay, not a reading
+ * of the clock — no value written depends on how long it lasted, and the bound
+ * is a count of attempts, so whether it refuses depends on the reader alone.
+ */
+import { writeSync } from 'node:fs';
+
+/** The answers in a row with no byte taken before the writer refuses — about a minute of waits at the cap. */
+export const MAX_STALLS = 1000;
+/** The longest single wait between two attempts on a full pipe, in milliseconds. */
+export const STALL_WAIT_CAP_MS = 64;
+
+/** A write the reader never took: what was written, of how many bytes, and why it stopped. */
+export class StdoutWriteError extends Error {
+  override name = 'StdoutWriteError';
+}
+
+/** `fs.writeSync`'s buffer form: bytes written, or a throw carrying `code`. */
+export type WriteFn = (fd: number, buffer: Uint8Array, offset: number, length: number) => number;
+
+/**
+ * The selftest's plants (issue #1487): `write` stands in for `fs.writeSync` so a
+ * short count or an `EAGAIN` can be forced, and `wait` for the delay so a plant
+ * runs without sleeping. Nothing outside the selftest passes either.
+ */
+export interface WriteWholePlants {
+  write?: WriteFn;
+  wait?: (ms: number) => void;
+}
+
+const STALL_CODES = new Set(['EAGAIN', 'EWOULDBLOCK', 'EINTR']);
+
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function writeWhole(fd: number, text: string, plants: WriteWholePlants = {}): void {
+  const write = plants.write ?? ((f: number, b: Uint8Array, o: number, l: number) => writeSync(f, b, o, l));
+  const wait = plants.wait ?? sleep;
+  const bytes = Buffer.from(text, 'utf8');
+  let offset = 0;
+  let stalls = 0;
+  while (offset < bytes.length) {
+    let taken = 0;
+    try {
+      taken = write(fd, bytes, offset, bytes.length - offset);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // The reader closed its end (`| head`): it has what it asked for, and nobody is left to read the rest.
+      if (code === 'EPIPE') return;
+      if (code === undefined || !STALL_CODES.has(code)) {
+        throw new StdoutWriteError(`${offset} of ${bytes.length} byte(s) confirmed written to fd ${fd} before it stopped: ${code ?? String(err)} — the descriptor is not writable`);
+      }
+    }
+    if (taken > 0) {
+      offset += taken;
+      stalls = 0;
+      continue;
+    }
+    stalls += 1;
+    if (stalls > MAX_STALLS) {
+      throw new StdoutWriteError(`${offset} of ${bytes.length} byte(s) confirmed written to fd ${fd}, and the reader took nothing for ${MAX_STALLS} attempt(s) in a row — it stopped reading`);
+    }
+    wait(Math.min(2 ** (stalls - 1), STALL_WAIT_CAP_MS));
+  }
+}

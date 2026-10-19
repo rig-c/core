@@ -74333,6 +74333,81 @@ function runGuideSuite(): number {
       'issue #1447: a byte cap alone cannot detect a short child leak, missing index, or lost leaf body; byte-span readings include Unicode, fenced fake headings and unaddressed leaf descendants');
   }
 
+  // GD13 — the guide's writer puts every byte out through a pipe that takes some, none, or refuses (issue #1487).
+  //
+  // A real non-blocking pipe cannot be made from here (Bun has no fcntl), so the pipe is a writer the helper is
+  // handed: a sink that takes at most a few KB a call, answers EAGAIN or 0, closes, or fails. The text crosses
+  // 64 KiB with multi-byte characters at every offset, the shape Bun 1.2.0's console corrupted. The single
+  // `writeSync` the loop replaced is run through the same readings and must be caught by them.
+  {
+    const probes: string[] = [];
+    const cases: string[] = [];
+    const text = `${'§5 – é ✓ 漢字 🎈 '.repeat(6000)}\n`;
+    const want = Buffer.from(text, 'utf8');
+    type Writer = (fd: number, text: string, plants: WriteWholePlants) => void;
+    const eagain = (): never => {
+      throw Object.assign(new Error('EAGAIN: resource temporarily unavailable'), { code: 'EAGAIN' });
+    };
+    const fault = (code: string) => (): never => {
+      throw Object.assign(new Error(`${code}: planted`), { code });
+    };
+    // One reading: run `writer` over a sink whose answer to each call is `answer(call, offered)`, and say what came out.
+    const reading = (writer: Writer, answer: (call: number, offered: number) => number) => {
+      const got: Buffer[] = [];
+      const waits: number[] = [];
+      let calls = 0;
+      let threw: unknown = null;
+      try {
+        writer(1, text, {
+          write: (_fd, buffer, offset, length) => {
+            const n = answer(calls++, length);
+            got.push(Buffer.from(buffer.subarray(offset, offset + n)));
+            return n;
+          },
+          wait: (ms) => waits.push(ms),
+        });
+      } catch (err) {
+        threw = err;
+      }
+      return { out: Buffer.concat(got), waits, calls, threw };
+    };
+    const faultsOf = (writer: Writer): string[] => {
+      const faults: string[] = [];
+      const whole = (what: string, answer: (call: number, offered: number) => number): void => {
+        const r = reading(writer, answer);
+        if (r.threw !== null) faults.push(`${what}: threw ${String(r.threw)}`);
+        else if (!r.out.equals(want)) faults.push(`${what}: ${r.out.length} of ${want.length} byte(s) out`);
+      };
+      whole('4096 bytes a call', (_c, offered) => Math.min(offered, 4096));
+      whole('one byte a call for the first 70000 calls', (c, offered) => (c < 70000 ? 1 : offered));
+      whole('EAGAIN on every other call', (c, offered) => (c % 2 === 0 ? eagain() : Math.min(offered, 65536)));
+      whole('a zero count on every other call', (c, offered) => (c % 2 === 0 ? 0 : Math.min(offered, 3000)));
+      whole(`EAGAIN ${MAX_STALLS} times in a row, then the rest`, (c, offered) => (c < MAX_STALLS ? eagain() : offered));
+      const stuck = reading(writer, eagain);
+      if (!(stuck.threw instanceof StdoutWriteError) || !String(stuck.threw.message).includes(`took nothing for ${MAX_STALLS} attempt(s) in a row`)) faults.push(`a reader that never takes: ${stuck.threw === null ? 'returned' : String(stuck.threw)} — not the named stall refusal`);
+      else if (stuck.calls !== MAX_STALLS + 1 || Math.max(...stuck.waits) !== STALL_WAIT_CAP_MS || stuck.waits.length !== MAX_STALLS) faults.push(`a reader that never takes: ${stuck.calls} call(s), ${stuck.waits.length} wait(s), longest ${Math.max(...stuck.waits)} ms — not ${MAX_STALLS + 1}, ${MAX_STALLS} and ${STALL_WAIT_CAP_MS}`);
+      const bad = reading(writer, (c, offered) => (c === 0 ? 10000 : fault('EBADF')()));
+      if (!(bad.threw instanceof StdoutWriteError) || !String(bad.threw.message).startsWith(`10000 of ${want.length} byte(s) confirmed written`) || !String(bad.threw.message).includes('EBADF')) faults.push(`EBADF after 10000 bytes: ${bad.threw === null ? 'returned' : String(bad.threw)} — not the named refusal saying 10000 of ${want.length}`);
+      const closed = reading(writer, (c) => (c === 0 ? 10000 : fault('EPIPE')()));
+      if (closed.threw !== null || closed.out.length !== 10000) faults.push(`a reader that closes after 10000 bytes: ${closed.threw === null ? `${closed.out.length} byte(s) and returned` : String(closed.threw)} — not a quiet stop at 10000`);
+      return faults;
+    };
+    const live = faultsOf(writeWhole);
+    probes.push(...live.map((f) => `writeWhole: ${f}`));
+    // The plant: the loop taken away — one `writeSync` of the whole text, its count ignored, as before the fix.
+    const single: Writer = (fd, t, plants) => {
+      const bytes = Buffer.from(t, 'utf8');
+      (plants.write ?? (() => 0))(fd, bytes, 0, bytes.length);
+    };
+    const caughtSingle = faultsOf(single);
+    if (caughtSingle.length === 0) probes.push('the single writeSync the loop replaced passed every reading — the readings cannot see a short write');
+    cases.push(`writeWhole over ${want.length} UTF-8 byte(s): whole through 4096-byte calls, one-byte calls, EAGAIN and zero counts, ${MAX_STALLS} stalls in a row; refused by name after ${MAX_STALLS + 1}, waits capped at ${STALL_WAIT_CAP_MS} ms; EBADF refused naming the bytes out; EPIPE a quiet stop`);
+    cases.push(`the single writeSync planted in its place caught by ${caughtSingle.length} reading(s): ${caughtSingle.slice(0, 2).join('; ')}`);
+    say('GD13_THE_GUIDE_WRITER_PUTS_EVERY_BYTE_THROUGH_SHORT_WRITES_AND_EAGAIN_AND_REFUSES_A_STUCK_READER_BY_NAME', probes.length === 0,
+      probeDetail(probes.length === 0, probes, cases.join('; ')),
+      'issue #1487: console.log of the §5 --all answer was corrupted on Bun 1.2.0 and cut near 64 KiB on a non-blocking pipe on every Bun, and a single writeSync returns a short count there and throws nothing');
+  }
+
   return bad;
 }
 
@@ -105484,6 +105559,7 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
 import { deformPosers, surveyOfBuild, surveyOfModel, type DeformSurvey } from './src/deformmeasure.ts';
 import { commandHelp, COMMANDS, documentStageBeside, entryCommands, gatedOnWriteSentence } from './src/cli/shared.ts';
 import { CORE_COMMAND_RUNS, CORE_ENTRY_RUNS } from './src/cli/core_commands.ts';
+import { MAX_STALLS, STALL_WAIT_CAP_MS, StdoutWriteError, writeWhole, type WriteWholePlants } from './src/cli/write_whole.ts';
 import { roundTripOnlyCodes, SKIP_NO_ROUND_TRIP, validateEmittedText } from './src/assertions/emitted/index.ts';
 import { SPINE_COMMAND_RUNS } from './src/cli/spine_commands.ts';
 import { POSING_RUNTIME_TAIL, SPINE_SIDE_ABSENT, SPINE_SIDE_ROUTE, SURVEY_RUNTIME_TAIL } from './src/spine_side.ts';

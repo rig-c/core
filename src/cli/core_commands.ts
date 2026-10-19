@@ -47,6 +47,7 @@ import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, fram
 import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
+import { writeWhole } from './write_whole.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
 import { ATLAS_ABSENT, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPoserFlag, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -2213,7 +2214,9 @@ export function cmdGuide(flags: Record<string, string>, positional: string[]): v
   }
   const answer = guideAnswer(positional[0], { guide: readFileSync(join(PACKAGE_ROOT, GUIDE_FILE), 'utf8'), elsewhere }, { all: flags.all !== undefined });
   if (!answer.ok) throw new GuideError(refusalLine(answer.rule, answer.detail));
-  for (const line of answer.lines) console.log(line);
+  // One write of the whole answer, not `console.log`: a §section with `--all` runs past 64 KiB, which Bun 1.2.0's
+  // console corrupts at a chunk boundary and a non-blocking pipe cuts short on every Bun (issue #1487, `writeWhole`).
+  writeWhole(1, answer.lines.map((line) => `${line}\n`).join(''));
 }
 
 // ---------------------------------------------------------------------------

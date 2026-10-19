@@ -70,6 +70,7 @@ import { RepackError } from '../repack.ts';
 import { SplitError } from '../meshsplit.ts';
 import { SpineRuntimeError, SPINE_SIDE_ABSENT } from '../spine_side.ts';
 import type { CompileResult, DroppedState } from '../types.ts';
+import { StdoutWriteError } from './write_whole.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -3183,6 +3184,12 @@ function refuse(err: unknown, command: string | undefined, USAGE: string, entry:
   // there and what was required; the usage under it would bury that.
   if (err instanceof SkillsInstallError) {
     console.error(`rigc skills install: ${err.message}`);
+    process.exit(1);
+  }
+  // A document the reader stopped taking (issue #1487): exit 1 like a lookup that could not answer, and the line
+  // says how many bytes went out of how many and why — a silent short write is what `writeWhole` exists to refuse.
+  if (err instanceof StdoutWriteError) {
+    console.error(`rigc ${command}: ${err.message}`);
     process.exit(1);
   }
   // A rule or section the guide does not have (issue #1397): exit 1 like a lookup that found nothing, and the

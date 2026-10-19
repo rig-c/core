@@ -95,6 +95,19 @@ export type CutTable = Record<string, CutEntry>;
 export class UsageError extends Error {}
 
 /**
+ * A usage error that is one required flag missing from a spelled-out cut —
+ * printed as its one line and exit 2, without the usage block under it (issue
+ * #1466). The catalogue under `--out is required` buried the only line that
+ * said what to add, which is `PoseError`'s reason for printing alone. Still a
+ * `UsageError`, so every reader that asks whether an invocation was refused
+ * reads it as one.
+ */
+export class MissingFlagError extends UsageError {}
+
+/** The `<value>` each flag of a spelled-out cut takes, for the line that names a missing one. */
+const CUT_FLAG_VALUES = { rig: '<rig.json>', motion: '<motion.json>', out: '<dir>' } as const;
+
+/**
  * `explain` refusing a pair it cannot pose — a usage error in kind, printed
  * without the usage block for `PoseError`'s and `IngestError`'s reason: the
  * message names an attachment, a region and two flags, and reprinting every
@@ -264,7 +277,7 @@ function entryToOptions(dir: string, name: string, entry: CutEntry): CompileOpti
  * Resolve the cut a command was pointed at, either spelled out on the command
  * line or looked up by name in a cuts.json.
  */
-export function resolveCut(flags: Record<string, string>): { label: string; opts: CompileOptions } {
+export function resolveCut(flags: Record<string, string>, command: 'build' | 'explain' | 'validate'): { label: string; opts: CompileOptions } {
   const explicit =
     flags.rig !== undefined || flags.manifest !== undefined || flags.motion !== undefined || flags.out !== undefined;
   if (explicit) {
@@ -272,7 +285,7 @@ export function resolveCut(flags: Record<string, string>): { label: string; opts
       throw new UsageError('--rig/--motion/--out and --cut/--cuts are two ways to say the same thing; pick one');
     }
     for (const key of ['rig', 'motion', 'out'] as const) {
-      if (flags[key] === undefined) throw new UsageError(`--${key} is required when the cut is spelled out`);
+      if (flags[key] === undefined) throw new MissingFlagError(`${command} needs --${key} ${CUT_FLAG_VALUES[key]} (or --cut <name> --cuts <cuts.json>)`);
     }
     const opts: CompileOptions = {
       rigPath: resolve(flags.rig),
@@ -2291,7 +2304,7 @@ function pageRectangle(region: AtlasRegion): string {
  * alone (`./core_commands.ts`). Moved here unchanged from `cmdBuild`.
  */
 export function readBuildInvocation(flags: Record<string, string>): { label: string; opts: CompileOptions; profile: AssertionProfile; packing: boolean } {
-  const { label, opts } = resolveCut(flags);
+  const { label, opts } = resolveCut(flags, 'build');
   const profile = readProfile(flags);
   const packing = flags.pack !== undefined;
   // Two combinations are refused rather than silently resolved, because in each
@@ -3001,6 +3014,10 @@ export function runCli(entry: CliEntry, argv: readonly string[]): void {
  * (`CliEntry.refusals`). Anything else is not a refusal and is thrown on.
  */
 function refuse(err: unknown, command: string | undefined, USAGE: string, entry: CliEntry): never {
+  if (err instanceof MissingFlagError) {
+    console.error(`rigc: ${err.message}`);
+    process.exit(2);
+  }
   if (err instanceof UsageError) {
     console.error(`rigc: ${err.message}\n\n${USAGE}`);
     process.exit(2);

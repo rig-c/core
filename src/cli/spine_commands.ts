@@ -76,7 +76,7 @@ export function cmdValidate(flags: Record<string, string>, positional: string[])
   // a directory alone cannot supply — and the report says which it had.
   const named = flags.cut !== undefined || flags.rig !== undefined;
   const profile = readProfile(flags);
-  const derivedOpts = named ? resolveCut(flags).opts : null;
+  const derivedOpts = named ? resolveCut(flags, 'validate').opts : null;
   // Both files there before the first line, from the one statement of a build (issue #1046): a directory without them
   // read the skeleton unguarded and died on an ENOENT and a stack.
   const { skeletonPath, atlasPath } = spinePairOf(resolveBuild(derivedOpts ? derivedOpts.outDir : (positional[0] ?? '.'), flags.atlas));

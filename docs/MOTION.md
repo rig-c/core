@@ -1067,6 +1067,7 @@ rigc render --candidate spine --fps 24 --max 200
 
 ```
   ..    134x200px at 24 fps, 1 set(s) -> …/semaphore/render
+  ..    physics: none in this rig — it declares no physics constraint, so no frame steps one
   ..    raise            14 frame(s), 0.542s + contact.png -> …/semaphore/render/raise@24fps
 ```
 

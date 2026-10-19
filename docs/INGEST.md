@@ -191,6 +191,7 @@ rigc render
   ..    atlas    …/examples/spineboy/export/spineboy.atlas
   ..    poser    spine-core — no skeleton.model.json beside …/examples/spineboy/export/spineboy-pro.json — a Spine export, not a rigc build
   ..    200x186px at 8 fps, 1 set(s) -> …/render/sb
+  ..    physics: none in this rig — it declares no physics constraint, so no frame steps one
   ..    walk             9 frame(s), 1.000s + contact.png -> …/render/sb/walk@8fps
 rigc: wrote …/render/sb/frames.json
 ```

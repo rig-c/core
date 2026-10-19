@@ -87,10 +87,12 @@
  * growth and by heap growth, and its wall time less every suite's own as the
  * harness's overhead. `TY23` holds every suite the run called to a printed
  * line of the time and the RSS, and `TY24` to the heap and external figures.
- * The run's high-water RSS is then held under its platform's tracked base
- * (`tools/selftest_memory.base.json`, written by `--memory-base`) times a
- * stated margin; `TY25` plants a retaining suite against it and `TY26` holds
- * the live run, as a SKIP naming the command where the platform has no base.
+ * The run's high-water RSS is then held under its runtime's tracked base
+ * (`tools/selftest_memory.base.json`, one row per platform and Bun release
+ * line, written by `--memory-base`) times a stated margin; `TY25` plants a
+ * retaining suite against it and `TY26` holds the live run, as a SKIP and a
+ * HOLE naming the runtime and the command where it has no row (issue #1490;
+ * `TY47`–`TY49` hold the row's selection, the HOLE and the major.minor key).
  * A suite that ran units through `inParallel` ends its line with `children
  * high-water <MB> MB (<unit>)` — the largest peak of any child it started, as
  * the driver read it of the child (issue #1143) — and each suite's is held
@@ -858,7 +860,7 @@ const HARNESS_FLAGS: readonly HarnessFlag[] = [
   { spelling: '--tally-out', values: '<file>', arity: 'one', environment: 'RIGC_TALLY_OUT', passedBy: 'caller', meaning: "with --shard: the shard's tally document, which --merge reads; with --merge: the merged run's, which a publish reads" },
   { spelling: '--merge', values: '<file>…', arity: 'one or more', environment: '', passedBy: 'caller', meaning: "every shard's tally document merged: the verdict" },
   { spelling: '--shards-base', values: '[<file>]', arity: 'optional', environment: '', passedBy: 'caller', meaning: 'with --merge: a green merge writes the durations base, to <file> or over the tracked one' },
-  { spelling: '--memory-base', values: '', arity: 'none', environment: '', passedBy: 'caller', meaning: "a green one-process full run writes its platform's memory base" },
+  { spelling: '--memory-base', values: '', arity: 'none', environment: '', passedBy: 'caller', meaning: "a green one-process full run writes its platform and Bun line's row of the memory base" },
   { spelling: '--memory-base-children', values: '[<file>]', arity: 'optional', environment: '', passedBy: 'caller', meaning: "with --merge: a green merge writes the children's half of the memory base" },
   { spelling: '--reset-children-base', values: '', arity: 'none', environment: '', passedBy: 'caller', meaning: "lets a writer of the children's figures move a tracked one, up or down, or replace them read at another --jobs" },
   { spelling: '--jobs', values: '<n>', arity: 'one', environment: 'RIGC_JOBS', passedBy: 'caller', meaning: "how many of a suite's independent units run at once; the machine's cores by default" },
@@ -126957,13 +126959,14 @@ function durationFaults(
 // freed pages and the final sits near the mark, but on Linux they are handed
 // back and three CI runs of one tree ended at 599–604 MB under marks of 1,209,
 // 1,241 and 1,324 MB — a base of final figures held a live high-water to the
-// wrong quantity and went red on a correct run. The base is per platform and
-// tracked, written by the run itself (`--memory-base`), never typed — the
+// wrong quantity and went red on a correct run. The base is per platform (and,
+// since issue #1490, per Bun release line) and tracked, written by the run itself (`--memory-base`), never typed — the
 // pattern `tools/emit_hashes.base.json` and `EH06` set.
 
 /**
- * The tracked base, relative to this file — one entry per platform, because the
- * figure is the allocator's as much as the run's: on the same tree the macOS
+ * The tracked base, relative to this file — one row per platform and Bun
+ * release line (issue #1490; one per platform before it), because the figure
+ * is the allocator's as much as the run's: on the same tree the macOS
  * full run's high-water was 3,454 MB (it ended at 3,211) and Linux CI's
  * 1,209–1,324 MB (it ended at 599–604) — Linux's allocator hands pages back
  * where macOS's does not. One shared figure would be either useless on one
@@ -126978,16 +126981,25 @@ function durationFaults(
  * suite's children's high-water as its shard document and the merge's own
  * line state it — exactly what `--merge … --memory-base-children
  * --reset-children-base` writes over that run's documents.
+ *
+ * The runtime is the allocator too (issue #1490): on linux the same tree
+ * peaked at 1,870 MB on Bun 1.2.0 against 1,451–1,699 MB over nine runs on
+ * 1.4.2, so a row is a runtime's — `MemoryBaseRow` — and a run is held to the
+ * row of its own platform and Bun line or, with none, to nothing, by name.
  */
 const MEMORY_BASE_PATH = 'tools/selftest_memory.base.json';
 /**
- * The base document's format word. `/2` since issue #1166: an entry's
- * `children` is one figure per suite (`ChildrenFigures`), where `/1` held one
- * per platform. A `/1` document's parent half reads as before; its children's
- * figure is not read, and `TY40` names it as a `/1` figure with the command
- * that writes the `/2` one (`MEMORY_BASE_SPEC_V1`).
+ * The base document's format word. `/3` since issue #1490: `rows`, one per
+ * platform and Bun release line (`MemoryBaseRow`), where `/2` was keyed by
+ * platform alone. `/2` since issue #1166: an entry's `children` is one figure
+ * per suite (`ChildrenFigures`), where `/1` held one per platform. A `/2`
+ * document reads as one row per entry, of that entry's own Bun's line, and is
+ * written back as `/3`; a `/1` document's parent half reads as before, its
+ * children's figure is not read, and `TY40` names it (`MEMORY_BASE_SPEC_V1`).
  */
-const MEMORY_BASE_SPEC = 'selftest-memory/2';
+const MEMORY_BASE_SPEC = 'selftest-memory/3';
+/** The format word from issue #1166 to #1490: one entry per platform, whatever Bun wrote it. Read as one row per entry, of its own Bun's line. */
+const MEMORY_BASE_SPEC_V2 = 'selftest-memory/2';
 /** The format word before issue #1166: one children's figure per platform. Read for its parent half only. */
 const MEMORY_BASE_SPEC_V1 = 'selftest-memory/1';
 /**
@@ -127065,13 +127077,21 @@ interface ChildrenFigures {
   suites: Record<string, number>;
 }
 
-/** One platform's base: the high-water a green full run on it reached. */
+/**
+ * One row's base: the high-water a green full run on its platform and its
+ * Bun's release line reached (issue #1490 — one row per platform AND Bun
+ * major.minor, where #1121 held one per platform).
+ */
 interface MemoryBaseEntry {
   /** The largest RSS any suite line of that run printed, in whole MB. */
   highWater: number;
   /** How many suites that run called — a base from a run with fewer suites is a different run. */
   suites: number;
-  /** The Bun that ran it: the allocator is the runtime's, and a new one can move the figure. */
+  /**
+   * The Bun that ran it, in full. The allocator is the runtime's, so the row
+   * is keyed by this version's release line (`bunLineOf`), and a run on
+   * another line is held to that line's row or to nothing (issue #1490).
+   */
   bun: string;
   /**
    * Each suite's children's figure (issue #1166, `TY40`). Absent from an entry
@@ -127081,58 +127101,189 @@ interface MemoryBaseEntry {
   children?: ChildrenFigures;
 }
 
-/** The base document, keyed by `process.platform`. */
+/**
+ * One row of the base (issue #1490): a platform, a Bun release line, and the
+ * figures a run of that runtime wrote. `bunLine` is never typed — the writer
+ * derives it from `entry.bun`, and the reader refuses a row whose `bunLine` is
+ * not its own Bun's.
+ *
+ * ⚖️ Keyed by major.minor, not the full version and not the platform alone,
+ * because both of those were measured wrong. The platform alone: Bun 1.2.0,
+ * the declared minimum, peaked at 1,870 MB on linux against the 1,853 MB bound
+ * of a base written on 1.4.2, where nine 1.4.2 runs of one day read
+ * 1,451–1,699 MB — red on the runtime alone. The full version: every patch
+ * release would be a row nobody has written, and the control a SKIP on it.
+ */
+interface MemoryBaseRow {
+  platform: string;
+  /** `bunLineOf(entry.bun)`: the major.minor every Bun of that line is held to. */
+  bunLine: string;
+  entry: MemoryBaseEntry;
+}
+
+/** The base document: one row per platform and Bun release line (issue #1490). */
 interface MemoryBase {
   spec: string;
-  platforms: Record<string, MemoryBaseEntry>;
-  /** The platforms whose entry carried a `selftest-memory/1` children's figure, which is not read (issue #1166); never written. */
+  rows: MemoryBaseRow[];
+  /** The rows (`memoryRowName`) whose entry carried a `selftest-memory/1` children's figure, which is not read (issue #1166); never written. */
   unreadV1?: string[];
+}
+
+/**
+ * A Bun version's release line, `major.minor` (issue #1490) — `1.4.2` and
+ * `1.4.9` are one line, `1.40.0` another, a canary `1.4.0-canary.1+abc` is
+ * `1.4` — or `null` for a version that does not open with two whole numbers.
+ */
+function bunLineOf(version: string): string | null {
+  const m = /^(\d+)\.(\d+)(?=[.+-]|$)/.exec(version);
+  return m === null ? null : `${Number(m[1])}.${Number(m[2])}`;
+}
+
+/** `linux on bun 1.4` — the name a row goes by in every line that reads one. */
+function memoryRowName(platform: string, bunLine: string): string {
+  return `${platform} on bun ${bunLine}`;
+}
+
+/** The name of the row a runtime is held to: its platform and its Bun's line, or the version as given when it has none. */
+function memoryRuntimeName(platform: string, bunVersion: string): string {
+  return memoryRowName(platform, bunLineOf(bunVersion) ?? bunVersion);
+}
+
+/**
+ * The row a run on `platform` under Bun `bunVersion` is held to (issue
+ * #1490): the one of that platform and that version's release line, or
+ * `undefined` — never another line's row, and never another platform's.
+ */
+function memoryRowOf(base: MemoryBase | null, platform: string, bunVersion: string): MemoryBaseEntry | undefined {
+  const line = bunLineOf(bunVersion);
+  if (line === null || base === null) return undefined;
+  return base.rows.find((row) => row.platform === platform && row.bunLine === line)?.entry;
+}
+
+/** The command that writes a runtime's row (issue #1490): both halves off one process, on that platform and that Bun. */
+const MEMORY_ROW_COMMAND =
+  '`bun selftest.ts --memory-base` on a green one-process full run at --jobs 2 or more on that platform under that Bun writes both halves of its row ' +
+  '(`--merge <file>… --memory-base-children [<file>]` writes only the children\'s half of a row that exists)';
+
+/**
+ * Why a run on `platform` under Bun `bunVersion` is held to nothing (issue
+ * #1490), or `null` when the base holds its row. The sentence of `TY26`'s and
+ * `TY40`'s HOLE: it names the runtime, the rows the base does hold and the
+ * command that writes the missing one.
+ */
+function memoryRowHole(base: MemoryBase | null, platform: string, bunVersion: string): string | null {
+  if (memoryRowOf(base, platform, bunVersion) !== undefined) return null;
+  const line = bunLineOf(bunVersion);
+  const held =
+    base === null
+      ? `there is no ${MEMORY_BASE_PATH}`
+      : base.rows.length === 0
+        ? `${MEMORY_BASE_PATH} holds no row`
+        : `${MEMORY_BASE_PATH} holds rows for ${base.rows.map((row) => memoryRowName(row.platform, row.bunLine)).join(', ')}`;
+  const wanted = line === null ? `${platform} under bun ${bunVersion}, a version with no major.minor` : memoryRowName(platform, line);
+  return (
+    `${held} and none for ${wanted} (this run's Bun is ${bunVersion}) — a memory figure is the allocator's and the allocator is the runtime's, ` +
+    `so this run's memory is held to nothing; ${MEMORY_ROW_COMMAND}`
+  );
+}
+
+/** The lines a memory control prints for a runtime with no row (issue #1490): one SKIP gutter, then the HOLE sentence — never a PASS or a FAIL. */
+function memoryHoleLines(name: string, hole: string, rest = ''): [string, string] {
+  return [`  SKIP  ${name}: no memory base for this runtime — a HOLE in this run, not a pass${rest === '' ? '' : `; ${rest}`}`, `          ⚠️ HOLE: ${hole}`];
 }
 
 /** The base as it is on disk, or `null` with no file; a file that is not a base throws, by name. */
 function readMemoryBase(root: string): MemoryBase | null {
   const path = join(root, MEMORY_BASE_PATH);
   if (!existsSync(path)) return null;
-  const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<MemoryBase>;
-  const v1 = parsed.spec === MEMORY_BASE_SPEC_V1;
-  if ((parsed.spec !== MEMORY_BASE_SPEC && !v1) || parsed.platforms === undefined || typeof parsed.platforms !== 'object' || parsed.platforms === null) {
-    throw new Error(`${MEMORY_BASE_PATH} is not a "${MEMORY_BASE_SPEC}" document; write it again with \`bun selftest.ts --memory-base\``);
+  return parseMemoryBase(readFileSync(path, 'utf8'));
+}
+
+/**
+ * A base document's text read as rows (issue #1490). A `selftest-memory/2`
+ * or `/1` document, keyed by platform alone, reads as one row per entry, of
+ * that entry's own Bun's line — the row its run would have written — so the
+ * writer, rewriting it, writes the `/3` document a fresh run would.
+ */
+function parseMemoryBase(text: string): MemoryBase {
+  const parsed = JSON.parse(text) as { spec?: unknown; rows?: unknown; platforms?: unknown };
+  const again = 'write it again with `bun selftest.ts --memory-base`';
+  let raw: Array<{ where: string; platform: unknown; bunLine: unknown; entry: Record<string, unknown> }>;
+  if (parsed.spec === MEMORY_BASE_SPEC && Array.isArray(parsed.rows)) {
+    raw = (parsed.rows as unknown[]).map((row, i) => {
+      const { platform, bunLine, ...entry } = (typeof row === 'object' && row !== null ? row : {}) as Record<string, unknown>;
+      return { where: `row ${i + 1}`, platform, bunLine, entry };
+    });
+  } else if ((parsed.spec === MEMORY_BASE_SPEC_V2 || parsed.spec === MEMORY_BASE_SPEC_V1) && typeof parsed.platforms === 'object' && parsed.platforms !== null && !Array.isArray(parsed.platforms)) {
+    raw = Object.entries(parsed.platforms as Record<string, unknown>).map(([platform, entry]) => ({
+      where: `the ${platform} entry`,
+      platform,
+      bunLine: undefined,
+      entry: (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>,
+    }));
+  } else {
+    throw new Error(`${MEMORY_BASE_PATH} is not a "${MEMORY_BASE_SPEC}" document; ${again}`);
   }
-  const platforms: Record<string, MemoryBaseEntry> = {};
+  const v1 = parsed.spec === MEMORY_BASE_SPEC_V1;
+  const rows: MemoryBaseRow[] = [];
   const unreadV1: string[] = [];
-  for (const [platform, entry] of Object.entries(parsed.platforms)) {
-    if (typeof entry?.highWater !== 'number') {
-      throw new Error(`${MEMORY_BASE_PATH}: the ${platform} entry states no "highWater"; write it again with \`bun selftest.ts --memory-base\``);
+  for (const { where, platform, bunLine, entry } of raw) {
+    if (typeof platform !== 'string' || platform === '') throw new Error(`${MEMORY_BASE_PATH}: ${where} states no "platform"; ${again}`);
+    if (typeof entry.highWater !== 'number') throw new Error(`${MEMORY_BASE_PATH}: ${where} states no "highWater"; ${again}`);
+    const line = typeof entry.bun === 'string' ? bunLineOf(entry.bun) : null;
+    if (line === null) {
+      throw new Error(`${MEMORY_BASE_PATH}: ${where} states no Bun version with a major.minor ("bun": ${JSON.stringify(entry.bun)}), which its row is keyed by (issue #1490); ${again}`);
     }
-    const { children, ...parent } = entry;
-    platforms[platform] = parent;
+    if (bunLine !== undefined && bunLine !== line) {
+      throw new Error(`${MEMORY_BASE_PATH}: ${where}'s "bunLine" is ${JSON.stringify(bunLine)} where its own Bun ${String(entry.bun)} is ${line} — the writer derives it, so this row was typed; ${again}`);
+    }
+    const name = memoryRowName(platform, line);
+    if (rows.some((row) => row.platform === platform && row.bunLine === line)) throw new Error(`${MEMORY_BASE_PATH} holds two rows for ${name}; ${again}`);
+    const { children, ...parent } = entry as unknown as MemoryBaseEntry & { children?: Partial<ChildrenFigures> };
+    const row: MemoryBaseRow = { platform, bunLine: line, entry: parent };
+    rows.push(row);
     if (children === undefined) continue;
     // Issue #1166: a `/1` figure is one per platform — not a figure of any suite — so it is left unread and named, never mapped.
     if (v1) {
-      unreadV1.push(platform);
+      unreadV1.push(name);
       continue;
     }
     const figures = children.suites as unknown;
     if (typeof children.jobs !== 'number' || typeof figures !== 'object' || figures === null) {
-      throw new Error(`${MEMORY_BASE_PATH}: the ${platform} entry's "children" states no "jobs" and "suites"; write it again with \`bun selftest.ts --memory-base\``);
+      throw new Error(`${MEMORY_BASE_PATH}: ${where}'s "children" states no "jobs" and "suites"; ${again}`);
     }
     const suites: Record<string, number> = {};
     for (const [suite, figure] of Object.entries(figures as Record<string, unknown>)) {
       if (typeof figure !== 'number' || !Number.isInteger(figure) || figure < 1) {
-        throw new Error(`${MEMORY_BASE_PATH}: the ${platform} entry's children's figure for "${suite}" is ${JSON.stringify(figure)}, not a whole number of MB from 1; write it again with \`bun selftest.ts --memory-base\``);
+        throw new Error(`${MEMORY_BASE_PATH}: ${where}'s children's figure for "${suite}" is ${JSON.stringify(figure)}, not a whole number of MB from 1; ${again}`);
       }
       suites[suite] = figure;
     }
-    platforms[platform] = { ...parent, children: { jobs: children.jobs, suites } };
+    row.entry = { ...parent, children: { jobs: children.jobs, suites } };
   }
-  return unreadV1.length > 0 ? { spec: parsed.spec ?? MEMORY_BASE_SPEC_V1, platforms, unreadV1 } : { spec: parsed.spec ?? MEMORY_BASE_SPEC, platforms };
+  const spec = typeof parsed.spec === 'string' ? parsed.spec : MEMORY_BASE_SPEC;
+  return unreadV1.length > 0 ? { spec, rows, unreadV1 } : { spec, rows };
 }
 
-/** The base document with this platform's entry replaced, every other platform kept, keys in order. */
+/** Rows in the order the writer writes them: by platform, then by Bun line as numbers (`1.4` before `1.40`). */
+function compareMemoryRows(a: MemoryBaseRow, b: MemoryBaseRow): number {
+  if (a.platform !== b.platform) return a.platform < b.platform ? -1 : 1;
+  const [am, an] = a.bunLine.split('.').map(Number);
+  const [bm, bn] = b.bunLine.split('.').map(Number);
+  return am !== bm ? am - bm : an - bn;
+}
+
+/**
+ * The base document with the row of `platform` and `entry.bun`'s release line
+ * replaced (or added), every other row kept, in order (issue #1490). The one
+ * writer of the file's shape: `--memory-base` and `--memory-base-children`
+ * both write through it, and it writes `selftest-memory/3` whatever it read.
+ */
 function memoryBaseText(base: MemoryBase | null, platform: string, entry: MemoryBaseEntry): string {
-  const platforms: Record<string, MemoryBaseEntry> = { ...(base?.platforms ?? {}), [platform]: entry };
-  const ordered = Object.fromEntries(Object.keys(platforms).sort().map((key) => [key, platforms[key]]));
-  return `${JSON.stringify({ spec: MEMORY_BASE_SPEC, platforms: ordered }, null, 2)}\n`;
+  const line = bunLineOf(entry.bun);
+  if (line === null) throw new Error(`the ${platform} row to write states no Bun version with a major.minor ("bun": ${JSON.stringify(entry.bun)}), which a row is keyed by (issue #1490)`);
+  const rows = [...(base?.rows ?? []).filter((row) => !(row.platform === platform && row.bunLine === line)), { platform, bunLine: line, entry }].sort(compareMemoryRows);
+  return `${JSON.stringify({ spec: MEMORY_BASE_SPEC, rows: rows.map((row) => ({ platform: row.platform, bunLine: row.bunLine, ...row.entry })) }, null, 2)}\n`;
 }
 
 /** What the ceiling says about one run: held, over, or nothing to hold it to. */
@@ -127255,6 +127406,24 @@ function memoryCeiling(rss: ReadonlyMap<string, SuiteRss>, entry: MemoryBaseEntr
         ' — the RSS table above names the rest. If the growth is intended, write the base again with `bun selftest.ts --memory-base`',
     ],
   };
+}
+
+/**
+ * `TY26`'s verdict on the high-water every suite so far printed (issue
+ * #1490): held to the row of the runtime it ran on — its platform and its
+ * Bun's line — or, with no such row, the HOLE sentence, which is neither a
+ * pass nor a FAIL whatever the figure. Pure, so `TY47`–`TY49` drive it under
+ * planted runtimes and figures.
+ */
+function ty26Verdict(base: MemoryBase | null, platform: string, bunVersion: string, sofar: number): { hole: string } | { hole: null; entry: MemoryBaseEntry; bound: number; probes: string[] } {
+  const entry = memoryRowOf(base, platform, bunVersion);
+  if (entry === undefined) return { hole: memoryRowHole(base, platform, bunVersion) ?? `no ${memoryRuntimeName(platform, bunVersion)} row` };
+  const bound = Math.floor(entry.highWater * MEMORY_MARGIN);
+  const probes =
+    sofar <= bound
+      ? []
+      : [`the high-water so far is ${sofar} MB, over the ${memoryRuntimeName(platform, bunVersion)} bound of ${bound} MB (base high-water ${entry.highWater} MB on bun ${entry.bun} × ${MEMORY_MARGIN})`];
+  return { hole: null, entry, bound, probes };
 }
 
 /** True for the section header every suite opens with. */
@@ -128564,11 +128733,15 @@ function mergedCeilingFaults(t: RunTally, replay: MergeReplay, base: MemoryBase 
     const rss = new Map([...t.rss].filter(([key]) => keys.includes(key)));
     if (rss.size === 0) continue;
     const platform = from === -1 ? process.platform : replay.docs[from].platform;
+    // Issue #1490: each process is held to the row of the Bun it ran under, as it states it.
+    const bunVersion = from === -1 ? Bun.version : replay.docs[from].bun;
+    const runtime = memoryRuntimeName(platform, bunVersion);
+    const row = memoryRowOf(base, platform, bunVersion);
     const where = from === -1 ? 'the merge' : replay.label(from);
-    const ceiling = memoryCeiling(rss, base?.platforms[platform], platform);
+    const ceiling = memoryCeiling(rss, row, runtime);
     // Issue #1143: each shard's children are held as its own; issue #1166:
     // each suite's under that suite's own figure, whichever shard ran it.
-    const children = childrenCeiling(rss, base?.platforms[platform], platform);
+    const children = childrenCeiling(rss, row, runtime);
     if (ceiling.verdict === 'over' || children.verdict === 'over') {
       faults.push(...[...ceiling.faults, ...children.faults].map((fault) => `${where}: ${fault}`));
     } else {
@@ -128576,9 +128749,9 @@ function mergedCeilingFaults(t: RunTally, replay: MergeReplay, base: MemoryBase 
         children.suites.length === 0
           ? ', no child measured'
           : children.verdict === 'no base'
-            ? `, children ${children.suites.map((s) => `${s.suite} ${s.highWater} MB`).join(', ')} (no ${platform} children's figures)`
-            : `, children ${childrenHeldText(children.suites, platform)}`;
-      held.push(`${where} ${highWaterOf(rss)} MB${ceiling.bound === null ? ` (no ${platform} base)` : ` ≤ ${ceiling.bound}`}${childText}`);
+            ? `, children ${children.suites.map((s) => `${s.suite} ${s.highWater} MB`).join(', ')} (no ${runtime} children's figures)`
+            : `, children ${childrenHeldText(children.suites, runtime)}`;
+      held.push(`${where} ${highWaterOf(rss)} MB${ceiling.bound === null ? ` (no ${runtime} base)` : ` ≤ ${ceiling.bound}`}${childText}`);
     }
   }
   return { faults, held };
@@ -128723,19 +128896,21 @@ interface ChildrenBaseWrite {
  * the flag — that file is a destination (CI's is a fresh path under its temp
  * directory), and a destination that already exists is overwritten unread.
  */
-function mergedChildrenBase(t: RunTally, replay: MergeReplay, base: MemoryBase | null, platform: string, mergeJobs: number, reset = false): ChildrenBaseWrite | string {
+function mergedChildrenBase(t: RunTally, replay: MergeReplay, base: MemoryBase | null, platform: string, mergeJobs: number, reset = false, bunVersion = Bun.version): ChildrenBaseWrite | string {
   const nothing = 'so nothing is written';
   const faults = replayFaults(replay);
   if (t.failures > 0 || faults.length > 0) {
     return `the merged run is red — ${t.failures} failure(s)${faults.length > 0 ? `, ${faults.join('; ')}` : ''} — and a red run's children are no base, ${nothing}`;
   }
-  const elsewhere = replay.docs.map((doc, from) => ({ doc, from })).filter(({ doc }) => doc.platform !== platform);
+  // Issue #1490: a row is a platform's and a Bun line's, so every shard must have run on both.
+  const runtime = memoryRuntimeName(platform, bunVersion);
+  const elsewhere = replay.docs.map((doc, from) => ({ doc, from })).filter(({ doc }) => memoryRuntimeName(doc.platform, doc.bun) !== runtime);
   if (elsewhere.length > 0) {
-    return `${elsewhere.map(({ doc, from }) => `${replay.label(from)} ran on ${doc.platform}`).join(', ')}, and this merge writes the ${platform} entry — ${nothing}`;
+    return `${elsewhere.map(({ doc, from }) => `${replay.label(from)} ran on ${memoryRuntimeName(doc.platform, doc.bun)}`).join(', ')}, and this merge writes the ${runtime} row — ${nothing}`;
   }
-  const entry = base?.platforms[platform];
+  const entry = memoryRowOf(base, platform, bunVersion);
   if (entry === undefined) {
-    return `${MEMORY_BASE_PATH} holds no ${platform} entry, and a merge writes only an entry's children's half — the parent's high-water is a one-process run's; write the entry with \`bun selftest.ts --memory-base\` first, ${nothing}`;
+    return `${MEMORY_BASE_PATH} holds no ${runtime} row, and a merge writes only a row's children's half — the parent's high-water is a one-process run's; write the row with \`bun selftest.ts --memory-base\` first, ${nothing}`;
   }
   const top = childrenHighWaterOf(t.rss);
   if (top === null) return `no suite of the merged run measured a child's peak (a shard at --jobs 1 reads none), ${nothing}`;
@@ -130751,17 +130926,17 @@ function runRunTallySuite(live: RunTally): number {
       const clean = memoryCeiling(rssOf(baseChild.rows), entry, 'plant');
       const planted = memoryCeiling(rssOf(plantedChild.rows), entry, 'plant');
       const none = memoryCeiling(rssOf(plantedChild.rows), undefined, 'plant');
-      const kept = memoryBaseText({ spec: MEMORY_BASE_SPEC, platforms: { zeta: entry } }, 'alpha', entry);
-      const keptRead = JSON.parse(kept) as MemoryBase;
+      const kept = memoryBaseText({ spec: MEMORY_BASE_SPEC, rows: [{ platform: 'zeta', bunLine: bunLineOf(entry.bun) ?? entry.bun, entry }] }, 'alpha', entry);
+      const keptRead = parseMemoryBase(kept);
       ty25Probes.push(
         ...(clean.verdict === 'held' ? [] : [`the base child held to its own figure reads ${clean.verdict}: ${clean.faults.join('; ')}`]),
         ...(planted.verdict === 'over' && planted.faults.length === 1 && planted.faults[0].includes('"decode-planted"')
           ? []
           : [`the child that kept every decoded page of one suite (high-water ${plantedFinal} MB against the bound ${planted.bound ?? 'none'} MB) is not named by suite: ${planted.verdict} ${planted.faults.join('; ')}`]),
         ...(none.verdict === 'no base' && none.faults.length === 0 ? [] : [`no base reads ${none.verdict}, where it is no verdict at all`]),
-        ...(Object.keys(keptRead.platforms).join() === 'alpha,zeta' && keptRead.spec === MEMORY_BASE_SPEC
+        ...(keptRead.rows.map((row) => row.platform).join() === 'alpha,zeta' && keptRead.spec === MEMORY_BASE_SPEC
           ? []
-          : [`writing one platform's base did not keep the other's, in key order: ${Object.keys(keptRead.platforms).join(', ')}`]),
+          : [`writing one platform's base did not keep the other's, in key order: ${keptRead.rows.map((row) => row.platform).join(', ')}`]),
       );
       ty25Words =
         `a child decoding the same ${PAGE_SIDE}² page 24 times in each of two suites and idle in a third reaches ${baseFinal} MB and is held under its own ` +
@@ -130784,20 +130959,18 @@ function runRunTallySuite(live: RunTally): number {
     // The live half. The whole run's high-water is held at its end, after the tables
     // (`memoryCeiling` in `main`); here the high-water every suite so far has
     // printed is held to the same bound, so a run that is already over says so
-    // inside the suite that measures the run. No base for this platform is a
-    // SKIP naming the command that writes one, never a pass.
+    // inside the suite that measures the run. No row for this platform and
+    // this Bun's line (issue #1490) is a SKIP and a HOLE naming the command
+    // that writes one, never a pass and never a FAIL.
     {
       const base = readMemoryBase(import.meta.dir);
-      const entry = base?.platforms[process.platform];
       const sofar = Math.max(0, ...[...live.printedRss.values()].map((r) => r.after));
-      if (entry === undefined) {
-        console.log(
-          `  SKIP  TY26_THIS_RUN_IS_UNDER_ITS_PLATFORMS_MEMORY_CEILING: ${MEMORY_BASE_PATH} holds no base for ${process.platform}, so ` +
-            `this run's high-water (${sofar} MB so far) is held to nothing — write one with \`bun selftest.ts --memory-base\` on a green full run`,
-        );
+      const verdict = ty26Verdict(base, process.platform, Bun.version, sofar);
+      if (verdict.hole !== null) {
+        for (const line of memoryHoleLines('TY26_THIS_RUN_IS_UNDER_ITS_PLATFORMS_MEMORY_CEILING', verdict.hole, `this run's high-water is ${sofar} MB so far`)) console.log(line);
       } else {
-        const bound = Math.floor(entry.highWater * MEMORY_MARGIN);
-        const ty26Probes = sofar <= bound ? [] : [`the high-water so far is ${sofar} MB, over the ${process.platform} bound of ${bound} MB (base high-water ${entry.highWater} MB × ${MEMORY_MARGIN})`];
+        const { entry, bound } = verdict;
+        const ty26Probes = verdict.probes;
         const ty26Held = ty26Probes.length === 0;
         say(
           'TY26_THIS_RUN_IS_UNDER_ITS_PLATFORMS_MEMORY_CEILING',
@@ -130805,11 +130978,188 @@ function runRunTallySuite(live: RunTally): number {
           probeDetail(
             ty26Held,
             ty26Probes,
-            `the ${process.platform} base high-water is ${entry.highWater} MB over ${entry.suites} suite(s) on bun ${entry.bun}, so the bound is ${bound} MB ` +
+            `the ${memoryRuntimeName(process.platform, Bun.version)} row (this run's Bun is ${Bun.version}) holds a base high-water of ${entry.highWater} MB over ${entry.suites} suite(s) on bun ${entry.bun}, so the bound is ${bound} MB ` +
               `(× ${MEMORY_MARGIN}); the high-water every suite so far printed is ${sofar} MB, and the whole run's is held to the same bound after the tables`,
           ),
           'issue #1121: a per-suite bound would bound the order suites run in, since a suite grows the resident set only past ' +
             'the mark an earlier one left; the final figure is that mark whichever suite set it',
+        );
+      }
+    }
+
+    // --- TY47–TY49: the memory base is a runtime's, row by row (issue #1490) --
+    //
+    // On linux the same tree peaked at 1,870 MB on Bun 1.2.0, the declared
+    // minimum, against a 1,853 MB bound written on 1.4.2, whose own nine runs
+    // of one day read 1,451–1,699 MB: red on the runtime alone. So a row is one
+    // platform's AND one Bun release line's, and `TY26`, `TY40` and the ceiling
+    // after the tables hold a run to the row of its own runtime. The three
+    // controls drive that selection under planted runtimes through the same
+    // functions the live run calls (`ty26Verdict`, `memoryRowOf`,
+    // `memoryRowHole`, `memoryCeiling`, `childrenCeiling`, `memoryBaseText`,
+    // `parseMemoryBase`), over a planted base of rows no real runtime has.
+    {
+      const PLANT = 'ty47-platform';
+      const rowAt = (platform: string, bun: string, highWater: number, core?: number): MemoryBaseRow => ({
+        platform,
+        bunLine: bunLineOf(bun) ?? bun,
+        entry: { highWater, suites: 9, bun, ...(core === undefined ? {} : { children: { jobs: 4, suites: { core } } }) },
+      });
+      const planted: MemoryBase = { spec: MEMORY_BASE_SPEC, rows: [rowAt(PLANT, '1.2.0', 1500, 900), rowAt(PLANT, '1.4.2', 1000, 600), rowAt('ty47-other', '1.4.2', 100, 50)] };
+      const parentRun = (mb: number): Map<string, SuiteRss> => new Map([['ty47-suite', { after: mb, delta: mb }]]);
+      const childRun = (mb: number): Map<string, SuiteRss> => new Map([['core', { after: 0, delta: 0, children: { highWater: mb, unit: 'ty47 child' } }]]);
+
+      // TY47 (a): a peak one MB over the selected row's bound fires on that runtime, at the bound it does not, and the other line's bound is not the one read.
+      {
+        const probes: string[] = [];
+        const read: string[] = [];
+        for (const [bun, other] of [
+          ['1.4.2', '1.2.0'],
+          ['1.2.0', '1.4.2'],
+        ] as const) {
+          const runtime = memoryRuntimeName(PLANT, bun);
+          const row = memoryRowOf(planted, PLANT, bun);
+          const otherRow = memoryRowOf(planted, PLANT, other);
+          if (row === undefined || otherRow === undefined) {
+            probes.push(`the planted ${runtime} row was not selected`);
+            continue;
+          }
+          const bound = Math.floor(row.highWater * MEMORY_MARGIN);
+          const over = ty26Verdict(planted, PLANT, bun, bound + 1);
+          const at = ty26Verdict(planted, PLANT, bun, bound);
+          if (over.hole !== null || over.probes.length !== 1 || !over.probes[0].includes(`${bound + 1} MB`) || !over.probes[0].includes(`${runtime} bound of ${bound} MB`)) {
+            probes.push(`a high-water of ${bound + 1} MB under bun ${bun}, one over the ${runtime} bound of ${bound} MB, reads ${JSON.stringify(over)}`);
+          }
+          if (at.hole !== null || at.probes.length !== 0) probes.push(`a high-water at the ${runtime} bound of ${bound} MB reads ${JSON.stringify(at)}`);
+          // The other line's bound, crossed: on this runtime it is no verdict of its own unless it crosses this row's too.
+          const otherBound = Math.floor(otherRow.highWater * MEMORY_MARGIN);
+          const crossed = ty26Verdict(planted, PLANT, bun, otherBound + 1);
+          const wantOver = otherBound + 1 > bound;
+          if (crossed.hole !== null || (crossed.probes.length > 0) !== wantOver) {
+            probes.push(`${otherBound + 1} MB, one over the ${memoryRuntimeName(PLANT, other)} bound, under bun ${bun} reads ${JSON.stringify(crossed)} where the ${runtime} bound of ${bound} MB makes it ${wantOver ? 'over' : 'held'}`);
+          }
+          // The ceiling after the tables and the children's, through the row the same selection hands them.
+          const final = memoryCeiling(parentRun(bound + 1), row, runtime);
+          if (final.verdict !== 'over' || !final.faults[0]?.includes(`${runtime} bound of ${bound} MB`)) probes.push(`the whole run's ceiling over ${bound + 1} MB under bun ${bun} reads ${final.verdict}: ${final.faults.join('; ')}`);
+          const figure = row.children?.suites.core ?? 0;
+          const childBound = childrenBound(figure);
+          const child = childrenCeiling(childRun(childBound + 1), row, runtime);
+          const childAt = childrenCeiling(childRun(childBound), row, runtime);
+          if (child.verdict !== 'over' || !child.faults[0]?.includes(`${runtime} bound of ${childBound} MB`)) probes.push(`a core child of ${childBound + 1} MB under bun ${bun} reads ${child.verdict}: ${child.faults.join('; ')}`);
+          if (childAt.verdict !== 'held') probes.push(`a core child at the ${runtime} bound of ${childBound} MB reads ${childAt.verdict}`);
+          read.push(`${runtime}: ${bound + 1} MB is named over ${bound} (${row.highWater} × ${MEMORY_MARGIN}) and ${bound} is not, a core child of ${childBound + 1} MB over ${childBound} (${figure} × ${CHILDREN_MARGIN}), ${otherBound + 1} MB ${wantOver ? 'over' : 'held'}`);
+        }
+        const held = probes.length === 0;
+        say(
+          'TY47_A_PLANTED_PEAK_OVER_ITS_RUNTIMES_ROW_IS_NAMED_UNDER_THAT_RUNTIME_AND_ANOTHER_LINES_BOUND_IS_NOT_READ',
+          held,
+          probeDetail(held, probes, `over a planted base of two Bun lines of one platform: ${read.join('; ')}`),
+          'issue #1490: with the base keyed by runtime, the bound a run is held to is chosen before it is read, so a selection that fell to the wrong row or to none ' +
+            'would turn a gate into a SKIP everywhere; the plant is the growth the rule claims to see, on each line',
+        );
+      }
+
+      // TY48 (b): a runtime with no row is the HOLE — a SKIP gutter and the sentence naming the runtime and the command — never a pass and never a FAIL, whatever the figure.
+      {
+        const probes: string[] = [];
+        const name = 'TY48_A_RUNTIME_WITH_NO_ROW_IS_A_SKIP_AND_A_HOLE_NAMING_IT_AND_THE_WRITER_NEVER_A_PASS_OR_A_FAIL';
+        const huge = 1_000_000;
+        const holes: Array<[string, MemoryBase | null, string, string, readonly string[]]> = [
+          ['a Bun line with no row', planted, PLANT, '9.9.0', [`none for ${memoryRowName(PLANT, '9.9')}`, "this run's Bun is 9.9.0", `holds rows for ${memoryRowName(PLANT, '1.2')}, ${memoryRowName(PLANT, '1.4')}`]],
+          ['a platform with no row', planted, 'ty48-nowhere', '1.4.2', [`none for ${memoryRowName('ty48-nowhere', '1.4')}`]],
+          ['no base file', null, PLANT, '1.4.2', [`there is no ${MEMORY_BASE_PATH}`]],
+          ['a version with no major.minor', planted, PLANT, 'canary', ['bun canary, a version with no major.minor']],
+        ];
+        const read: string[] = [];
+        for (const [what, base, platform, bun, wants] of holes) {
+          const verdict = ty26Verdict(base, platform, bun, huge);
+          if (verdict.hole === null) {
+            probes.push(`${what} (${memoryRuntimeName(platform, bun)}) is held to a row: ${JSON.stringify(verdict)}`);
+            continue;
+          }
+          const missing = [...wants, '`bun selftest.ts --memory-base`'].filter((w) => !verdict.hole?.includes(w));
+          if (missing.length > 0) probes.push(`${what}: the HOLE ${JSON.stringify(verdict.hole)} does not say ${missing.map((w) => JSON.stringify(w)).join(', ')}`);
+          if (memoryRowHole(base, platform, bun) !== verdict.hole) probes.push(`${what}: TY26's HOLE and TY40's differ`);
+          const lines = memoryHoleLines(name, verdict.hole);
+          const gutters = lines.map((line) => /^ {2}(PASS|FAIL|SKIP) {2}/.exec(line)?.[1] ?? null);
+          if (gutters[0] !== 'SKIP' || gutters[1] !== null || !lines[1].startsWith('          ⚠️ HOLE: ')) probes.push(`${what}: the lines print gutters ${JSON.stringify(gutters)}: ${JSON.stringify(lines)}`);
+          const row = memoryRowOf(base, platform, bun);
+          const final = memoryCeiling(parentRun(huge), row, memoryRuntimeName(platform, bun));
+          const child = childrenCeiling(childRun(huge), row, memoryRuntimeName(platform, bun));
+          if (final.verdict !== 'no base' || final.faults.length > 0 || child.verdict !== 'no base' || child.faults.length > 0) {
+            probes.push(`${what}: the ceilings after the tables read ${final.verdict} and ${child.verdict} over ${huge} MB, where they are no verdict`);
+          }
+          read.push(`${what} -> ${verdict.hole.slice(0, verdict.hole.indexOf(' — '))}`);
+        }
+        // The other side: a runtime that has its row is no HOLE.
+        if (memoryRowHole(planted, PLANT, '1.4.2') !== null) probes.push(`${memoryRuntimeName(PLANT, '1.4.2')} has its row and still reads a HOLE`);
+        const held = probes.length === 0;
+        say(
+          name,
+          held,
+          probeDetail(held, probes, `under ${huge} MB, each of these is a SKIP line and a HOLE line, and the ceilings after the tables no verdict: ${read.join('; ')}; a runtime with its row is no HOLE`),
+          'issue #1490: on Bun 1.2.0, the declared minimum, TY26 and TY40 were red against a base written on 1.4.2 — a gate nobody can keep there; ' +
+            'with no row for the runtime the honest verdict is that nothing was measured, which a PASS would hide and a FAIL would blame on the tree',
+        );
+      }
+
+      // TY49 (c): the row is the Bun's major.minor, not its full version — 1.4.9 is held to the 1.4 row, 1.40.1 to 1.40's, 1.5.0 to none — and only the writer makes it.
+      {
+        const probes: string[] = [];
+        const lines: MemoryBase = { spec: MEMORY_BASE_SPEC, rows: [rowAt(PLANT, '1.3.11', 300), rowAt(PLANT, '1.4.2', 1000), rowAt(PLANT, '1.40.0', 5000)] };
+        for (const [bun, want] of [
+          ['1.4.9', 1000],
+          ['1.4.2', 1000],
+          ['1.4.0-canary.3+abc', 1000],
+          ['1.40.1', 5000],
+          ['1.3.11', 300],
+          ['1.5.0', null],
+          ['1', null],
+        ] as const) {
+          const got = memoryRowOf(lines, PLANT, bun)?.highWater ?? null;
+          if (got !== want) probes.push(`bun ${bun} selects the row holding ${String(got)} MB where the ${want === null ? 'rule is none' : `row of its line holds ${want} MB`}`);
+        }
+        // The writer replaces the row of the written Bun's line — a 1.4.9 run's row is the 1.4 row, not a new one — and keeps the rest, in line order.
+        const rewritten = parseMemoryBase(memoryBaseText(lines, PLANT, { highWater: 1111, suites: 9, bun: '1.4.9' }));
+        const shape = rewritten.rows.map((row) => `${row.bunLine}:${row.entry.highWater}:${row.entry.bun}`).join(', ');
+        if (shape !== '1.3:300:1.3.11, 1.4:1111:1.4.9, 1.40:5000:1.40.0') probes.push(`a 1.4.9 run's row, written over the planted rows, reads ${shape}`);
+        // The reader refuses a row whose line is not its own Bun's (typed, not written) and two rows of one line.
+        const refusals: Array<[string, string, string]> = [
+          ['a typed bunLine', JSON.stringify({ spec: MEMORY_BASE_SPEC, rows: [{ platform: PLANT, bunLine: '1.5', highWater: 9, suites: 1, bun: '1.4.2' }] }), 'so this row was typed'],
+          ['two rows of one line', JSON.stringify({ spec: MEMORY_BASE_SPEC, rows: [1, 2].map((n) => ({ platform: PLANT, bunLine: '1.4', highWater: 9, suites: 1, bun: `1.4.${n}` })) }), `holds two rows for ${memoryRowName(PLANT, '1.4')}`],
+          ['a row with no major.minor', JSON.stringify({ spec: MEMORY_BASE_SPEC, rows: [{ platform: PLANT, bunLine: '1.4', highWater: 9, suites: 1, bun: 'x' }] }), 'states no Bun version with a major.minor'],
+        ];
+        const refused: string[] = [];
+        for (const [what, text, words] of refusals) {
+          try {
+            parseMemoryBase(text);
+            probes.push(`${what} was read`);
+          } catch (err) {
+            if ((err as Error).message.includes(words)) refused.push(what);
+            else probes.push(`${what} was refused as ${JSON.stringify((err as Error).message)}, not by "${words}"`);
+          }
+        }
+        // A `/2` document, keyed by platform alone, reads as one row per entry of its own Bun's line, and the writer writes it back as `/3`.
+        const v2 = JSON.stringify({ spec: MEMORY_BASE_SPEC_V2, platforms: { [PLANT]: { highWater: 1000, suites: 9, bun: '1.4.2' }, 'ty49-other': { highWater: 50, suites: 9, bun: '1.3.11' } } });
+        const migrated = parseMemoryBase(v2);
+        const back = parseMemoryBase(memoryBaseText(migrated, PLANT, { highWater: 1000, suites: 9, bun: '1.4.2' }));
+        const migratedShape = back.rows.map((row) => `${memoryRowName(row.platform, row.bunLine)}:${row.entry.highWater}`).join(', ');
+        if (back.spec !== MEMORY_BASE_SPEC || migratedShape !== `${memoryRowName(PLANT, '1.4')}:1000, ${memoryRowName('ty49-other', '1.3')}:50`) {
+          probes.push(`a ${MEMORY_BASE_SPEC_V2} document reads and writes back as ${back.spec} ${migratedShape}`);
+        }
+        const held = probes.length === 0;
+        say(
+          'TY49_A_RUNS_ROW_IS_ITS_BUNS_MAJOR_MINOR_NOT_ITS_FULL_VERSION_AND_ONLY_THE_WRITER_KEYS_ONE',
+          held,
+          probeDetail(
+            held,
+            probes,
+            `over rows of bun 1.3, 1.4 and 1.40: 1.4.9, 1.4.2 and a 1.4 canary select 1.4's, 1.40.1 selects 1.40's, 1.3.11 1.3's, and 1.5.0 and "1" none; ` +
+              `a 1.4.9 run's write replaces the 1.4 row and keeps the rest in line order (${shape}); the reader refuses ${refused.join(', ')}; ` +
+              `a ${MEMORY_BASE_SPEC_V2} document reads as rows of its entries' own lines and writes back as ${MEMORY_BASE_SPEC} (${migratedShape})`,
+          ),
+          'issue #1490: keyed by the full version, every patch release would be a row nobody has written and the control a SKIP on it; ' +
+            'keyed by the platform alone, the declared minimum was red on the runtime; and a key typed by hand would go stale like any hand-kept table',
         );
       }
     }
@@ -130867,9 +131217,11 @@ function runRunTallySuite(live: RunTally): number {
       const skipLine = (reason: string): string => `  SKIP  ${name}: ${reason}`;
       const jobs = Math.max(2, JOBS);
       const base = readMemoryBase(import.meta.dir);
-      const entry = base?.platforms[process.platform];
+      // Issue #1490: this runtime's row — its platform's and its Bun line's — or the HOLE, never another runtime's figures.
+      const entry = memoryRowOf(base, process.platform, Bun.version);
+      const rowHole = memoryRowHole(base, process.platform, Bun.version);
       const children = entry?.children;
-      const unreadV1 = base?.unreadV1?.includes(process.platform) === true;
+      const unreadV1 = base?.unreadV1?.includes(memoryRuntimeName(process.platform, Bun.version)) === true;
       const taken = UNIT_PEAKS_TAKEN.length;
       const peakOf = (label: string): UnitPeak | undefined => UNIT_PEAKS_TAKEN.slice(taken).find((p) => p.label === label);
       const suiteOf = (peaks: UnitPeak[]): SuiteRss => {
@@ -130894,7 +131246,7 @@ function runRunTallySuite(live: RunTally): number {
               .join(', ');
       if (entry === undefined || children === undefined || heaviest === undefined) {
         plantWords =
-          `the plant did not run: it is sized from the ${process.platform} base's children's figures alone, and ${MEMORY_BASE_PATH} holds none` +
+          `the plant did not run: it is sized from the ${memoryRuntimeName(process.platform, Bun.version)} row's children's figures alone, and ${MEMORY_BASE_PATH} holds none` +
           (unreadV1 ? ` it reads — its ${process.platform} entry carries a ${MEMORY_BASE_SPEC_V1} figure, one per platform, where ${MEMORY_BASE_SPEC} holds one per suite` : '');
       } else {
         const plantFigure = children.suites[heaviest];
@@ -131024,8 +131376,9 @@ function runRunTallySuite(live: RunTally): number {
               if (!dropped.some((fault) => fault.includes('printed no children') && fault.includes(plantLabel))) {
                 probes.push(`a line that dropped the children's figure was not named: ${dropped.join('; ') || 'no fault'}`);
               }
-              const kept = JSON.parse(memoryBaseText({ spec: MEMORY_BASE_SPEC, platforms: { zeta: { highWater: 9, suites: 1, bun: 'x' } } }, 'alpha', entry)) as MemoryBase;
-              if (JSON.stringify(kept.platforms.alpha?.children) !== JSON.stringify(children) || kept.platforms.zeta?.children !== undefined || kept.spec !== MEMORY_BASE_SPEC) {
+              const kept = parseMemoryBase(memoryBaseText({ spec: MEMORY_BASE_SPEC, rows: [{ platform: 'zeta', bunLine: '1.0', entry: { highWater: 9, suites: 1, bun: '1.0.0' } }] }, 'alpha', entry));
+              const keptRow = (platform: string): MemoryBaseEntry | undefined => kept.rows.find((row) => row.platform === platform)?.entry;
+              if (JSON.stringify(keptRow('alpha')?.children) !== JSON.stringify(children) || keptRow('zeta')?.children !== undefined || kept.spec !== MEMORY_BASE_SPEC) {
                 probes.push(`writing the children's figures for one platform did not keep them, or touched another's: ${JSON.stringify(kept)}`);
               }
               const restWords =
@@ -131069,12 +131422,15 @@ function runRunTallySuite(live: RunTally): number {
         if (ownScale === null) probes.push(`this process's maxRSS ${ownRaw} beside its rss ${process.memoryUsage().rss} bytes reads as neither bytes nor KiB`);
       }
       // The live half: every suite so far that measured a child, under its own figure.
-      const sofar = childrenCeiling(live.printedRss, entry, process.platform);
+      const sofar = childrenCeiling(live.printedRss, entry, memoryRuntimeName(process.platform, Bun.version));
       probes.push(...sofar.faults);
       const unheldSoFar = sofar.verdict === 'held' ? sofar.suites.filter((s) => s.bound === null) : [];
       const soFarWords = (suites: readonly SuiteChildrenHeld[]): string => suites.map((s) => `"${s.suite}" ${s.highWater} MB ("${s.unit}")`).join(', ');
       const sofarSkips = sofar.verdict === 'no base' || sofar.verdict === 'no children' || unheldSoFar.length > 0;
-      if (probes.length === 0 && ownUnread !== null) {
+      if (probes.length === 0 && rowHole !== null) {
+        // Issue #1490: no row for this runtime — the HOLE, before any other reason this control could not conclude.
+        for (const line of memoryHoleLines(name, rowHole, `${ownUnread === null ? '' : `${ownUnread}; `}${plantWords || 'no plant was read'}`)) console.log(line);
+      } else if (probes.length === 0 && ownUnread !== null) {
         console.log(`  SKIP  ${name}: ${ownUnread} — a HOLE in this run, not a pass; the rest of this control ran and found nothing: ${plantWords || 'no plant was read'}`);
       } else if (probes.length === 0 && !sofarSkips && plantUnread !== null) {
         console.log(
@@ -131522,9 +131878,12 @@ function runRunTallySuite(live: RunTally): number {
             run: g.doc.run.map((r) => (peaks[r.block.key] === undefined ? r : { ...r, rss: { ...r.rss, children: peaks[r.block.key] } })),
           },
         }));
-      const entry: MemoryBaseEntry = { highWater: 2000, suites: 6, bun: 'x', children: { jobs: 2, suites: { beta: 100 } } };
-      const other: MemoryBaseEntry = { highWater: 9, suites: 1, bun: 'y' };
-      const base: MemoryBase = { spec: MEMORY_BASE_SPEC, platforms: { [PLATFORM]: entry, eta: other } };
+      // Issue #1490: the row is this Bun's line's, as the shards' documents state it; `other` is another platform's.
+      const entry: MemoryBaseEntry = { highWater: 2000, suites: 6, bun: Bun.version, children: { jobs: 2, suites: { beta: 100 } } };
+      const other: MemoryBaseEntry = { highWater: 9, suites: 1, bun: '1.0.0' };
+      const rowOf = (platform: string, e: MemoryBaseEntry): MemoryBaseRow => ({ platform, bunLine: bunLineOf(e.bun) ?? e.bun, entry: e });
+      const base: MemoryBase = { spec: MEMORY_BASE_SPEC, rows: [rowOf(PLATFORM, entry), rowOf('eta', other)] };
+      const otherLine: MemoryBaseEntry = { ...entry, bun: '0.9.0' };
       const write = (given: GivenDocument[], over: MemoryBase | null = base, platform = PLATFORM): ChildrenBaseWrite | string => {
         const merged = miniature({ given });
         if (merged.tally.replay === null) return 'the miniature replayed nothing';
@@ -131545,8 +131904,8 @@ function runRunTallySuite(live: RunTally): number {
       let greenWords = 'nothing';
       if (typeof green === 'string') probes.push(`a green merge of three shards was refused: ${green}`);
       else {
-        const parsed = JSON.parse(green.text) as MemoryBase;
-        const got = parsed.platforms[PLATFORM];
+        const parsed = parseMemoryBase(green.text);
+        const got = memoryRowOf(parsed, PLATFORM, Bun.version);
         // Issue #1166: the run's figures are each suite's largest over the documents; the written ones every tracked figure kept and the rest added.
         const want = JSON.stringify({ jobs: 2, suites: sortedFigures({ ...docFigures, ...tracked }) });
         if (JSON.stringify(sortedFigures(green.run)) !== JSON.stringify(sortedFigures(docFigures))) {
@@ -131558,7 +131917,8 @@ function runRunTallySuite(live: RunTally): number {
         if (got?.highWater !== entry.highWater || got.suites !== entry.suites || got.bun !== entry.bun) {
           probes.push(`the merge moved the parent's half: ${JSON.stringify(got)} where the base held ${JSON.stringify(entry)}`);
         }
-        if (JSON.stringify(parsed.platforms.eta) !== JSON.stringify(other)) probes.push(`the merge moved another platform's entry: ${JSON.stringify(parsed.platforms.eta)}`);
+        const eta = memoryRowOf(parsed, 'eta', other.bun);
+        if (JSON.stringify(eta) !== JSON.stringify(other) || parsed.rows.length !== 2) probes.push(`the merge moved another platform's row: ${JSON.stringify(parsed.rows)}`);
         if (!green.from.includes('"unit b"') || !green.from.includes('shard 2/3')) probes.push(`the write names its child as ${green.from}, not "unit b" in shard 2/3`);
         greenWords = `children ${childrenFiguresText(got?.children?.suites ?? {})} at --jobs ${got?.children?.jobs} (${green.said}), the run's largest child ${green.from}, the parent's ${got?.highWater} MB kept`;
       }
@@ -131572,8 +131932,14 @@ function runRunTallySuite(live: RunTally): number {
         ['a red shard (beta failing in shard 2/3)', write(forge(shardsOf(3, 'beta'), PEAKS)), 'the merged run is red — 1 failure(s)'],
         ['the red shard forged to exit 2', write(forgedExit), 'shard 2/3 exited 2'],
         ['shards at two --jobs', write(forge(shardsOf(3), PEAKS, (i) => (i === 3 ? 4 : 2))), 'shard 3/3 at 4'],
-        ['a platform with no entry', write(given, { spec: MEMORY_BASE_SPEC, platforms: { eta: other } }), `holds no ${PLATFORM} entry`],
-        ['shards of another platform', write(given, base, 'eta'), `shard 1/3 ran on ${PLATFORM}`],
+        ['a platform with no row', write(given, { spec: MEMORY_BASE_SPEC, rows: [rowOf('eta', other)] }), `holds no ${memoryRuntimeName(PLATFORM, Bun.version)} row`],
+        ['a row of another Bun line only (issue #1490)', write(given, { spec: MEMORY_BASE_SPEC, rows: [rowOf(PLATFORM, otherLine), rowOf('eta', other)] }), `holds no ${memoryRuntimeName(PLATFORM, Bun.version)} row`],
+        ['shards of another platform', write(given, base, 'eta'), `shard 1/3 ran on ${memoryRuntimeName(PLATFORM, Bun.version)}`],
+        [
+          'shards of another Bun line (issue #1490)',
+          write(given.map((g, i) => (i === 0 ? { ...g, doc: { ...g.doc, bun: '0.9.0' } } : g))),
+          `shard 1/3 ran on ${memoryRuntimeName(PLATFORM, '0.9.0')}`,
+        ],
         ['no child measured', write(forge(shardsOf(3), {})), "measured a child's peak"],
       ];
       const read: string[] = [];
@@ -131686,7 +132052,10 @@ function runRunTallySuite(live: RunTally): number {
       if (merged.tally.replay === null) probes.push('the miniature replayed nothing');
       else {
         const replay = merged.tally.replay;
-        const baseAt = (figure: number): MemoryBase => ({ spec: MEMORY_BASE_SPEC, platforms: { zeta: { highWater: 2000, suites: 6, bun: 'x', children: { jobs: 2, suites: { beta: figure } } } } });
+        const baseAt = (figure: number): MemoryBase => ({
+          spec: MEMORY_BASE_SPEC,
+          rows: [{ platform: 'zeta', bunLine: bunLineOf(Bun.version) ?? Bun.version, entry: { highWater: 2000, suites: 6, bun: Bun.version, children: { jobs: 2, suites: { beta: figure } } } }],
+        });
         for (const [what, tracked, reset, want, words] of [
           ['tracked 900 MB over a run of 700 MB', 900, false, 900, 'kept beta 900 MB (this run 700 MB)'],
           ['tracked 500 MB under a run of 700 MB', 500, false, 500, 'kept beta 500 MB (this run 700 MB)'],
@@ -131696,7 +132065,7 @@ function runRunTallySuite(live: RunTally): number {
           const got = mergedChildrenBase(merged.tally, replay, baseAt(tracked), 'zeta', 2, reset);
           if (typeof got === 'string') probes.push(`the merge, ${what}: refused as ${JSON.stringify(got)}`);
           else {
-            const written = (JSON.parse(got.text) as MemoryBase).platforms.zeta?.children;
+            const written = memoryRowOf(parseMemoryBase(got.text), 'zeta', Bun.version)?.children;
             if (written?.suites.beta !== want || got.run.beta !== 700 || !got.said.startsWith(words)) {
               probes.push(`the merge, ${what}: wrote ${JSON.stringify(written ?? null)} over a run of ${JSON.stringify(got.run)} saying ${JSON.stringify(got.said)}, where beta ${want} MB saying "${words}…" is the rule`);
             } else mergeWords.push(`${what} -> ${written.suites.beta} MB (${got.said})`);
@@ -142176,7 +142545,8 @@ function main(): void {
     // Issue #1166: the parent's half as measured; the children's figures, one
     // per suite, written against the tracked entry's as `--memory-base-children` does.
     const children = childrenHighWaterOf(tally.rss);
-    const write = writtenChildren(memoryBase?.platforms[process.platform]?.children, childrenFiguresOf(tally.rss), JOBS, RESET_CHILDREN_BASE);
+    // Issue #1490: against this runtime's row — the platform's and this Bun line's — and written as that row, every other kept.
+    const write = writtenChildren(memoryRowOf(memoryBase, process.platform, Bun.version)?.children, childrenFiguresOf(tally.rss), JOBS, RESET_CHILDREN_BASE);
     if (typeof write === 'string') {
       console.error(`rigc selftest: --memory-base refused: ${write}, so nothing is written`);
       process.exit(2);
@@ -142185,7 +142555,7 @@ function main(): void {
     if (write.children !== undefined) entry.children = write.children;
     writeFileSync(join(import.meta.dir, MEMORY_BASE_PATH), memoryBaseText(memoryBase, process.platform, entry));
     console.log(
-      `selftest: wrote ${MEMORY_BASE_PATH} for ${process.platform}: high-water rss ${entry.highWater} MB over ${tally.blocks.length} suite(s), bun ${Bun.version}; ` +
+      `selftest: wrote ${MEMORY_BASE_PATH}'s ${memoryRuntimeName(process.platform, Bun.version)} row: high-water rss ${entry.highWater} MB over ${tally.blocks.length} suite(s), bun ${Bun.version}; ` +
         `children's figures ${write.said}` +
         (children === null
           ? write.children === undefined
@@ -142224,15 +142594,18 @@ function main(): void {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, write.text);
       console.log(
-        `selftest: wrote ${WRITE_CHILDREN_BASE === '' ? MEMORY_BASE_PATH : file} for ${process.platform}: children's figures ${write.said} — this run's, ` +
+        `selftest: wrote ${WRITE_CHILDREN_BASE === '' ? MEMORY_BASE_PATH : file}'s ${memoryRuntimeName(process.platform, Bun.version)} row: children's figures ${write.said} — this run's, ` +
           `${childrenFiguresText(write.run)}, each a suite's largest child over this merge's ${tally.replay.docs.length} shard document(s) and its own suites ` +
           `(the run's largest child: ${write.from}), written against ${MEMORY_BASE_PATH}'s; ` +
           `the parent's high-water, ${write.entry.highWater} MB, is left as the one-process run wrote it`,
       );
     }
   } else {
-    const ceiling = memoryCeiling(tally.rss, memoryBase?.platforms[process.platform], process.platform);
-    const childCeiling = childrenCeiling(tally.rss, memoryBase?.platforms[process.platform], process.platform);
+    // Issue #1490: held to this runtime's row; with none, both read 'no base' and `TY26`/`TY40` printed the HOLE.
+    const row = memoryRowOf(memoryBase, process.platform, Bun.version);
+    const runtime = memoryRuntimeName(process.platform, Bun.version);
+    const ceiling = memoryCeiling(tally.rss, row, runtime);
+    const childCeiling = childrenCeiling(tally.rss, row, runtime);
     if (ceiling.verdict === 'over' || childCeiling.verdict === 'over') {
       for (const fault of [...ceiling.faults, ...childCeiling.faults]) console.error(`rigc selftest: ${fault}`);
       process.exit(1);

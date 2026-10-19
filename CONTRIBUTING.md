@@ -64,7 +64,7 @@ full run. A near miss names the flag when exactly one is one edit away.
   --tally-out <file>               with --shard: the shard's tally document, which --merge reads; with --merge: the merged run's, which a publish reads (or RIGC_TALLY_OUT=<file>)
   --merge <file>…                  every shard's tally document merged: the verdict
   --shards-base [<file>]           with --merge: a green merge writes the durations base, to <file> or over the tracked one
-  --memory-base                    a green one-process full run writes its platform's memory base
+  --memory-base                    a green one-process full run writes its platform and Bun line's row of the memory base
   --memory-base-children [<file>]  with --merge: a green merge writes the children's half of the memory base
   --reset-children-base            lets a writer of the children's figures move a tracked one, up or down, or replace them read at another --jobs
   --jobs <n>                       how many of a suite's independent units run at once; the machine's cores by default (or RIGC_JOBS=<n>)
@@ -119,14 +119,23 @@ peak, so there the line says nothing about children. The unit of a child's
 `Bun.spawn`'s `resourceUsage()` reports for it (`TY42` holds a known 256 MiB
 child to that reading), and a calibration that reads neither leaves every
 peak unread, with the reason in `RIGC_UNIT_PEAKS`. Both figures are held
-under `tools/selftest_memory.base.json` (`selftest-memory/2`), one entry per
-platform: the parent's high-water (`TY26`, and the full run after its tables)
+under `tools/selftest_memory.base.json` (`selftest-memory/3`), one row per
+platform and Bun release line (major.minor — a run on Bun 1.4.9 is held to the
+`1.4` row; issue #1490): the parent's high-water (`TY26`, and the full run after its tables)
 times `MEMORY_MARGIN`, and one children's figure per suite with the `--jobs`
 they were read at (`TY40`), each suite's heaviest child held under its own
-figure times `CHILDREN_MARGIN`. A platform with no entry, or no children's
-figures, is a `SKIP` naming the command that writes them: `bun selftest.ts
---memory-base` on a green one-process full run at `--jobs 2` or more writes
-both halves. Never type them. `TY40`'s plant is a `SKIP` too, never a `FAIL`,
+figure times `CHILDREN_MARGIN`. The row is the runtime's because the figure is
+the allocator's: on linux the same tree peaked at 1,870 MB on Bun 1.2.0, the
+declared minimum, against 1,451–1,699 MB over nine runs on 1.4.2. A runtime
+with no row is a `SKIP` and a HOLE line naming the platform, the Bun and the
+command that writes the row (`TY48`) — never a pass and never a `FAIL`: `bun
+selftest.ts --memory-base` on a green one-process full run at `--jobs 2` or
+more, on that platform under that Bun, writes both halves of its row and keeps
+every other row. A row with no children's figures is a `SKIP` naming the same
+command. Never type them: the reader refuses a row whose `bunLine` is not its
+own `bun`'s. A `selftest-memory/2` document, keyed by platform alone, still
+reads, as one row per entry of that entry's own Bun's line, and the next write
+rewrites it as `/3`. `TY40`'s plant is a `SKIP` too, never a `FAIL`,
 when the driver read its peak below what its unit reports having written
 (issue #1185): under memory pressure macOS compresses or swaps written pages
 out of the resident set, which is all `maxRSS` counts, so that run did not
@@ -162,8 +171,9 @@ are always the tracked file's, the ones the ceiling reads, never the file named
 after `--memory-base-children`, which is overwritten unread. A run that
 measured no child keeps the tracked figures. The parent's high-water is still
 written as the one-process run measured it. The linux figures were written from
-CI run 37340730277 (main at `f657d83`); darwin's are written by `--memory-base`
-on a laptop at `--jobs 2`, and until they are, `TY40` is a `SKIP` there. A
+CI run 37340730277 (main at `f657d83`), on Bun 1.4.2; darwin's row is Bun
+1.3's (written on 1.3.11), so a darwin run on another Bun line is the HOLE
+until `--memory-base` writes that line's row on a laptop at `--jobs 2`. A
 `selftest-memory/1` document — one children's figure per platform — still
 reads for its parent half; its children's figure is not read, and `TY40` names
 it.

@@ -143,9 +143,9 @@ bun cli.ts vote --candidate path/to/spine-a --candidate path/to/spine-b   # -> b
 bun cli.ts vote --record vote-<id>.json                                   # -> votes.jsonl
 
 # …and when the build is for a person to look at rather than for you to choose
-# between, hand it over: with @rig-c/review installed beside rigc, give the person
-# the loopback URL this prints (rigc review --help is review's own usage):
-bun cli.ts review open path/to/spine
+# between, hand it over: give the person the loopback URL this prints on stdout
+# (`rigc review <dir>` is `rig-review open <dir>`; rigc review --help is review's own usage):
+bun cli.ts review path/to/spine [--reference reference.mp4] [--animation <name>]
 ```
 
 `build` compiles, runs the named assertions — through a `@esotericsoftware/spine-core`
@@ -325,6 +325,29 @@ resolves to <path>` (or `to nothing`), and under `--copy` `a directory that is n
 the package's copy (<file> differs)`. A link to the package's own folder is not in
 the way however it is spelled, so an absolute link somebody else made is kept and
 reported `already linked`.
+
+`review` is the third, and it is a launcher: its body is the `rig-review` bin of
+`@rig-c/review`, a separate package rigc does not depend on and **never installs**.
+`rigc review <dir> [--reference <video>] [--animation <name>] [--compare <dir>]`
+hands over `open <dir> …` with those flags 1:1; a first argument that is one of
+rig-review's own words — `open`, `check`, `feedback`, `control`, `strip`,
+`compare`, or anything starting with `-` (`--help`, `-h`, and `--`, which hands
+the rest over as it is) — is handed over untouched. Nothing else is added: no
+`--reference` is derived, because no build rigc writes records the clip it was
+retargeted from. What comes back is review's: **stdout is review's stdout byte for
+byte** (the URL line an agent gives a person), stderr is review's plus only the
+launcher's own refusals, and the exit code is review's. The launcher relies on
+review's side of that contract — the URL alone on stdout, its diagnostics on
+stderr, its own refusals in its own words — and does not restate it. Before the
+bin starts, it refuses by name, exit 2, nothing on stdout:
+
+| Line on stderr | When | What to do |
+| --- | --- | --- |
+| `rigc review: REVIEW_OUTPUT_MISSING <path>: nothing is there — …` (or `it is not a directory`) | the first argument was read as a target and is not a directory. Checked first, before the package is looked for | point it at the `--out` a green `build` wrote, or pass `--` first to hand the argument over as it is |
+| `rigc review: REVIEW_NOT_INSTALLED: @rig-c/review is not installed beside this project or beside rig-c, and rigc does not install it — …`, then `bun add -d @rig-c/review`, then `bunx @rig-c/review <what the bin would have been handed>` | the package resolves neither from the working directory up nor from rig-c's root up. The same three lines on a terminal and off one; nothing is installed, fetched or written, and `package.json` and `bun.lock` are untouched | run the first line to install it, or the second to run it once without installing (it fetches into Bun's cache — that is your choice to make, not rigc's) |
+| `rigc review: REVIEW_BUN_TOO_OLD: Bun <found>, @rig-c/review needs <required>` | the installed package's own `engines.bun` floor is above the running Bun. `<required>` is read off that manifest, not written in rigc | upgrade Bun |
+| `rigc review: REVIEW_BUN_RANGE_UNREAD: @rig-c/review declares engines.bun "<range>", and rigc reads only ">=X.Y.Z" — …` | the installed package's `engines.bun` is a range shape rigc does not read, so whether this Bun satisfies it was not guessed | run the bin yourself (`bunx rig-review …` from the project), or a rigc that reads that shape |
+| `rigc review: argument N is empty, and Bun <version>, the Bun running this, drops an empty argument when it starts a process — …` | an `""` argument under a Bun that would drop it (Bun 1.2.0), measured by a probe | give it a value, or run rigc under a Bun that keeps it |
 
 Pick the profile deliberately, and know which one you got by saying nothing. The
 default is `spine`: "is this valid Spine 4.3 that any runtime plays correctly",

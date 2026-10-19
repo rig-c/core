@@ -1242,7 +1242,11 @@ bun cli.ts pose     --images path/to/parts --frame poseA.png [--out pose.json]
   gate can know you did not mean them. `render` writes
   `render/<animation>/f0000.png…` with a `contact.png` grid of **every** frame
   beside them (open that one first — spacing is a comparison across frames) and a
-  `frames.json` sidecar naming the world box they are pictures of. `contact.png`
+  `frames.json` sidecar naming the world box they are pictures of. It also says
+  whether the physics ran: under each set's line, `physics: N constraint(s)
+  stepped at <fps> fps`, and the same two figures on that set in `frames.json` —
+  or, once, `physics: none in this rig` for a rig that declares no physics
+  constraint (§8.4). `contact.png`
   is for spacing across frames; a defect is read on **one frame at full size**,
   because a tile is too small to say which part a pixel belongs to. When a frame
   looks wrong, render it again with `--hide <slot>` — the **largest attachment**
@@ -8503,6 +8507,34 @@ alone — under a calm → gust → calm schedule through both, and holds every 
 from its own frame and no earlier (`RE02`); and plants on the core the readings the
 mapping rejects — the schedule ignored, its y read up, each change a frame late or
 early — each red against spine-core (`RE03`).
+
+**Whether the physics ran.** Every render — with this flag or without — says, under
+each set's line, how many physics constraints the poser stepped on at least one of
+its frames, and at what rate:
+
+```text
+  ..    idle             25 frame(s), 2.000s + contact.png -> render/idle
+  ..    physics: 3 constraint(s) stepped at 12 fps
+```
+
+and `frames.json` carries the same two figures on that set, `"physics": { "stepped":
+3, "fps": 12 }`. The rate is the set's own: one physics update a frame. The count is
+read off the posed state, not off the declaration: a constraint counts when, after
+a step that moved the skeleton's clock, its own clock reads the skeleton's — which
+the physics update sets and every way of not running leaves behind. So a constraint
+that is inactive on every frame, or at a mix of 0, is not counted, and the line names
+it: `physics: 0 constraint(s) stepped at 12 fps — 1 of the 1 declared took none:
+"iris_settle" (inactive, or a mix of 0, on every frame)`; a set of one pose — an
+animation of no length, or the setup pose of a skeleton with none — takes no step
+and says so. A rig that declares no physics constraint prints `physics: none in this
+rig — it declares no physics constraint, so no frame steps one` once, before the
+sets, and its `frames.json` carries no `physics` field, as every frame set written
+before the field existed carries none. This is what tells a reading — a fold count
+from `--folds`, say (§8.3) — taken with the physics from one taken without. Both
+posers read the same constraints on every frame, and `cli.ts`, `cli.ts --poser
+spine` and `cli_core.ts` write the same files (`PH01`, `PH02`); the step removed —
+on the core, or spine-core's `PhysicsConstraint.update` made a no-op — reads 0
+(`PH03`), and a constraint at mix 0 is named (`PH04`).
 
 **The files.** `frames.json` and each `geometry.json` record the schedule as
 `environment`, its steps as read, `t`, `wind`, `gravity` in that order. The

@@ -2240,6 +2240,39 @@ function resolveDelegate(name: string): string | null {
 }
 
 /**
+ * Whether the Bun running this hands an empty argument to a process it starts
+ * (issue #1465). Bun 1.2.0 — the declared minimum — does not: `["a", "", "b"]`
+ * reaches the child as `["a", "b"]`, through `spawnSync` and `Bun.spawnSync`
+ * alike and whatever the child is; 1.4.2 hands it over. That is measured here
+ * rather than read off a version number, by starting this Bun twice with
+ * `-e` and comparing how many arguments arrived: `[pad, "x"]` and
+ * `[pad, "", "x"]` differ by one exactly where the empty one survives. The pad
+ * is there because 1.2.0's `-e` also swallows the first argument after the
+ * script; it is the same on both runs, so the difference is the empty one's.
+ */
+export function spawnKeepsEmptyArguments(): boolean {
+  const count = (args: string[]): string =>
+    spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.argv.length))', ...args], { encoding: 'utf8' }).stdout;
+  return Number(count(['pad', '', 'x'])) === Number(count(['pad', 'x'])) + 1;
+}
+
+/**
+ * The refusal for a delegated command line this Bun cannot hand over whole, or
+ * `null` (issue #1465): an empty argument, under a Bun that drops one, would
+ * reach the package with the others and nothing would say so. `keeps` is asked
+ * only when there is an empty argument, so a command line without one never
+ * starts the probe.
+ */
+export function emptyArgumentRefusal(pkg: string, raw: readonly string[], keeps: () => boolean, bun: string): string | null {
+  const at = raw.indexOf('');
+  if (at < 0 || keeps()) return null;
+  return (
+    `argument ${at + 1} is empty, and Bun ${bun}, the Bun running this, drops an empty argument when it starts a process — ` +
+    `${pkg} would receive the others without it, and nothing would say so. Give it a value, or run rigc under a Bun that keeps it`
+  );
+}
+
+/**
  * A delegating command's body (`CommandDoc.delegate`, issue #1457): resolve the
  * package's bin and run it under the Bun running this — the bin is a Bun script
  * — with every argument untouched and stdio inherited, then exit with its code,
@@ -2261,6 +2294,8 @@ function cmdDelegate(command: string, raw: readonly string[]): void {
       2,
     );
   }
+  const dropped = emptyArgumentRefusal(delegate.package, raw, spawnKeepsEmptyArguments, process.versions.bun ?? 'unknown');
+  if (dropped !== null) throw new DelegateError(dropped, 2);
   const ran = spawnSync(process.execPath, [bin, ...raw], { stdio: 'inherit' });
   // ⚠️ The exit and the signal are read before `error`: Bun 1.2.0 — the declared minimum — sets `error` on every
   // child that exits non-zero, so reading it first refused review's own exit 7 as "could not run". `error` is a

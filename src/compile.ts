@@ -18,7 +18,7 @@
  * the two emits byte for byte (assertion A18).
  */
 import { basename, dirname, join, relative, resolve } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { readPngHeader, readPngInfo } from './png.ts';
 import {
   DEPTH_TONE_IDENTITY,
@@ -1649,8 +1649,62 @@ function easingCurve(
 // inputs
 // ---------------------------------------------------------------------------
 
-function readJson<T>(path: string): T {
+/**
+ * Which input a JSON path was given as, for the refusal a directory gets: the
+ * flag that named it, the file it wants, and whether a file's contents read as
+ * one (`null` where no parser exists here — the manifest is cast, not parsed).
+ */
+interface JsonInputRole {
+  flag: '--rig' | '--motion' | '--manifest';
+  wants: string;
+  reads: ((raw: unknown, where: string) => unknown) | null;
+}
+
+const RIG_INPUT: JsonInputRole = { flag: '--rig', wants: 'the rig spec file', reads: parseRigSpec };
+const MOTION_INPUT: JsonInputRole = { flag: '--motion', wants: 'the motion spec file', reads: parseMotionSpec };
+const MANIFEST_INPUT: JsonInputRole = { flag: '--manifest', wants: 'the cut manifest file', reads: null };
+
+/** The most `.json` names a directory refusal lists before it says how many there are. */
+const LISTED_JSON_NAMES = 8;
+
+/**
+ * The refusal for an input flag that names a directory (issue #1466): what the
+ * flag wants, and what the directory holds — the one file there that reads as
+ * that input, named by its path, or every `.json` there when that is not
+ * exactly one. Nothing is accepted on the strength of it: the caller is told
+ * the path, and the compile still reads only what it was given. The names are
+ * sorted, so the sentence is the same on every machine.
+ */
+function directoryInputRefusal(dir: string, role: JsonInputRole): string {
+  const head = `${role.flag} names a directory; it wants ${role.wants} —`;
+  const names = readdirSync(dir)
+    .filter((name) => name.endsWith('.json') && statSync(join(dir, name)).isFile())
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (names.length === 0) return `${head} ${dir} holds no .json file`;
+  const reading = names.filter((name) => {
+    if (role.reads === null) return true;
+    const file = join(dir, name);
+    try {
+      role.reads(parseJsonWithPosition(readFileSync(file, 'utf8')), file);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (reading.length === 1) return `${head} ${join(dir, reading[0])} exists there`;
+  const listed = (list: string[]): string =>
+    list.slice(0, LISTED_JSON_NAMES).join(', ') + (list.length > LISTED_JSON_NAMES ? `, … ${list.length} in all` : '');
+  if (reading.length === 0) {
+    return `${head} ${dir} holds ${names.length} .json file(s) and none reads as one: ${listed(names)}`;
+  }
+  return `${head} ${reading.length} .json files in ${dir} read as one, so name it: ${listed(reading)}`;
+}
+
+function readJson<T>(path: string, role: JsonInputRole): T {
   let text: string;
+  if (existsSync(path) && statSync(path).isDirectory()) {
+    throw new CompileError(directoryInputRefusal(path, role), 'CE_COMPILE_JSON_READ_FAILED');
+  }
   try {
     text = readFileSync(path, 'utf8');
   } catch (err) {
@@ -2309,11 +2363,11 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
   const manifestPath = opts.manifestPath === undefined ? null : resolve(opts.manifestPath);
   const manifestDir = manifestPath === null ? null : dirname(manifestPath);
 
-  const rig = parseRigSpec(readJson<unknown>(rigPath), rigPath);
+  const rig = parseRigSpec(readJson<unknown>(rigPath, RIG_INPUT), rigPath);
   // Parsed, not cast, since issue #307 — `src/motion.ts` states what it proves
   // and which refusals it deliberately leaves in this file.
-  const motion = parseMotionSpec(readJson<unknown>(motionPath), motionPath);
-  const manifest = manifestPath === null ? null : readJson<FaceManifest>(manifestPath);
+  const motion = parseMotionSpec(readJson<unknown>(motionPath, MOTION_INPUT), motionPath);
+  const manifest = manifestPath === null ? null : readJson<FaceManifest>(manifestPath, MANIFEST_INPUT);
   // The manifest is the record of what was measured, and its numbers become
   // bone positions and the stage: a `crop.h` of 1e309 built as `"height": null`
   // before issue #881. The rig spec's walk is `parseRigSpec`'s; this is the

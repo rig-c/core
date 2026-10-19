@@ -1351,7 +1351,7 @@ export function cmdExplain(flags: Record<string, string>): void {
   const leverFold = flags['lever-fold'] === undefined ? null : Number(flags['lever-fold']);
   const leverWhy = leverFold === null ? null : leverFractionWhy(leverFold);
   if (leverWhy !== null) throw new UsageError(`--lever-fold ${JSON.stringify(flags['lever-fold'])}: ${leverWhy}`);
-  const { label, opts } = resolveCut(flags);
+  const { label, opts } = resolveCut(flags, 'explain');
   console.log(`rigc explain ${label}`);
   // See the identical pair of lines in `cmdBuild` for why both paths are named
   // here rather than only the one the header's `label` happens to carry.

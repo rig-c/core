@@ -69256,6 +69256,140 @@ function runCliSuite(): number {
 }
 
 /**
+ * BU01–BU07: `build`'s two refusals of its own invocation that name the remedy (issue #1466).
+ *
+ * An input flag naming a directory read it as a file and died on the runtime's `EISDIR`; the refusal now says what
+ * the flag wants and what the directory holds — the one file there that reads as that input, by its real path, or
+ * every `.json` there when that is not exactly one. A spelled-out cut missing `--out` printed its one line and then
+ * the whole command catalogue under it; the line now stands alone. BU07 is the positive control: the same files,
+ * named as files, build green.
+ */
+function runBuildRefusalSuite(): number {
+  console.log('\n── build refusals: a directory input and a missing --out, named with the remedy (issue #1466) ──');
+  let bad = 0;
+  const say = (name: string, ok: boolean, detail: string, why: string): void => {
+    bad += reportCase(name, ok, detail, why);
+  };
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-build-refusal-suite-'));
+  const rigText = readFileSync(join(import.meta.dir, 'gallery', 'nod', 'rig.json'), 'utf8');
+  const motionText = readFileSync(join(import.meta.dir, 'gallery', 'nod', 'motion.json'), 'utf8');
+  const lay = (dir: string, files: Record<string, string>): string => {
+    const at = join(work, dir);
+    mkdirSync(at, { recursive: true });
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(at, name), text);
+    return at;
+  };
+  // What retarget leaves behind: the rig spec and the motion beside it, in one directory.
+  const inputs = lay('inputs', { 'rig.json': rigText, 'motion.json': motionText });
+  const motionFile = join(inputs, 'motion.json');
+  const rigFile = join(inputs, 'rig.json');
+  const run = (entry: string, argv: readonly string[]): { status: number | null; stdout: string; stderr: string } => {
+    const r = spawnSync(process.execPath, [entry, ...argv], { cwd: import.meta.dir, encoding: 'utf8' });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const refusal = (label: string, argv: readonly string[], want: string): string[] => {
+    const r = run('cli.ts', ['build', ...argv, '--out', join(work, `out-${label}`)]);
+    const probes: string[] = [];
+    if (r.status !== 1) probes.push(`${label}: exit ${String(r.status)}, not 1`);
+    const line = `rigc compile error: ${want} (see rigc guide CE_COMPILE_JSON_READ_FAILED)`;
+    if (!r.stderr.split('\n').includes(line)) probes.push(`${label}: stderr has no line ${JSON.stringify(line)}: ${JSON.stringify(r.stderr.trim().slice(-400))}`);
+    if (r.stderr.includes('EISDIR')) probes.push(`${label}: stderr still carries the runtime's EISDIR`);
+    if (existsSync(join(work, `out-${label}`))) probes.push(`${label}: --out was written`);
+    return probes;
+  };
+  const head = (flag: string, wants: string): string => `${flag} names a directory; it wants ${wants} —`;
+
+  {
+    const probes = refusal('one', ['--rig', inputs, '--motion', motionFile], `${head('--rig', 'the rig spec file')} ${rigFile} exists there`);
+    const held = probes.length === 0;
+    say(
+      'BU01_A_RIG_DIRECTORY_HOLDING_ONE_RIG_SPEC_IS_REFUSED_NAMING_THAT_FILE_BY_ITS_PATH',
+      held,
+      probeDetail(held, probes, `--rig ${inputs} (rig.json and motion.json, as retarget reads them): exit 1, the line names ${rigFile} — motion.json does not read as a rig spec, so it is not offered`),
+      'issue #1466: five of nine examinees passed retarget\'s --rig <dir> to build and got EISDIR; each recovered by guessing rig.json. The refusal now says the guess',
+    );
+  }
+  {
+    const many = lay('many', { 'b.json': rigText, 'a.json': rigText, 'c.json': '{}' });
+    const probes = refusal('many', ['--rig', many, '--motion', motionFile], `${head('--rig', 'the rig spec file')} 2 .json files in ${many} read as one, so name it: a.json, b.json`);
+    const held = probes.length === 0;
+    say(
+      'BU02_A_RIG_DIRECTORY_HOLDING_SEVERAL_RIG_SPECS_LISTS_THEM_SORTED_AND_NOT_THE_FILE_THAT_IS_NOT_ONE',
+      held,
+      probeDetail(held, probes, `--rig on a directory of two rig specs and an empty object: exit 1, the line lists a.json, b.json in that order and leaves c.json out`),
+      'two candidates is a choice the caller makes, not one the compiler guesses — nothing is inferred, so the refusal lists and the compile reads nothing',
+    );
+  }
+  {
+    const none = lay('none', { 'motion.json': motionText, 'notes.json': '[]' });
+    const probes = refusal('none', ['--rig', none, '--motion', motionFile], `${head('--rig', 'the rig spec file')} ${none} holds 2 .json file(s) and none reads as one: motion.json, notes.json`);
+    const held = probes.length === 0;
+    say(
+      'BU03_A_RIG_DIRECTORY_WHOSE_JSON_FILES_ARE_NOT_RIG_SPECS_LISTS_WHAT_IS_THERE',
+      held,
+      probeDetail(held, probes, '--rig on a directory of a motion spec and an array: exit 1, the line says none reads as one and lists both'),
+      'naming a file that is not a rig spec would be a remedy that fails on the next run; what is there is the honest half of the sentence',
+    );
+  }
+  {
+    const empty = lay('empty', {});
+    const probes = refusal('empty', ['--rig', empty, '--motion', motionFile], `${head('--rig', 'the rig spec file')} ${empty} holds no .json file`);
+    const held = probes.length === 0;
+    say(
+      'BU04_A_RIG_DIRECTORY_HOLDING_NO_JSON_SAYS_SO',
+      held,
+      probeDetail(held, probes, '--rig on an empty directory: exit 1, the line says it holds no .json file'),
+      'the third shape of the directory, so that every directory reaches a sentence and none reaches EISDIR',
+    );
+  }
+  {
+    const probes = refusal('motion', ['--rig', rigFile, '--motion', inputs], `${head('--motion', 'the motion spec file')} ${motionFile} exists there`);
+    const held = probes.length === 0;
+    say(
+      'BU05_A_MOTION_DIRECTORY_IS_REFUSED_NAMING_THE_ONE_MOTION_SPEC_IN_IT',
+      held,
+      probeDetail(held, probes, `--motion ${inputs}: exit 1, the line names ${motionFile} — rig.json does not read as a motion spec`),
+      'retarget\'s directory holds both inputs, so the flag beside --rig takes the same mistake and gets the same sentence, read by its own parser',
+    );
+  }
+  {
+    const probes: string[] = [];
+    const want = 'rigc: build needs --out <dir> (or --cut <name> --cuts <cuts.json>)';
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const r = run(entry, ['build', '--rig', rigFile, '--motion', motionFile]);
+      const lines = r.stderr.split('\n').filter((line) => line.trim() !== '');
+      if (r.status !== 2) probes.push(`${entry}: exit ${String(r.status)}, not 2`);
+      if (lines.length !== 1 || lines[0] !== want) probes.push(`${entry}: stderr is ${lines.length} line(s), not the one ${JSON.stringify(want)}: ${JSON.stringify(r.stderr.slice(0, 200))}`);
+      if (r.stderr.includes('usage:') || r.stderr.includes('rigc — the rig compiler')) probes.push(`${entry}: the command catalogue follows the line`);
+      if (r.stdout !== '') probes.push(`${entry}: stdout is not empty: ${JSON.stringify(r.stdout.slice(0, 120))}`);
+    }
+    const held = probes.length === 0;
+    say(
+      'BU06_BUILD_WITHOUT_OUT_PRINTS_ONE_LINE_NAMING_IT_AND_EXIT_2_WITH_NO_CATALOGUE',
+      held,
+      probeDetail(held, probes, `build --rig --motion with no --out, on both entries: exit 2, stderr is exactly ${JSON.stringify(want)}, stdout empty`),
+      'issue #1466: the line naming --out was the first of 147 and the catalogue under it buried it; a missing flag is one line, the way a pose refusal is',
+    );
+  }
+  {
+    const out = join(work, 'out-files');
+    const r = run('cli.ts', ['build', '--rig', join('gallery', 'nod', 'rig.json'), '--motion', join('gallery', 'nod', 'motion.json'), '--out', out]);
+    const probes: string[] = [];
+    if (r.status !== 0) probes.push(`exit ${String(r.status)}: ${r.stderr.trim().slice(-300)}`);
+    if (!existsSync(join(out, 'skeleton.json'))) probes.push('no skeleton.json was written');
+    const held = probes.length === 0;
+    say(
+      'BU07_THE_SAME_INPUTS_NAMED_AS_FILES_BUILD_GREEN',
+      held,
+      probeDetail(held, probes, 'gallery/nod\'s rig.json and motion.json named as files, with --out: exit 0 and the skeleton written'),
+      'the positive control: the directory check stands before the read and takes nothing from a file path, so a correct invocation is the build it was',
+    );
+  }
+  rmSync(work, { recursive: true, force: true });
+  return bad;
+}
+
+/**
  * RV01–RV03: `rigc review` hands its arguments to `@rig-c/review`'s bin, or refuses by name (issue #1457).
  *
  * The package itself is never installed here: a stub with the same name and bin stands in for it, echoing the
@@ -140366,6 +140500,7 @@ function main(): void {
   tally.of('error-attribution', runErrorAttributionSuite);
   const motion = tally.of('motion-parse', runMotionParseSuite, { failures: (value) => value.failures });
   tally.of('cli', runCliSuite);
+  tally.of('build-refusals', runBuildRefusalSuite);
   const launcherBad = tally.of('bin-launcher', runLauncherSuite, { ran: ranIt });
   tally.of('editor-roundtrip', runEditorRoundtripSuite);
   tally.of('shipped-doc', runShippedDocSuite);

@@ -126,6 +126,37 @@ interface FirstLink {
   point: readonly [number, number];
 }
 
+/**
+ * Every number a stop's refusal prints, in one place (issue #1463). How it is
+ * printed depends on what the number is to the author:
+ *
+ *   - `stated` — a value the author typed (`inward`, `outward`, `at`), echoed
+ *     exactly as JavaScript reads it back, so it can be found in the rig spec.
+ *     It is never rounded: two stated ends 2.60251 and 2.60249 would both print
+ *     2.603, and the refusal would read "2.603 is greater than 2.603";
+ *   - `reading` — a figure the expansion derived (a hang, a world position, a
+ *     rest angle), at the three decimals the compiler's other degree refusals
+ *     print, rounded to nearest;
+ *   - `past` — a figure refused for lying past ±180°, rounded **away from
+ *     zero**, so it never prints on the bound: 180.0000001 prints 180.001,
+ *     not 180.000, which would read as inside the range;
+ *   - `remedy` — a figure the refusal offers the author to state ("at most",
+ *     "at least", "within"), rounded **toward zero**, so stating the printed
+ *     value is accepted rather than refused again by the digits dropped.
+ *
+ * The rule is that rounding never moves a figure across the line the
+ * refusal is about: a `past` figure stays past it, a `remedy` stays inside.
+ */
+function stopFigure(v: number, how: 'stated' | 'reading' | 'past' | 'remedy'): string {
+  if (how === 'stated') return String(v);
+  const near = Number(v.toFixed(3));
+  let r = near;
+  if (how === 'past' && Math.abs(near) < Math.abs(v)) r = near + Math.sign(v) * 0.001;
+  if (how === 'remedy' && Math.abs(near) > Math.abs(v)) r = near - Math.sign(v) * 0.001;
+  const text = r.toFixed(3);
+  return text === '-0.000' ? '0.000' : text;
+}
+
 /** An angle in (-540, 540) brought into (-180, 180] by at most one whole turn. */
 function halfTurn(deg: number): number {
   if (deg > 180) return deg - 360;
@@ -216,7 +247,7 @@ export function expandStops(spec: RigSpec, where: string, plant: StopPlant = {})
       }
       if (out.inward > out.outward) {
         throw new CompileError(
-          `${who}: "${field}inward" ${out.inward} is greater than "${field}outward" ${out.outward} — the range is [inward, outward] in degrees counted positive away from "${against}", and this one holds no angle`, 'CE_STOP_RANGE_REVERSED',
+          `${who}: "${field}inward" ${stopFigure(out.inward, 'stated')} is greater than "${field}outward" ${stopFigure(out.outward, 'stated')} — the range is [inward, outward] in degrees counted positive away from "${against}", and this one holds no angle`, 'CE_STOP_RANGE_REVERSED',
         );
       }
       return out;
@@ -350,15 +381,16 @@ export function expandStops(spec: RigSpec, where: string, plant: StopPlant = {})
     const e = stop[end];
     const off = Math.abs(rest);
     const sum = off + e;
+    const position = (p: readonly number[], how: 'stated' | 'reading'): string => p.map((v) => stopFigure(v, how)).join(', ');
     const geometry =
-      `. "${stop.links[0]}" hangs at ${at.hang}° from its root at [${at.root.join(', ')}], and "${stop.names.point}" ("at" [${stop.at.join(', ')}] on "${stop.against}") ` +
-      `sits at [${at.point.join(', ')}] — Spine world, y up, at the setup pose — so the aim from that root to the point lies ${off}° off the hang (rest ${rest}°): ` +
-      `|rest| ${off}° + "${end}" ${e}° is ${sum}°`;
-    if (sum < -BOUND) return `${geometry}, below -${BOUND}°. State "${end}" at least ${-BOUND - off}°`;
+      `. "${stop.links[0]}" hangs at ${stopFigure(at.hang, 'reading')}° from its root at [${position(at.root, 'reading')}], and "${stop.names.point}" ("at" [${position(stop.at, 'stated')}] on "${stop.against}") ` +
+      `sits at [${position(at.point, 'reading')}] — Spine world, y up, at the setup pose — so the aim from that root to the point lies ${stopFigure(off, 'reading')}° off the hang (rest ${stopFigure(rest, 'reading')}°): ` +
+      `|rest| ${stopFigure(off, 'reading')}° + "${end}" ${stopFigure(e, 'stated')}° is ${stopFigure(sum, 'past')}°`;
+    if (sum < -BOUND) return `${geometry}, below -${BOUND}°. State "${end}" at least ${stopFigure(-BOUND - off, 'remedy')}°`;
     if (e >= BOUND) return `${geometry}, above ${BOUND}°, and no point lowers it: |rest| is above 0° for every point a stop accepts. State "${end}" below ${BOUND}°`;
     return (
-      `${geometry}, above ${BOUND}°. Move "${stop.names.point}" to within ${BOUND - e}° (${BOUND}° − "${end}") of the direction "${stop.links[0]}" hangs in from its root, ${at.hang}°, ` +
-      `or state "${end}" at most ${BOUND - off}°`
+      `${geometry}, above ${BOUND}°. Move "${stop.names.point}" to within ${stopFigure(BOUND - e, 'remedy')}° (${BOUND}° − "${end}") of the direction "${stop.links[0]}" hangs in from its root, ${stopFigure(at.hang, 'reading')}°, ` +
+      `or state "${end}" at most ${stopFigure(BOUND - off, 'remedy')}°`
     );
   };
   const bounds = (stop: ReadStop, rest: number, sign: number, range: { inward: number; outward: number }, field: string, what: string, first?: FirstLink): [number, number] => {
@@ -368,7 +400,7 @@ export function expandStops(spec: RigSpec, where: string, plant: StopPlant = {})
       if (Math.abs(value) > BOUND) {
         const why = first === undefined ? '' : aimed(stop, rest, end, first);
         throw new CompileError(
-          `${stop.who}: "${field}${end}" ${range[end]} puts ${what}'s bound at ${value}°, past ±${BOUND}° — the clamp reads a local rotation in (-180, 180], so a bound past it is never reached and the range it states is not the one that holds${why}`, 'CE_STOP_LOCAL_BOUND_RANGE',
+          `${stop.who}: "${field}${end}" ${stopFigure(range[end], 'stated')} puts ${what}'s bound at ${stopFigure(value, 'past')}°, past ±${BOUND}° — the clamp reads a local rotation in (-180, 180], so a bound past it is never reached and the range it states is not the one that holds${why}`, 'CE_STOP_LOCAL_BOUND_RANGE',
         );
       }
     }
@@ -422,7 +454,7 @@ export function expandStops(spec: RigSpec, where: string, plant: StopPlant = {})
     const dx = target[0] - linkFrame.worldX;
     const dy = target[1] - linkFrame.worldY;
     if (dx === 0 && dy === 0) {
-      throw new CompileError(`${who}: "at" [${stop.at.join(', ')}] on "${stop.against}" sits on the root of "${links[0]}" at the setup pose — the frame aims from the root at the point, and there is no direction to a point it stands on`, 'CE_STOP_POINT_AT_ROOT');
+      throw new CompileError(`${who}: "at" [${stop.at.map((v) => stopFigure(v, 'stated')).join(', ')}] on "${stop.against}" sits on the root of "${links[0]}" at the setup pose — the frame aims from the root at the point, and there is no direction to a point it stands on`, 'CE_STOP_POINT_AT_ROOT');
     }
     const aim = directionDegrees(dx, dy);
     // Each angle is brought into (-180, 180] by one whole turn at most, so a
@@ -431,7 +463,7 @@ export function expandStops(spec: RigSpec, where: string, plant: StopPlant = {})
     const rest = halfTurn(halfTurn(linkFrame.worldRotation) - aim);
     if (rest === 0) {
       throw new CompileError(
-        `${who}: "at" [${stop.at.join(', ')}] on "${stop.against}" lies on "${links[0]}"'s own line at the setup pose — inward is the turn from the link toward the point, and a point on the link's line has no side`, 'CE_STOP_POINT_ON_LINK_LINE',
+        `${who}: "at" [${stop.at.map((v) => stopFigure(v, 'stated')).join(', ')}] on "${stop.against}" lies on "${links[0]}"'s own line at the setup pose — inward is the turn from the link toward the point, and a point on the link's line has no side`, 'CE_STOP_POINT_ON_LINK_LINE',
       );
     }
     // Inward turns the link toward the aim line: counter-clockwise when the link

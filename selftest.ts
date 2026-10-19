@@ -1756,6 +1756,30 @@ function unitLabel(unit: ParallelUnit, k: number, of: number): string {
 const SPAWN_MAX_BUFFER = 1024 * 1024;
 
 /**
+ * The argument every `bun -e <source>` call here that hands its program
+ * arguments passes first, before them (issue #1482). Bun 1.2.0 — the declared
+ * minimum — puts `[eval]` in `process.argv[1]` and so loses the first argument
+ * after the source (measured: `bun -e … a b` reads `[bun, …/[eval], b]` there and
+ * `[bun, a, b]` on the current Bun). With this one first, the arguments the
+ * program reads sit from `process.argv[2]` on both, so every such program reads
+ * `process.argv.slice(2)` or the last element, never `process.argv[1]`.
+ */
+const EVAL_ARGV_SLOT = '[eval]';
+
+/**
+ * `process.resourceUsage`, or `null` on a Bun that has none (issue #1482):
+ * measured absent on Bun 1.2.0, the declared minimum, where a child's
+ * `resourceUsage()` from `Bun.spawn` is there. A process that cannot read its
+ * own peak reports none (`null`) rather than a figure, and a control that has
+ * to read it says it did not (`TY40`).
+ */
+const PROCESS_RESOURCE_USAGE: (() => { maxRSS: number }) | null = ((): (() => { maxRSS: number }) | null => {
+  const runtime: { resourceUsage?: () => { maxRSS: number } } = process;
+  const read = runtime.resourceUsage;
+  return read === undefined ? null : () => read.call(process);
+})();
+
+/**
  * The child that runs a batch of units concurrently (issue #1128). This file is
  * synchronous from `main` down — every suite returns its count, and `tally.of`
  * brackets a call — so the one way to wait on several processes from inside a
@@ -1845,7 +1869,7 @@ function inParallel(units: readonly ParallelUnit[], jobs: number = JOBS, driverS
     const specPath = join(dir, 'units.json');
     const out = join(dir, 'results.json');
     writeFileSync(specPath, JSON.stringify({ jobs, out, calibrationBytes: CALIBRATION_BYTES, units: units.map((unit) => ({ argv: unit.argv, cwd: unit.cwd })) }));
-    const driver = spawnSync(process.execPath, ['-e', driverSource, specPath], { encoding: 'utf8' });
+    const driver = spawnSync(process.execPath, ['-e', driverSource, EVAL_ARGV_SLOT, specPath], { encoding: 'utf8' });
     if (driver.status !== 0 || !existsSync(out)) {
       throw new Error(`inParallel: the unit driver exited ${String(driver.status)} over ${units.length} unit(s) and wrote ${existsSync(out) ? 'its results' : 'nothing'}: ${driver.stderr.trim().slice(0, 300)}`);
     }
@@ -15992,6 +16016,22 @@ function copyValueImportClosure(root: string, entry: string, dest: string): void
 const ROW_ANCHOR = '(?:<a id="[^"]*"><\\/a>)?';
 function ruleRowOf(line: string, code: string): boolean {
   return new RegExp(`^\\| ${ROW_ANCHOR}\`${code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` \\|`).test(line);
+}
+
+/**
+ * Whether a `node:child_process` spawn really failed, rather than ran and exited
+ * non-zero (issue #1482). Bun 1.2.0 — the declared minimum — sets `error` on
+ * every child that exits non-zero: an error with an empty message whose `code`
+ * is the exit status (measured: `sh -c 'exit 1'` → `code` 1, `errno` -1). Read
+ * as a failed spawn, that turns every control that accepts a non-zero exit as
+ * an answer red on that Bun alone. Exactly that shape is set aside; any other
+ * `error` (ENOENT, ENOBUFS, a timeout) is a failure, as on the current Bun,
+ * where an exit with a status carries no `error` at all.
+ */
+function spawnFailed(run: { error?: Error; status: number | null }): boolean {
+  if (run.error === undefined) return false;
+  const code: unknown = Reflect.get(run.error, 'code');
+  return !(typeof run.status === 'number' && code === run.status);
 }
 
 function reportCase(name: string, ok: boolean, detail: string, why: string): number {
@@ -75831,6 +75871,42 @@ function closureByDirectory(modules: readonly string[]): string {
   return `src/core/ ${core}, src/assertions/ ${assertions}, src/ ${top.length} [${top.map((m) => m.slice(4)).join(', ')}]${rest > 0 ? `, other src/ subdirectories ${rest}` : ''}, outside src/ ${other.length} [${other.join(', ')}]`;
 }
 
+/**
+ * The runtime's YAML reader, or `null` on a Bun that has none (issue #1482).
+ *
+ * `Bun.YAML` is newer than the declared minimum: measured absent on Bun 1.2.0
+ * (`typeof Bun.YAML` is `undefined`) and present on the Bun this tree is
+ * developed on. No YAML reader is in the dependency tree to fall back to, and a
+ * second parser would change what the workflow controls read — so a control
+ * that reads a workflow as YAML asks `BUN_YAML` first and, without it, prints a
+ * SKIP by name and a HOLE (`reportYamlHole`). A SKIP line is not a control line
+ * to the tally, so the run never counts it as a pass.
+ *
+ * Read through a structural type rather than `Bun.YAML` directly, because the
+ * declarations this tree compiles against say the reader is always there.
+ */
+const BUN_YAML: { parse(input: string): unknown } | null = ((): { parse(input: string): unknown } | null => {
+  const runtime: { YAML?: { parse(input: string): unknown } } = Bun;
+  return runtime.YAML ?? null;
+})();
+
+/**
+ * `BUN_YAML.parse`, throwing by name when the reader is absent. Every caller
+ * sits behind a `BUN_YAML === null` guard; a call that ever reached here
+ * without one would read as that control's "does not parse" FAIL, not a crash
+ * of the whole suite and never a pass.
+ */
+function readYaml(input: string): unknown {
+  if (BUN_YAML === null) throw new Error(`Bun.YAML is absent on Bun ${Bun.version}`);
+  return BUN_YAML.parse(input);
+}
+
+/** The SKIP and HOLE lines of a control that reads a workflow as YAML on a Bun with no `Bun.YAML` (issue #1482). */
+function reportYamlHole(name: string): void {
+  console.log(`  SKIP  ${name}  (Bun.YAML is absent on Bun ${Bun.version}; this control reads the workflows as YAML)`);
+  console.log(`          ⚠️ This is a HOLE in this run, not a pass — run it on a Bun that has Bun.YAML.`);
+}
+
 function runCurrencySuite(): number {
   console.log('\n── what a shipped or landing doc STATES about the tool (issue #360) ──');
   let bad = 0;
@@ -76526,7 +76602,7 @@ function runCurrencySuite(): number {
         // nests under a line planted as a link. No line here nests under
         // another today, and one that did would be redundant with the line
         // above it, so this is reported by name rather than accommodated.
-        if (probe.error !== undefined || (probe.status !== 0 && probe.status !== 1)) {
+        if (spawnFailed(probe) || (probe.status !== 0 && probe.status !== 1)) {
           return { ignored: new Set(), broken: `git check-ignore could not answer for ${kind} (${probe.error?.message ?? `exit ${String(probe.status)}: ${probe.stderr.trim()}`}); this case fails closed rather than reading that as a clean file` };
         }
         return { ignored: new Set(probe.stdout.split('\n').map((l) => l.trim()).filter((l) => l !== '')), broken: null };
@@ -76783,7 +76859,7 @@ function runCurrencySuite(): number {
         maxBuffer: 256 * 1024 * 1024,
       });
       // Exit 1 means "it matched nothing", which is an answer.
-      if (probe.error !== undefined || (probe.status !== 0 && probe.status !== 1)) {
+      if (spawnFailed(probe) || (probe.status !== 0 && probe.status !== 1)) {
         return {
           text: new Set(),
           broke:
@@ -78303,7 +78379,9 @@ function runCurrencySuite(): number {
     // commit, and each alias is this commit's files), and RELEASING.md has to
     // say how to confirm every name. Dropping any one alias from the publish
     // or from either confirmation is planted, once per alias.
-    {
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR122_RELEASE_YML_PUBLISHES_THE_ALIAS_AFTER_THE_GATED_PUBLISH_FROM_THE_TARBALL_IT_COMPARED_AND_CONFIRMS_THE_SAME_ALIAS');
+    } else {
       interface AliasStep {
         name?: string;
         run?: string;
@@ -78316,7 +78394,7 @@ function runCurrencySuite(): number {
         const faults: string[] = [];
         let wf: AliasWorkflow;
         try {
-          wf = Bun.YAML.parse(yml) as AliasWorkflow;
+          wf = readYaml(yml) as AliasWorkflow;
         } catch (error) {
           return [`release.yml does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`];
         }
@@ -78431,163 +78509,167 @@ function runCurrencySuite(): number {
     }
 
     // --- CUR31: the workflow and the document, against those two runs --------
-    const help = smokeWith(null, ['--help']);
-    const confirmationFaults = (yml: string, doc: string, helpText: string): string[] => {
-      const faults: string[] = [];
-      let parsed: Workflow;
-      try {
-        parsed = Bun.YAML.parse(yml) as Workflow;
-      } catch (error) {
-        return [`release.yml does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`];
-      }
-      const jobs = Object.entries(parsed.jobs ?? {});
-      if (jobs.length === 0) return ['release.yml declares no jobs at all, so every clause below would be reading nothing'];
-      const bodyOf = (job: WfJob): string => (job.steps ?? []).map((step) => step.run ?? '').join('\n');
-      const usesOf = (job: WfJob): string => (job.steps ?? []).map((step) => step.uses ?? '').join('\n');
-
-      // 1. A dispatch exists, and it takes the version it is asked to confirm.
-      const dispatch = parsed.on?.workflow_dispatch;
-      const input = dispatch?.inputs?.version;
-      if (dispatch === undefined) {
-        faults.push('release.yml declares no `workflow_dispatch`, so a confirmation whose wait ran out can only be re-taken by publishing again');
-      } else if (input === undefined) {
-        faults.push('`workflow_dispatch` declares no `version` input, so a re-run has nothing to say which cut it is confirming');
-      } else if (input.required !== true) {
-        faults.push('the `version` input is not required, so a dispatch with that field left empty would confirm whatever the checked-out package.json last said');
-      }
-
-      // 2. What a dispatch can reach. The guard is structural — a job that
-      //    publishes has to be held to the push event — rather than a list of
-      //    step names, because a step added tomorrow is exactly what a name
-      //    list cannot see.
-      const publishers = jobs.filter(([, job]) => /npm publish/.test(bodyOf(job)));
-      if (publishers.length !== 1) {
-        faults.push(`${publishers.length} job(s) run \`npm publish\` where exactly one does today — this clause is reading something other than the publish`);
-      }
-      for (const [name, job] of jobs) {
-        const cuts = /npm publish/.test(bodyOf(job)) || /release-please/.test(usesOf(job));
-        const heldToAPush = job.if !== undefined && /github\.event_name\s*==\s*'push'/.test(job.if);
-        if (cuts && !heldToAPush) {
-          faults.push(
-            `job "${name}" publishes or cuts a release and its \`if\` is ${JSON.stringify(job.if ?? null)}, which does not hold it to a push — a workflow_dispatch would reach it`,
-          );
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR31_THE_RELEASE_WORKFLOW_CALLS_THE_CONFIRMATION_AS_ITS_DOCUMENT_STATES_AND_A_DISPATCH_REACHES_NOTHING_ELSE');
+    } else {
+      const help = smokeWith(null, ['--help']);
+      const confirmationFaults = (yml: string, doc: string, helpText: string): string[] => {
+        const faults: string[] = [];
+        let parsed: Workflow;
+        try {
+          parsed = readYaml(yml) as Workflow;
+        } catch (error) {
+          return [`release.yml does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`];
         }
-      }
+        const jobs = Object.entries(parsed.jobs ?? {});
+        if (jobs.length === 0) return ['release.yml declares no jobs at all, so every clause below would be reading nothing'];
+        const bodyOf = (job: WfJob): string => (job.steps ?? []).map((step) => step.run ?? '').join('\n');
+        const usesOf = (job: WfJob): string => (job.steps ?? []).map((step) => step.uses ?? '').join('\n');
 
-      // 3. Every call of the confirmation, and the flags the document states.
-      const calls: Array<{ job: string; argv: string[]; timeout: number | undefined }> = [];
-      for (const [name, job] of jobs) {
-        for (const step of job.steps ?? []) {
-          const line = (step.run ?? '').split('\n').map((one) => one.trim()).find((one) => one.startsWith('bun run smoke'));
-          if (line === undefined) continue;
-          calls.push({ job: name, argv: line.split(/\s+/).slice(4), timeout: job['timeout-minutes'] });
+        // 1. A dispatch exists, and it takes the version it is asked to confirm.
+        const dispatch = parsed.on?.workflow_dispatch;
+        const input = dispatch?.inputs?.version;
+        if (dispatch === undefined) {
+          faults.push('release.yml declares no `workflow_dispatch`, so a confirmation whose wait ran out can only be re-taken by publishing again');
+        } else if (input === undefined) {
+          faults.push('`workflow_dispatch` declares no `version` input, so a re-run has nothing to say which cut it is confirming');
+        } else if (input.required !== true) {
+          faults.push('the `version` input is not required, so a dispatch with that field left empty would confirm whatever the checked-out package.json last said');
         }
-      }
-      if (calls.length < 2) {
-        faults.push(`${calls.length} step(s) call \`bun run smoke\`, and the cut's own path and the re-run path are two — a confirmation on one path only is the one that cannot be re-taken`);
-      }
-      const after = (argv: readonly string[], name: string): string | null => {
-        const at = argv.indexOf(name);
-        return at === -1 || at === argv.length - 1 ? null : argv[at + 1];
+
+        // 2. What a dispatch can reach. The guard is structural — a job that
+        //    publishes has to be held to the push event — rather than a list of
+        //    step names, because a step added tomorrow is exactly what a name
+        //    list cannot see.
+        const publishers = jobs.filter(([, job]) => /npm publish/.test(bodyOf(job)));
+        if (publishers.length !== 1) {
+          faults.push(`${publishers.length} job(s) run \`npm publish\` where exactly one does today — this clause is reading something other than the publish`);
+        }
+        for (const [name, job] of jobs) {
+          const cuts = /npm publish/.test(bodyOf(job)) || /release-please/.test(usesOf(job));
+          const heldToAPush = job.if !== undefined && /github\.event_name\s*==\s*'push'/.test(job.if);
+          if (cuts && !heldToAPush) {
+            faults.push(
+              `job "${name}" publishes or cuts a release and its \`if\` is ${JSON.stringify(job.if ?? null)}, which does not hold it to a push — a workflow_dispatch would reach it`,
+            );
+          }
+        }
+
+        // 3. Every call of the confirmation, and the flags the document states.
+        const calls: Array<{ job: string; argv: string[]; timeout: number | undefined }> = [];
+        for (const [name, job] of jobs) {
+          for (const step of job.steps ?? []) {
+            const line = (step.run ?? '').split('\n').map((one) => one.trim()).find((one) => one.startsWith('bun run smoke'));
+            if (line === undefined) continue;
+            calls.push({ job: name, argv: line.split(/\s+/).slice(4), timeout: job['timeout-minutes'] });
+          }
+        }
+        if (calls.length < 2) {
+          faults.push(`${calls.length} step(s) call \`bun run smoke\`, and the cut's own path and the re-run path are two — a confirmation on one path only is the one that cannot be re-taken`);
+        }
+        const after = (argv: readonly string[], name: string): string | null => {
+          const at = argv.indexOf(name);
+          return at === -1 || at === argv.length - 1 ? null : argv[at + 1];
+        };
+        const waits = new Set<string>();
+        for (const call of calls) {
+          if (after(call.argv, '--source') !== 'registry') faults.push(`the smoke call in job "${call.job}" does not pass \`--source registry\`, so it confirms a tarball this tree packed rather than the published one`);
+          if (after(call.argv, '--version') === null) faults.push(`the smoke call in job "${call.job}" passes no \`--version\``);
+          if (after(call.argv, '--case') !== 'clean') faults.push(`the smoke call in job "${call.job}" does not pass \`--case clean\`, so a cut would run the plants against the published package`);
+          const wait = after(call.argv, '--wait');
+          if (wait === null) {
+            faults.push(`the smoke call in job "${call.job}" passes no \`--wait\`, so how long a cut waits for the registry is not readable in the file whose own timeout has to cover it`);
+            continue;
+          }
+          waits.add(wait);
+          const minutes = Number(wait);
+          if (!Number.isFinite(minutes) || minutes <= 0) {
+            faults.push(`the smoke call in job "${call.job}" waits ${JSON.stringify(wait)}, which is not a number of minutes`);
+          } else if (call.timeout === undefined || call.timeout <= minutes) {
+            faults.push(
+              `job "${call.job}" waits ${wait} min for the registry under a timeout-minutes of ${String(call.timeout)}, so the job is cancelled before its own wait can end — and a cancelled job is neither of the two outcomes`,
+            );
+          }
+        }
+        if (waits.size > 1) faults.push(`the confirmation is called with ${[...waits].join(' and ')} minute(s) of wait on different paths, so a re-run does not wait the way the cut did`);
+
+        // 4. The document, against the workflow and against the script's own
+        //    `--help`, and never against a figure written here.
+        for (const wait of waits) {
+          if (!doc.includes(`--wait ${wait}`)) faults.push(`the workflow waits ${wait} min for the registry and RELEASING.md states no \`--wait ${wait}\``);
+        }
+        const codes = [...helpText.matchAll(/^ {2}(\d)\s{2}\S/gm)].map((found) => found[1]);
+        if (codes.length < 4) {
+          faults.push(`\`--help\` lists ${codes.length} exit code(s) where the script distinguishes four — this clause is reading the wrong block`);
+        }
+        for (const code of codes) {
+          if (!new RegExp(`^\\|\\s*\`${code}\`\\s*\\|`, 'm').test(doc)) faults.push(`the script's \`--help\` lists exit code ${code} and RELEASING.md has no row for it`);
+        }
+        for (const found of doc.matchAll(/^\|\s*`(\d)`\s*\|/gm)) {
+          if (!codes.includes(found[1])) faults.push(`RELEASING.md states an exit code ${found[1]} that the script's \`--help\` does not list`);
+        }
+        // 5. The by-hand command, taken from what the run above PRINTED rather
+        //    than written out here a second time: somebody whose cut timed out is
+        //    sent to this document, and the document has to carry the command the
+        //    tool is offering them.
+        if (byHandPrinted !== '' && !doc.includes(byHandPrinted.split(FAKE).join('<version>'))) {
+          faults.push(`the run whose wait ended offers \`${byHandPrinted}\` and RELEASING.md carries no such line with \`<version>\` in it`);
+        }
+        return faults;
       };
-      const waits = new Set<string>();
-      for (const call of calls) {
-        if (after(call.argv, '--source') !== 'registry') faults.push(`the smoke call in job "${call.job}" does not pass \`--source registry\`, so it confirms a tarball this tree packed rather than the published one`);
-        if (after(call.argv, '--version') === null) faults.push(`the smoke call in job "${call.job}" passes no \`--version\``);
-        if (after(call.argv, '--case') !== 'clean') faults.push(`the smoke call in job "${call.job}" does not pass \`--case clean\`, so a cut would run the plants against the published package`);
-        const wait = after(call.argv, '--wait');
-        if (wait === null) {
-          faults.push(`the smoke call in job "${call.job}" passes no \`--wait\`, so how long a cut waits for the registry is not readable in the file whose own timeout has to cover it`);
+
+      const ymlText = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+      const docText = readFileSync(join(root, 'RELEASING.md'), 'utf8');
+      const standing = confirmationFaults(ymlText, docText, help.out);
+      const jobCount = Object.keys((readYaml(ymlText) as Workflow).jobs ?? {}).length;
+      /** An edit that has to change the text it is given — a plant that planted nothing is a fault of its own. */
+      const plantInto = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
+      const plants: Array<{ what: string; yml: [string, string] | null; doc: [string, string] | null; quiet?: boolean }> = [
+        { what: 'the publishing job stops being held to a push', yml: ["    if: ${{ github.event_name == 'push' }}\n", ''], doc: null },
+        { what: 'the workflow stops taking a dispatch', yml: ['  workflow_dispatch:\n', '  workflow_call:\n'], doc: null },
+        { what: 'the re-run path waits three times as long as the cut did', yml: ['--version "$VERSION" --wait 15', '--version "$VERSION" --wait 45'], doc: null },
+        { what: 'the cut stops passing a wait at all', yml: ['--version "$version" --wait 15 --case clean', '--version "$version" --case clean'], doc: null },
+        { what: 'the re-run stops naming the case', yml: ['--version "$VERSION" --wait 15 --case clean', '--version "$VERSION" --wait 15'], doc: null },
+        { what: 'the publishing job is given a timeout under its own wait', yml: ['    timeout-minutes: 40\n', '    timeout-minutes: 10\n'], doc: null },
+        { what: 'the document states a wait the workflow does not pass', yml: null, doc: ['--wait 15', '--wait 5'] },
+        { what: 'the document drops the row for the not-served exit code', yml: null, doc: ['| `3` |', '| `9` |'] },
+        { what: 'the confirmation job is renamed', yml: ['\n  confirm:\n', '\n  reconfirm:\n'], doc: null, quiet: true },
+      ];
+      const plantProbes: string[] = [];
+      const plantCases: string[] = [];
+      for (const plant of plants) {
+        const yml = plant.yml === null ? ymlText : plantInto(ymlText, plant.yml[0], plant.yml[1]);
+        const doc = plant.doc === null ? docText : plantInto(docText, plant.doc[0], plant.doc[1]);
+        if (yml === null || doc === null) {
+          plantProbes.push(`"${plant.what}": the edit found nothing to change, so this plant was never made`);
           continue;
         }
-        waits.add(wait);
-        const minutes = Number(wait);
-        if (!Number.isFinite(minutes) || minutes <= 0) {
-          faults.push(`the smoke call in job "${call.job}" waits ${JSON.stringify(wait)}, which is not a number of minutes`);
-        } else if (call.timeout === undefined || call.timeout <= minutes) {
-          faults.push(
-            `job "${call.job}" waits ${wait} min for the registry under a timeout-minutes of ${String(call.timeout)}, so the job is cancelled before its own wait can end — and a cancelled job is neither of the two outcomes`,
-          );
+        const raised = raisedBy(confirmationFaults(yml, doc, help.out), { was: standing });
+        if (plant.quiet === true) {
+          if (raised.length > 0) plantProbes.push(`"${plant.what}" changes nothing this gate is about and ${raised.length} fault(s) fired: ${raised[0].slice(0, 160)}`);
+          plantCases.push(`${plant.what} -> quiet`);
+          continue;
         }
+        if (raised.length === 0) plantProbes.push(`"${plant.what}" was planted and this gate did not fire`);
+        plantCases.push(`${plant.what} -> ${raised.length}`);
       }
-      if (waits.size > 1) faults.push(`the confirmation is called with ${[...waits].join(' and ')} minute(s) of wait on different paths, so a re-run does not wait the way the cut did`);
-
-      // 4. The document, against the workflow and against the script's own
-      //    `--help`, and never against a figure written here.
-      for (const wait of waits) {
-        if (!doc.includes(`--wait ${wait}`)) faults.push(`the workflow waits ${wait} min for the registry and RELEASING.md states no \`--wait ${wait}\``);
-      }
-      const codes = [...helpText.matchAll(/^ {2}(\d)\s{2}\S/gm)].map((found) => found[1]);
-      if (codes.length < 4) {
-        faults.push(`\`--help\` lists ${codes.length} exit code(s) where the script distinguishes four — this clause is reading the wrong block`);
-      }
-      for (const code of codes) {
-        if (!new RegExp(`^\\|\\s*\`${code}\`\\s*\\|`, 'm').test(doc)) faults.push(`the script's \`--help\` lists exit code ${code} and RELEASING.md has no row for it`);
-      }
-      for (const found of doc.matchAll(/^\|\s*`(\d)`\s*\|/gm)) {
-        if (!codes.includes(found[1])) faults.push(`RELEASING.md states an exit code ${found[1]} that the script's \`--help\` does not list`);
-      }
-      // 5. The by-hand command, taken from what the run above PRINTED rather
-      //    than written out here a second time: somebody whose cut timed out is
-      //    sent to this document, and the document has to carry the command the
-      //    tool is offering them.
-      if (byHandPrinted !== '' && !doc.includes(byHandPrinted.split(FAKE).join('<version>'))) {
-        faults.push(`the run whose wait ended offers \`${byHandPrinted}\` and RELEASING.md carries no such line with \`<version>\` in it`);
-      }
-      return faults;
-    };
-
-    const ymlText = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8');
-    const docText = readFileSync(join(root, 'RELEASING.md'), 'utf8');
-    const standing = confirmationFaults(ymlText, docText, help.out);
-    const jobCount = Object.keys((Bun.YAML.parse(ymlText) as Workflow).jobs ?? {}).length;
-    /** An edit that has to change the text it is given — a plant that planted nothing is a fault of its own. */
-    const plantInto = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
-    const plants: Array<{ what: string; yml: [string, string] | null; doc: [string, string] | null; quiet?: boolean }> = [
-      { what: 'the publishing job stops being held to a push', yml: ["    if: ${{ github.event_name == 'push' }}\n", ''], doc: null },
-      { what: 'the workflow stops taking a dispatch', yml: ['  workflow_dispatch:\n', '  workflow_call:\n'], doc: null },
-      { what: 'the re-run path waits three times as long as the cut did', yml: ['--version "$VERSION" --wait 15', '--version "$VERSION" --wait 45'], doc: null },
-      { what: 'the cut stops passing a wait at all', yml: ['--version "$version" --wait 15 --case clean', '--version "$version" --case clean'], doc: null },
-      { what: 'the re-run stops naming the case', yml: ['--version "$VERSION" --wait 15 --case clean', '--version "$VERSION" --wait 15'], doc: null },
-      { what: 'the publishing job is given a timeout under its own wait', yml: ['    timeout-minutes: 40\n', '    timeout-minutes: 10\n'], doc: null },
-      { what: 'the document states a wait the workflow does not pass', yml: null, doc: ['--wait 15', '--wait 5'] },
-      { what: 'the document drops the row for the not-served exit code', yml: null, doc: ['| `3` |', '| `9` |'] },
-      { what: 'the confirmation job is renamed', yml: ['\n  confirm:\n', '\n  reconfirm:\n'], doc: null, quiet: true },
-    ];
-    const plantProbes: string[] = [];
-    const plantCases: string[] = [];
-    for (const plant of plants) {
-      const yml = plant.yml === null ? ymlText : plantInto(ymlText, plant.yml[0], plant.yml[1]);
-      const doc = plant.doc === null ? docText : plantInto(docText, plant.doc[0], plant.doc[1]);
-      if (yml === null || doc === null) {
-        plantProbes.push(`"${plant.what}": the edit found nothing to change, so this plant was never made`);
-        continue;
-      }
-      const raised = raisedBy(confirmationFaults(yml, doc, help.out), { was: standing });
-      if (plant.quiet === true) {
-        if (raised.length > 0) plantProbes.push(`"${plant.what}" changes nothing this gate is about and ${raised.length} fault(s) fired: ${raised[0].slice(0, 160)}`);
-        plantCases.push(`${plant.what} -> quiet`);
-        continue;
-      }
-      if (raised.length === 0) plantProbes.push(`"${plant.what}" was planted and this gate did not fire`);
-      plantCases.push(`${plant.what} -> ${raised.length}`);
-    }
-    const confirmationHeld = standing.length === 0 && plantProbes.length === 0;
-    say(
-      'CUR31_THE_RELEASE_WORKFLOW_CALLS_THE_CONFIRMATION_AS_ITS_DOCUMENT_STATES_AND_A_DISPATCH_REACHES_NOTHING_ELSE',
-      confirmationHeld,
-      probeDetail(
+      const confirmationHeld = standing.length === 0 && plantProbes.length === 0;
+      say(
+        'CUR31_THE_RELEASE_WORKFLOW_CALLS_THE_CONFIRMATION_AS_ITS_DOCUMENT_STATES_AND_A_DISPATCH_REACHES_NOTHING_ELSE',
         confirmationHeld,
-        [...standing, ...plantProbes],
-        `release.yml's ${jobCount} job(s) read as a workflow whose publish is held to a push and whose dispatch ` +
-          'takes a required `version`, with every `bun run smoke` call passing the same wait under a timeout that ' +
-          'covers it, and RELEASING.md carrying that wait, a row for each exit code `--help` lists, and the ' +
-          `by-hand command the run above printed — over ${plants.length} plant(s): ${plantCases.join('; ')}`,
-      ),
-      'a `run:` body cannot be red-firsted anywhere, so the wait moved into a script and what stayed in the ' +
-        'workflow is a call. This is what keeps the call honest — and the quiet plant is what says the scan is ' +
-        'structural rather than a search for the job that happens to be named `confirm`',
-    );
+        probeDetail(
+          confirmationHeld,
+          [...standing, ...plantProbes],
+          `release.yml's ${jobCount} job(s) read as a workflow whose publish is held to a push and whose dispatch ` +
+            'takes a required `version`, with every `bun run smoke` call passing the same wait under a timeout that ' +
+            'covers it, and RELEASING.md carrying that wait, a row for each exit code `--help` lists, and the ' +
+            `by-hand command the run above printed — over ${plants.length} plant(s): ${plantCases.join('; ')}`,
+        ),
+        'a `run:` body cannot be red-firsted anywhere, so the wait moved into a script and what stayed in the ' +
+          'workflow is a call. This is what keeps the call honest — and the quiet plant is what says the scan is ' +
+          'structural rather than a search for the job that happens to be named `confirm`',
+      );
+    }
   }
 
   // --- CUR112: the publish gate runs over the corpus CI's gate runs over (#1003)
@@ -78607,7 +78689,9 @@ function runCurrencySuite(): number {
   // `if:` as the publish. A fetch that runs when nothing is being released is
   // a different fault from a missing one, but it is still one: the two steps
   // stop being a pair.
-  {
+  if (BUN_YAML === null) {
+    reportYamlHole('CUR112_THE_PUBLISH_GATE_FETCHES_THE_CORPUS_BEFORE_NPM_PUBLISH_AS_CI_DOES_BEFORE_THE_SELFTEST');
+  } else {
     interface CorpusStep {
       name?: string;
       run?: string;
@@ -78627,7 +78711,7 @@ function runCurrencySuite(): number {
       const faults: string[] = [];
       const parse = (file: string, text: string): CorpusWorkflow | null => {
         try {
-          return Bun.YAML.parse(text) as CorpusWorkflow;
+          return readYaml(text) as CorpusWorkflow;
         } catch (error) {
           faults.push(`${file} does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`);
           return null;
@@ -78849,7 +78933,7 @@ function runCurrencySuite(): number {
       const parsed: Record<string, GraphWorkflow> = {};
       for (const [file, text] of Object.entries(texts)) {
         try {
-          parsed[file] = Bun.YAML.parse(text) as GraphWorkflow;
+          parsed[file] = readYaml(text) as GraphWorkflow;
         } catch (error) {
           faults.push(`${file} does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -79027,7 +79111,9 @@ function runCurrencySuite(): number {
       return { probes, cases };
     };
 
-    {
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR119_RELEASE_YML_RUNS_PLAN_THEN_THE_SHARDED_GATE_ON_THE_TAG_THEN_A_PUBLISH_THAT_READS_ITS_TALLY_AND_A_DISPATCH_REACHES_ONLY_THE_CONFIRMATION');
+    } else {
       const check = (edited: Record<string, string>): string[] =>
         graphFaults(edited['release.yml'] ?? '', Object.fromEntries(Object.entries(edited).filter(([file]) => file !== 'release.yml')));
       const standing = check(texts);
@@ -79062,7 +79148,7 @@ function runCurrencySuite(): number {
         probeDetail(
           held,
           [...standing, ...probes],
-          `release.yml's ${Object.keys((Bun.YAML.parse(releaseText) as GraphWorkflow).jobs ?? {}).length} job(s) read as release-please, then ${SHARDS_FILE} on its tag under ` +
+          `release.yml's ${Object.keys((readYaml(releaseText) as GraphWorkflow).jobs ?? {}).length} job(s) read as release-please, then ${SHARDS_FILE} on its tag under ` +
             'the release condition, then a publish that needs the gate, fetches the corpus and downloads the merged tally before ' +
             '`npm publish`, with RIGC_PREPUBLISH_TALLY on that step alone and `id-token: write` on that job alone, and a dispatch ' +
             `that reaches the confirmation only — over ${cases.length} plant(s): ${cases.join('; ')}`,
@@ -79072,7 +79158,9 @@ function runCurrencySuite(): number {
       );
     }
 
-    {
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR120_CI_AND_RELEASE_CALL_ONE_REUSABLE_SHARDED_GATE_AND_NO_OTHER_WORKFLOW_DEFINES_THE_SHARDS');
+    } else {
       const standing = oneGateFaults(texts);
       const ciText = texts['ci.yml'] ?? '';
       const shardsText = texts[SHARDS_FILE] ?? '';
@@ -79208,7 +79296,9 @@ function runCurrencySuite(): number {
       );
     }
 
-    {
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR125_EVERY_PULL_REQUEST_EVENT_THAT_CAN_CHANGE_THE_SQUASH_TEXT_RUNS_THE_PINNED_PARSER_OVER_IT_THROUGH_THE_ENVIRONMENT');
+    } else {
       const FILE = 'squash-text.yml';
       const PARSER = '@conventional-commits/parser';
       const STEP_RUN = 'bun scripts/commit_parse.ts pr';
@@ -79327,7 +79417,9 @@ function runCurrencySuite(): number {
     // apart — and holds the job: one `ships` in the tree, in the workflow that
     // re-runs on `edited`, installing what the reader imports, handing it the
     // pull request through `env:`, and judging what it printed.
-    {
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR126_SHIPS_JUDGES_THE_SUBJECT_THE_SQUASH_WRITES_READ_FROM_THE_ONE_ASSEMBLY_AND_RERUNS_ON_A_TITLE_EDIT');
+    } else {
       const FILE = 'squash-text.yml';
       const READ = 'bun scripts/commit_parse.ts subject';
       const VERDICT = 'judge "$work/changed" "$subject" "$work/said" "  "';
@@ -79441,7 +79533,9 @@ function runCurrencySuite(): number {
     // with `edited` among its triggers — and that what an edit changes is still
     // what it reads: the title and body through `env:`, appended to what it
     // judges, over a full-history checkout.
-    {
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR127_REMOVALS_RERUNS_ON_AN_EDIT_OF_THE_TITLE_AND_BODY_IT_READS');
+    } else {
       const FILE = 'squash-text.yml';
       const SAID = `printf '%s\\n%s\\n' "$PR_TITLE" "$PR_BODY" >> "$work/said"`;
       const VERDICT = 'judge "$work/gone" "$work/said" "  "';
@@ -83909,7 +84003,7 @@ function runCurrencySuite(): number {
           if (input.endsWith('/layers.json') && !existsSync(dirname(join(dependant, input)))) probes.push(`${input} plant removed its parent directory, so it did not test a missing manifest inside an existing wrapper directory`);
           const missing = spawnSync('sh', ['-c', script], { cwd: candidate, encoding: 'utf8' });
           const named = `FAIL  RELEASE_DEPENDANT_INPUT: ../rig-parts/${input} is missing;`;
-          if (missing.error !== undefined || missing.status !== 1 || !missing.stderr.startsWith(named) || existsSync(marker)) {
+          if (spawnFailed(missing) || missing.status !== 1 || !missing.stderr.startsWith(named) || existsSync(marker)) {
             probes.push(`${input} missing: exit ${String(missing.status)}, comparison reached ${existsSync(marker)}, stderr ${JSON.stringify(missing.stderr)}; required exit 1 naming that path before the comparison`);
           } else cases.push(`${input} missing: named refusal before comparison`);
           supply(input);
@@ -92063,9 +92157,9 @@ function coreUnitWorker(spec: { dir: string; shared: CoreUnitInput; units: CoreU
     writeFileSync(join(spec.dir, `result-${name}.json`), JSON.stringify(result));
     // Issue #1394: the next unit starts on a collected heap, so this worker's peak is a unit's and not its claims' (see `coreUnitBatch`).
     Bun.gc(true);
-    const raw = process.resourceUsage().maxRSS;
-    const scale = maxRssScale(raw, process.memoryUsage().rss);
-    ran.push({ unit: name, seconds: (performance.now() - began) / 1000, maxRss: scale === null ? null : raw * scale });
+    const raw = PROCESS_RESOURCE_USAGE === null ? null : PROCESS_RESOURCE_USAGE().maxRSS;
+    const scale = raw === null ? null : maxRssScale(raw, process.memoryUsage().rss);
+    ran.push({ unit: name, seconds: (performance.now() - began) / 1000, maxRss: raw === null || scale === null ? null : raw * scale });
   }
   return ran;
 }
@@ -130611,16 +130705,23 @@ function runRunTallySuite(live: RunTally): number {
       for (const [raw, rss, want] of scaleProbes) {
         if (maxRssScale(raw, rss) !== want) probes.push(`maxRssScale(${raw}, ${rss}) reads ${String(maxRssScale(raw, rss))} where it is ${String(want)}`);
       }
-      const ownRaw = process.resourceUsage().maxRSS;
-      const ownScale = maxRssScale(ownRaw, process.memoryUsage().rss);
-      if (ownScale === null) probes.push(`this process's maxRSS ${ownRaw} beside its rss ${process.memoryUsage().rss} bytes reads as neither bytes nor KiB`);
+      // Issue #1482: on a Bun with no `process.resourceUsage` this process's own maxRSS cannot be read, and this
+      // control is a SKIP naming that rather than a pass over the rest.
+      const ownUnread = PROCESS_RESOURCE_USAGE === null ? `process.resourceUsage is absent on Bun ${Bun.version}, so this process's own maxRSS unit was not read` : null;
+      if (PROCESS_RESOURCE_USAGE !== null) {
+        const ownRaw = PROCESS_RESOURCE_USAGE().maxRSS;
+        const ownScale = maxRssScale(ownRaw, process.memoryUsage().rss);
+        if (ownScale === null) probes.push(`this process's maxRSS ${ownRaw} beside its rss ${process.memoryUsage().rss} bytes reads as neither bytes nor KiB`);
+      }
       // The live half: every suite so far that measured a child, under its own figure.
       const sofar = childrenCeiling(live.printedRss, entry, process.platform);
       probes.push(...sofar.faults);
       const unheldSoFar = sofar.verdict === 'held' ? sofar.suites.filter((s) => s.bound === null) : [];
       const soFarWords = (suites: readonly SuiteChildrenHeld[]): string => suites.map((s) => `"${s.suite}" ${s.highWater} MB ("${s.unit}")`).join(', ');
       const sofarSkips = sofar.verdict === 'no base' || sofar.verdict === 'no children' || unheldSoFar.length > 0;
-      if (probes.length === 0 && !sofarSkips && plantUnread !== null) {
+      if (probes.length === 0 && ownUnread !== null) {
+        console.log(`  SKIP  ${name}: ${ownUnread} — a HOLE in this run, not a pass; the rest of this control ran and found nothing: ${plantWords || 'no plant was read'}`);
+      } else if (probes.length === 0 && !sofarSkips && plantUnread !== null) {
         console.log(
           skipLine(
             `${plantWords}; each suite so far that measured a child is under its own bound: ${childrenHeldText(sofar.suites, process.platform) || 'none'}, ` +
@@ -134139,7 +134240,7 @@ function repackPlantProgram(hook: string): string {
     "import { join } from 'node:path';" +
     "import { PNG_SIGNATURE, pngChunk, readPlate } from './tools/plate.ts';" +
     `const hook = ${hook};` +
-    "runCli({ checkout: 'cli_core.ts', linksRuntime: false, runs: { ...CORE_COMMAND_RUNS, ...CORE_ENTRY_RUNS, repack: (a) => cmdRepack(a, MODEL_AND_TEXT_GATE, (dir) => hook(dir, readdirSync(dir).sort()[0])) } }, process.argv.slice(1));"
+    "runCli({ checkout: 'cli_core.ts', linksRuntime: false, runs: { ...CORE_COMMAND_RUNS, ...CORE_ENTRY_RUNS, repack: (a) => cmdRepack(a, MODEL_AND_TEXT_GATE, (dir) => hook(dir, readdirSync(dir).sort()[0])) } }, process.argv.slice(2));"
   );
 }
 
@@ -134319,7 +134420,7 @@ function runRepackSuite(): number {
   {
     const out = join(work, 'planted-out');
     const plant = '(dir, first) => { const p = readPlate(join(dir, first)); let i = 0; while (p.data[i + 3] === 0) i += 4; p.data[i] ^= 1; p.writePng(join(dir, first)); }';
-    const run = repack('planted', ['-e', repackPlantProgram(plant), 'repack', nodIn, '--out', out]);
+    const run = repack('planted', ['-e', repackPlantProgram(plant), EVAL_ARGV_SLOT, 'repack', nodIn, '--out', out]);
     const firstPart = [...nodRegions].sort()[0];
     const probes: string[] = [];
     if (run.status !== 1) probes.push(`exit ${run.status}, not 1: ${run.stderr.trim().slice(-300)}`);
@@ -134480,7 +134581,7 @@ function runRepackSuite(): number {
   {
     const out = join(work, 'accepted-planted-out');
     const plant = '(dir, first) => { const p = readPlate(join(dir, first)); let i = 0; while (p.data[i + 3] === 0) i += 4; p.data[i] ^= 1; p.writePng(join(dir, first)); }';
-    const run = repack('accepted-planted', ['-e', repackPlantProgram(plant), 'repack', oldHeader, '--out', out, '--accept-skeleton-differences']);
+    const run = repack('accepted-planted', ['-e', repackPlantProgram(plant), EVAL_ARGV_SLOT, 'repack', oldHeader, '--out', out, '--accept-skeleton-differences']);
     const probes: string[] = [];
     if (run.status !== 1) probes.push(`exit ${run.status}, not 1`);
     if (!/\(a\) 1 region\(s\) are not pixel-identical/.test(run.stderr)) probes.push(`check (a) did not refuse the flipped texel under the flag: ${JSON.stringify(run.stderr.trim().slice(0, 300))}`);
@@ -134831,7 +134932,7 @@ function runRepackSuite(): number {
   {
     const probes: string[] = [];
     const exits = (label: string, hook: string, status: number, word: string): void => {
-      const run = repack(label, ['-e', repackPlantProgram(hook), 'repack', nodIn, '--out', join(work, `${label}-out`)]);
+      const run = repack(label, ['-e', repackPlantProgram(hook), EVAL_ARGV_SLOT, 'repack', nodIn, '--out', join(work, `${label}-out`)]);
       if (run.status !== status) probes.push(`${label}: exit ${run.status}, not ${status}`);
       if (run.made === null || !run.made.startsWith(join(work, `tmp-${label}`, REPACK_WORK_PREFIX))) probes.push(`${label}: named no ${REPACK_WORK_PREFIX}XXXXXX work directory in its tmpdir(), so it never reached the case`);
       if (!run.stderr.includes(word)) probes.push(`${label}: stderr does not say ${JSON.stringify(word)}`);
@@ -141828,7 +141929,13 @@ function main(): void {
     'over its tarball — because a version the registry has not finished processing says nothing about the ' +
     'package and must not leave the red a broken artifact leaves; and the workflow and RELEASING.md held to what ' +
     'those two runs printed, the publish job read structurally rather than by step name, so a dispatched re-run ' +
-    'of a confirmation cannot reach it)';
+    'of a confirmation cannot reach it)' +
+    // issue #1482: on a Bun with no `Bun.YAML` the workflow-reading controls each printed a SKIP and a HOLE, and the
+    // summary repeats it — they are not among the figure above and were not checked.
+    (BUN_YAML === null
+      ? `\n  ⚠️ Bun.YAML is absent on Bun ${Bun.version}: every currency control that reads the workflows as YAML ` +
+        'was reported as a SKIP and a HOLE by name rather than checked. A Bun that has Bun.YAML checks them.'
+      : '');
   const skillSurface =
     ', + ' + n('agent-skill') + ' agent-skill controls (issue #366 — the surface an agent discovers rigc through: every `skills/*/SKILL.md` ' +
     'carrying the frontmatter the Agent Skills specification requires (a `name` equal to its directory, a ' +
@@ -145412,7 +145519,7 @@ function docsQuoteIgnored(paths: string[], root: string): { ignored: Set<string>
     }
     const asked = spawnSync('git', ['-C', dir, 'check-ignore', '--stdin'], { input: paths.join('\n'), encoding: 'utf8' });
     // Exit 1 means "none of them matched", which is an answer and not a failure.
-    if (asked.error !== undefined || (asked.status !== 0 && asked.status !== 1)) {
+    if (spawnFailed(asked) || (asked.status !== 0 && asked.status !== 1)) {
       return {
         ignored: new Set<string>(),
         fault: `git could not say which of ${paths.length} absent path(s) this repository deliberately does not track`,

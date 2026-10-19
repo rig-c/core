@@ -90,3 +90,35 @@ export function writeWhole(fd: number, text: string, plants: WriteWholePlants = 
     wait(Math.min(2 ** (stalls - 1), STALL_WAIT_CAP_MS));
   }
 }
+
+/**
+ * The CLI's one stdout policy (issue #1493): `console.log` of this process,
+ * every call, through {@link writeWhole} on fd 1 — so the ~250 lines the
+ * commands print are written the way the guide's document is, and a
+ * non-blocking pipe gets all of them instead of the first ~64 KiB with exit 0.
+ * `runCli` installs it before anything prints, for both entries; calling it
+ * again changes nothing.
+ *
+ * ⚖️ One `writeWhole` per call, not a buffer flushed at exit or at a size:
+ * Bun's own `console.log` is synchronous per call on a blocking stdout — a
+ * line printed between two `console.error` lines lands between them under
+ * `2>&1`, to a file and to a pipe, on 1.2.0 and 1.4.2 (measured) — and a
+ * write per call keeps that order, keeps a long `render` or `check` printing
+ * as it goes, and leaves nothing behind for a `process.exit` to drop, or for a
+ * delegate's child, which writes to the same fd, to overtake. A buffer would
+ * have to answer all three and still reorders `2>&1`.
+ *
+ * The text is what Bun's `console.log` prints: the arguments joined by one
+ * space, a string as it is and anything else as `Bun.inspect` shows it, and a
+ * newline. Format directives (`%s` with a second argument) are not applied —
+ * every call in the CLI passes one string, so none has one to apply.
+ */
+let consoleLogRouted = false;
+
+export function routeConsoleLogThroughWriteWhole(): void {
+  if (consoleLogRouted) return;
+  consoleLogRouted = true;
+  console.log = (...args: unknown[]): void => {
+    writeWhole(1, `${args.map((arg) => (typeof arg === 'string' ? arg : Bun.inspect(arg))).join(' ')}\n`);
+  };
+}

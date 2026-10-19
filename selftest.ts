@@ -69493,13 +69493,15 @@ for (const job of JSON.parse(readFileSync(process.argv[2], 'utf8'))) {
 `;
 
 /**
- * CLI118–CLI120: every command's stdout through a non-blocking pipe and a closed one (issue #1493).
+ * CLI118–CLI121: every command's stdout through a non-blocking pipe and a closed one (issue #1493).
  *
  * On a stdout whose pipe is non-blocking, Bun's `console.log` met `EAGAIN` once the pipe was full and dropped the
- * rest with exit 0, on 1.2.0 and 1.4.2 alike: `explain` on `gallery/look` kept 19,874 of 98,134 bytes through this
- * reader on 1.4.2 and 23,872–27,968 on 1.2.0 (macOS, measured). `runCli` now routes `console.log` through `writeWhole` (`src/cli/write_whole.ts`), and these
- * controls read every page the table documents, on both entries, through the reader — and a tree with the routing
- * taken out, which must come out short.
+ * rest with exit 0, on 1.2.0 and 1.4.2: `explain` on `gallery/look` kept 19,874 of 98,134 bytes through this
+ * reader on 1.4.2 and 23,872–27,968 on 1.2.0 (macOS, measured), 80,776 of 98,260 on 1.4.2 (linux). Bun 1.4.3
+ * delivers the same unrouted tree whole through the same reader on the same machine (measured), so the baseline
+ * cut is a fact about a Bun and CLI121 states it per Bun. `runCli` now routes `console.log` through `writeWhole`
+ * (`src/cli/write_whole.ts`), and these controls read every page the table documents, on both entries, through
+ * the reader; CLI119 proves the reader sees a cut on every Bun with a writer that cannot survive a full pipe.
  */
 function nonBlockingStdoutControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
   const work = mkdtempSync(join(harnessTemp(), 'rigc-nonblocking-'));
@@ -69570,33 +69572,53 @@ function nonBlockingStdoutControls(say: (name: string, ok: boolean, detail: stri
       'CLI118_EVERY_COMMAND_DELIVERS_ITS_WHOLE_STDOUT_THROUGH_A_NON_BLOCKING_PIPE_ON_BOTH_ENTRIES',
       faults.length === 0,
       probeDetail(faults.length === 0, faults, `${notes.join('; ')} — the usage, --version, help and the ${COMMANDS.length} command(s) of the table each --help, guide §5 --all and explain on gallery/look; through a FIFO opened O_NONBLOCK read 4 KB every 10 ms, the same bytes and exit as to a file`, (count) => `${count} page(s) cut or changed:`),
-      'issue #1493: console.log on a non-blocking stdout stopped near 64 KiB with exit 0 on every Bun — a truncated guide or explain reads as a whole one',
+      'issue #1493: console.log on a non-blocking stdout stopped near 64 KiB with exit 0 on Bun 1.2.0 and 1.4.2 (1.4.3 delivers it whole, measured) — a truncated guide or explain reads as a whole one',
     );
   }
 
-  // CLI119 — the plant: the routing taken out of a copy of the tree, and CLI118's reading has to come out short.
+  // CLI119 — the plant the reader must catch on every Bun: the routing replaced by one raw writeSync per line. A
+  // write to a full non-blocking FIFO returns short or EAGAIN at the kernel, whatever the runtime does with
+  // console.log, so this is the proof that CLI118's reader can see a cut at all.
+  // CLI121 — the baseline this card was filed on: console.log unrouted. Cut on Bun 1.2.0 and 1.4.2; on 1.4.3 the
+  // same tree through the same reader on the same machine came through whole, so there the plant cannot be seen
+  // to cut and the control says so by name rather than passing.
   {
-    const faults: string[] = [];
     const root = absentTree(join(work, 'plant'));
     const file = join(root, 'src', 'cli', 'shared.ts');
     const genuine = '  routeConsoleLogThroughWriteWhole();\n';
     const text = readFileSync(file, 'utf8');
     const n = text.split(genuine).length - 1;
-    let detail = '';
-    if (n !== 1) faults.push(`the plant found its text ${n} time(s) in src/cli/shared.ts, not once`);
-    else {
-      writeFileSync(file, text.split(genuine).join(''));
+    const planted = (line: string): Reading => {
+      writeFileSync(file, text.split(genuine).join(line));
       const [r] = read(root, 'cli_core.ts', [explainLook]);
+      return r;
+    };
+    const faults119: string[] = [];
+    let detail119 = '';
+    if (n !== 1) faults119.push(`the plant found its text ${n} time(s) in src/cli/shared.ts, not once`);
+    else {
+      const r = planted("  console.log = (...parts: unknown[]): void => { require('node:fs').writeSync(1, `${parts.map(String).join(' ')}\\n`); };\n");
       const why = apart(r);
-      if (why === null) faults.push(`${r.label} with console.log unrouted came through whole (${r.file.length} byte(s)) — the reader cannot see the cut`);
-      else detail = `${r.label} with console.log unrouted: ${why}`;
+      if (why === null) faults119.push(`${r.label} with one raw writeSync per line came through whole (${r.file.length} byte(s)) — the reader cannot see a cut`);
+      else detail119 = `${r.label} with one raw writeSync per line: ${why}`;
     }
     say(
-      'CLI119_A_PLANTED_TREE_WITHOUT_THE_STDOUT_ROUTE_IS_CUT_SHORT_BY_THE_SAME_READER',
-      faults.length === 0,
-      probeDetail(faults.length === 0, faults, `caught: ${detail}`),
-      'a reader that never fills is a blocking pipe by another name: CLI118 is only a reading if the unrouted console.log fails it',
+      'CLI119_A_PLANTED_TREE_WRITING_EACH_LINE_WITH_ONE_RAW_WRITESYNC_IS_CUT_SHORT_BY_THE_SAME_READER',
+      faults119.length === 0,
+      probeDetail(faults119.length === 0, faults119, `caught: ${detail119}`),
+      'a reader that never fills is a blocking pipe by another name: CLI118 is only a reading if a writer that cannot survive a full pipe fails it — and a raw write to a full non-blocking FIFO is short at the kernel on every Bun',
     );
+    if (n === 1) {
+      const r = planted('');
+      const why = apart(r);
+      const name = 'CLI121_THE_UNROUTED_CONSOLE_LOG_OF_THIS_BUN_IS_CUT_SHORT_BY_THE_SAME_READER';
+      if (why === null) {
+        console.log(`  SKIP  ${name}  (Bun ${Bun.version} delivered ${r.label} with console.log unrouted whole through the reader, ${r.file.length} of ${r.file.length} byte(s), so the plant cannot be seen to cut on this Bun)`);
+        console.log(`          ⚠️ This is a HOLE in this run, not a pass — Bun 1.2.0 and 1.4.2 cut it (explain on gallery/look to 80,776 of 98,260 bytes on 1.4.2, linux, this reader); on this Bun the route is held by CLI118 and the reader by CLI119.`);
+      } else {
+        say(name, true, `caught: ${r.label} with console.log unrouted: ${why}`, 'issue #1493 was filed on this cut: console.log on a non-blocking stdout stopped near the pipe\'s capacity with exit 0 on Bun 1.2.0 and 1.4.2');
+      }
+    }
   }
 
   // CLI120 — `| head -1`: the reader closes after its first chunk, and a large page exits 0 with nothing on stderr.

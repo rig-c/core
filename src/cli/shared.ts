@@ -70,7 +70,7 @@ import { RepackError } from '../repack.ts';
 import { SplitError } from '../meshsplit.ts';
 import { SpineRuntimeError, SPINE_SIDE_ABSENT } from '../spine_side.ts';
 import type { CompileResult, DroppedState } from '../types.ts';
-import { StdoutWriteError } from './write_whole.ts';
+import { routeConsoleLogThroughWriteWhole, StdoutWriteError } from './write_whole.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -2968,6 +2968,8 @@ export function helpArgv(rest: readonly string[]): string[] | null {
  * always had, written once for both entries.
  */
 export function runCli(entry: CliEntry, argv: readonly string[]): void {
+  // Before anything prints: every line on stdout goes out whole, or is refused by name (issue #1493).
+  routeConsoleLogThroughWriteWhole();
   const docs = entryCommands(entry.linksRuntime);
   const known = docs.map((doc) => doc.name);
   const registered = Object.keys(entry.runs).sort();

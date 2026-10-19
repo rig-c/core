@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.64.0](https://github.com/rig-c/core/compare/v2.63.0...v2.64.0) (2026-10-19)
+
+
+### Features
+
+* **review:** rigc review is the launcher — a bare target opens, never installs, reads review's Bun floor, refuses by name ([#1492](https://github.com/rig-c/core/issues/1492)) ([0a91020](https://github.com/rig-c/core/commit/0a910200cf1d7723cf8a16e639e083abd9232add)), closes [#1486](https://github.com/rig-c/core/issues/1486)
+
+
+### Bug Fixes
+
+* **bin:** read the CLI's exit and signal before spawnSync's error, so a refusal under Bun is not "could not launch bun" ([#1496](https://github.com/rig-c/core/issues/1496)) ([e302d72](https://github.com/rig-c/core/commit/e302d7282405194c4005976cc4845e9cbfc517eb)), closes [#1488](https://github.com/rig-c/core/issues/1488)
+* **guide:** write the guide whole through a loop that survives short writes, so Bun 1.2.0 stops corrupting a byte ([#1495](https://github.com/rig-c/core/issues/1495)) ([a3703dc](https://github.com/rig-c/core/commit/a3703dcd14cf0e044ed5c80ebe836a30112b390e)), closes [#1487](https://github.com/rig-c/core/issues/1487)
+* **selftest:** one memory base row per platform and Bun line, so the declared minimum Bun is held to its own ceiling ([#1497](https://github.com/rig-c/core/issues/1497)) ([d5e6347](https://github.com/rig-c/core/commit/d5e6347f46941b6aecc411097e4256371ac4fc62)), closes [#1490](https://github.com/rig-c/core/issues/1490)
+
 ## [2.63.0](https://github.com/rig-c/core/compare/v2.62.0...v2.63.0) (2026-10-19)
 
 

@@ -69390,7 +69390,9 @@ function runBuildRefusalSuite(): number {
 }
 
 /**
- * RV01–RV03: `rigc review` hands its arguments to `@rig-c/review`'s bin, or refuses by name (issue #1457).
+ * RV01–RV05: `rigc review` hands its arguments to `@rig-c/review`'s bin, or refuses by name (issue #1457) — and
+ * refuses an empty argument by name under a Bun that would drop it (issue #1465; RV04 forces both answers of the
+ * probe, RV05 holds the live answer to a script's reading).
  *
  * The package itself is never installed here: a stub with the same name and bin stands in for it, echoing the
  * argv it was handed as JSON and exiting with a code of its own, so what reaches it and what comes back are read
@@ -69464,7 +69466,16 @@ function reviewDelegateControls(say: (name: string, ok: boolean, detail: string,
     'issue #1457: core does not depend on @rig-c/review, so the one thing `rigc review` can say without it is which package to install — and printing anything more, or exiting as a review would, reads as a review that ran',
   );
 
+  // The selftest's own reading of whether this Bun hands an empty argument to a child, taken without the
+  // probe under test: a script that prints its argv, started with one empty argument between two others.
+  const echoArgv = join(work, 'echo_argv.ts');
+  writeFileSync(echoArgv, 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+  const measured = spawnSync(process.execPath, [echoArgv, 'a', '', 'b'], { encoding: 'utf8' }).stdout.trim();
+  const keepsEmpty = measured === JSON.stringify(['a', '', 'b']);
+  const dropsEmpty = measured === JSON.stringify(['a', 'b']);
+
   // --- RV02: beside the package, every argument arrives untouched and its exit comes back ---------------------
+  // (an empty argument under a Bun that drops one is RV04's refusal instead, issue #1465)
   const faults02: string[] = [];
   const handed = ['open', 'a dir with spaces', '--help', '--animation', 'wave', '--', '-x', ''];
   const cases02: Array<{ args: string[]; argv: string[]; status: number | null; signal: NodeJS.Signals | null }> = [
@@ -69474,11 +69485,15 @@ function reviewDelegateControls(say: (name: string, ok: boolean, detail: string,
     { args: ['review'], argv: [], status: 7, signal: null },
     { args: ['review', '--die-by-signal'], argv: ['--die-by-signal'], status: null, signal: 'SIGTERM' },
   ];
+  if (!keepsEmpty && !dropsEmpty) faults02.push(`a script started with ["a", "", "b"] printed ${JSON.stringify(measured)} — neither the three arguments nor the two, so this Bun's handling of an empty one is unread`);
   for (const entry of ['cli.ts', 'cli_core.ts']) {
     for (const c of cases02) {
       const r = runFrom(project, join(import.meta.dir, entry), c.args);
-      if (r.status !== c.status || r.signal !== c.signal || r.stdout !== `${JSON.stringify(c.argv)}\n` || r.stderr !== '') {
-        faults02.push(`${entry} ${JSON.stringify(c.args)}: ${shown(r)} — exit ${String(c.status)}${c.signal === null ? '' : ` by ${c.signal}`} and stdout ${JSON.stringify(JSON.stringify(c.argv))} were required`);
+      // Under a Bun that drops an empty argument this spawn drops it too, before rigc runs, so rigc is handed the
+      // others and hands them on: the refusal cannot be reached from here, and RV04 holds it with the answer forced.
+      const argv = dropsEmpty ? c.argv.filter((a) => a !== '') : c.argv;
+      if (r.status !== c.status || r.signal !== c.signal || r.stdout !== `${JSON.stringify(argv)}\n` || r.stderr !== '') {
+        faults02.push(`${entry} ${JSON.stringify(c.args)}: ${shown(r)} — exit ${String(c.status)}${c.signal === null ? '' : ` by ${c.signal}`} and stdout ${JSON.stringify(JSON.stringify(argv))} were required`);
       }
     }
   }
@@ -69488,7 +69503,7 @@ function reviewDelegateControls(say: (name: string, ok: boolean, detail: string,
     probeDetail(
       faults02.length === 0,
       faults02,
-      `${cases02.length} command line(s) on each entry beside a stub ${delegate?.package ?? ''} bin, among them ${JSON.stringify(handed)}: the stub's argv equal to the arguments after \`review\` (\`help review\` as \`review --help\`), its exit 7 returned, its SIGTERM died by, nothing else printed`,
+      `${cases02.length} command line(s) on each entry beside a stub ${delegate?.package ?? ''} bin, among them ${JSON.stringify(handed)}: the stub's argv equal to the arguments after \`review\` (\`help review\` as \`review --help\`), its exit 7 returned, its SIGTERM died by, nothing else printed${dropsEmpty ? ` — on Bun ${String(process.versions.bun)}, which drops an empty argument, this run's own spawn dropped the "" before rigc saw it, so it was required absent (RV04 holds the refusal)` : ''}`,
       (count) => `${count} fault(s):`,
     ),
     "issue #1457: the positive control for RV01 — a refusal that fired on every machine would pass it — and the bar that rigc parses none of review's arguments: `--help` is review's, and so is an argument with a space in it",
@@ -69513,6 +69528,42 @@ function reviewDelegateControls(say: (name: string, ok: boolean, detail: string,
       (count) => `${count} fault(s):`,
     ),
     "the order is stated in src/cli/core_commands.ts (`resolveDelegate`): a project's own install is what `npm i -D` made, and the copy beside rig-c is for a command run from elsewhere",
+  );
+
+  // --- RV04: both answers of the empty-argument probe, forced (issue #1465) ----------------------------------
+  const faults04: string[] = [];
+  const pkg = delegate?.package ?? '@rig-c/review';
+  let asked = 0;
+  const answer = (keeps: boolean) => (): boolean => {
+    asked++;
+    return keeps;
+  };
+  const drops = emptyArgumentRefusal(pkg, ['open', '', 'x'], answer(false), '1.2.0');
+  const want04 = `argument 2 is empty, and Bun 1.2.0, the Bun running this, drops an empty argument when it starts a process — ${pkg} would receive the others without it, and nothing would say so. Give it a value, or run rigc under a Bun that keeps it`;
+  if (drops !== want04) faults04.push(`forced to "drops": ${JSON.stringify(drops)}, required ${JSON.stringify(want04)}`);
+  const keeps = emptyArgumentRefusal(pkg, ['open', '', 'x'], answer(true), '1.4.2');
+  if (keeps !== null) faults04.push(`forced to "keeps": ${JSON.stringify(keeps)}, required no refusal`);
+  const before = asked;
+  const whole = emptyArgumentRefusal(pkg, ['open', 'x'], answer(false), '1.2.0');
+  if (whole !== null) faults04.push(`no empty argument, the probe forced to "drops": ${JSON.stringify(whole)}, required no refusal`);
+  if (asked !== before) faults04.push('a command line with no empty argument started the probe');
+  say(
+    'RV04_AN_EMPTY_ARGUMENT_IS_REFUSED_BY_NAME_WHERE_THIS_BUN_DROPS_IT_AND_HANDED_OVER_WHERE_IT_KEEPS_IT',
+    faults04.length === 0,
+    probeDetail(faults04.length === 0, faults04, `\`review open "" x\` with the probe forced to "drops" is refused naming argument 2 and the Bun; forced to "keeps", not refused; \`review open x\` never asks the probe`, (count) => `${count} fault(s):`),
+    'issue #1465 Bar 2: CI runs one Bun, so the answer it does not give is forced — a refusal that fired on every Bun, or on none, is red here',
+  );
+
+  // --- RV05: the live probe agrees with the selftest's own reading of this Bun --------------------------------
+  const live = spawnKeepsEmptyArguments();
+  const faults05: string[] = [];
+  if (!keepsEmpty && !dropsEmpty) faults05.push(`this Bun's handling of an empty argument is unread (a script printed ${JSON.stringify(measured)})`);
+  else if (live !== keepsEmpty) faults05.push(`the probe says ${live ? 'keeps' : 'drops'}; a script started with ["a", "", "b"] printed ${measured}`);
+  say(
+    'RV05_THE_EMPTY_ARGUMENT_PROBE_READS_THIS_BUN_AS_A_SCRIPT_DOES',
+    faults05.length === 0,
+    probeDetail(faults05.length === 0, faults05, `Bun ${String(process.versions.bun)}: the probe says ${live ? 'keeps' : 'drops'}, and a script started with ["a", "", "b"] printed ${measured}`, (count) => `${count} fault(s):`),
+    'issue #1465 Bar 2: the forced answers prove what the refusal does with each; this proves the probe gives the true one on the Bun running it',
   );
   rmSync(work, { recursive: true, force: true });
 }
@@ -118853,6 +118904,7 @@ function runRenderEnvironmentSuite(): number {
 // render's physics line (issue #1467)
 // ---------------------------------------------------------------------------
 import { physicsLine, PHYSICS_NONE_LINE, physicsSteppedOf } from './src/cli/core_commands.ts';
+import { emptyArgumentRefusal, spawnKeepsEmptyArguments } from './src/cli/core_commands.ts';
 import { environmentResponse } from './src/environment.ts';
 
 /**

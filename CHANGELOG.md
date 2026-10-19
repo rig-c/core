@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.64.1](https://github.com/rig-c/core/compare/v2.64.0...v2.64.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **cli:** route every console.log through writeWhole at the one entry, so a non-blocking stdout gets the whole output ([#1498](https://github.com/rig-c/core/issues/1498)) ([8720c1f](https://github.com/rig-c/core/commit/8720c1f34a5ddeab23783323da6e923e01a881d1))
+
 ## [2.64.0](https://github.com/rig-c/core/compare/v2.63.0...v2.64.0) (2026-10-19)
 
 

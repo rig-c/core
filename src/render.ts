@@ -549,7 +549,23 @@ function spinePosed(skeleton: Skeleton): Posed {
     pieces: (draw) => drawPieces(skeleton, draw),
     bones: () => boneSnapshots(skeleton),
     attachments: () => attachmentsOf(skeleton),
+    physics: () => steppedPhysicsOf(skeleton),
   };
+}
+
+/**
+ * `Posed.physics` on spine-core (issue #1467): every physics constraint whose
+ * `lastTime` reads the skeleton's `time` after a step that moved it — which
+ * `PhysicsConstraint.update` sets under `Physics.update` and `Physics.reset`,
+ * and which an inactive constraint, a mix of 0 or `Physics.none` leaves where
+ * it was. The setup pose and frame 0 sit at time 0 and step none.
+ */
+function steppedPhysicsOf(skeleton: Skeleton): string[] {
+  if (!(skeleton.time > 0)) return [];
+  return skeleton.physics
+    .filter((c) => c.lastTime === skeleton.time)
+    .map((c) => c.data.name)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /**

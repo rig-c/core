@@ -736,6 +736,8 @@ export function cmdRender(flags: Record<string, string>): void {
   const only = readAnimationFlag(flags, [...facts.animations]);
   const skin = readSkinFlag(flags, [...facts.skins]);
   const subset = readSlotSubsetFlags(flags, facts, skin);
+  // The physics constraints the skeleton declares, off the Spine file both posers read (issue #1467).
+  const physicsDeclared = environmentResponse(skeletonText).declared;
   const passPairs = readPassThroughFlag(passThrough, facts);
   const seamPairs = readSeamFlag(seam, facts);
   // The angle reading (issue #1414) reads bones, which a subset of the drawn slots does not change, so it takes --slot/--hide.
@@ -810,7 +812,14 @@ export function cmdRender(flags: Record<string, string>): void {
     // The bones ride along for --geometry and --angle-range, the whole attachments for --geometry and the two readings off them.
     const wantsBones = geometry || anglePairs !== undefined;
     const wantsGeometry = geometry || folds || passPairs !== undefined || seamPairs !== undefined;
-    const sampling = !wantsBones && !wantsGeometry ? pose : { ...pose, ...(wantsBones ? { bones: true } : {}), ...(wantsGeometry ? { geometry: true } : {}) };
+    // The physics constraints each frame's step stepped ride along whenever the rig declares one (issue #1467): the
+    // `physics:` line and frames.json's `physics` field are read off them.
+    const sampling = {
+      ...pose,
+      ...(wantsBones ? { bones: true } : {}),
+      ...(wantsGeometry ? { geometry: true } : {}),
+      ...(physicsDeclared.length > 0 ? { physics: true } : {}),
+    };
     const sampled: Map<string, Frame[]> =
       only === undefined
         ? sampleAll(poser, fps, sampling)
@@ -916,6 +925,8 @@ export function cmdRender(flags: Record<string, string>): void {
     );
   }
   console.log(`  ..    ${viewport.width}x${viewport.height}px at ${fps} fps, ${sampled.size} set(s) -> ${outRoot}`);
+  // Whether physics ran (issue #1467): said once for a rig with nothing to step, and per set below for one with.
+  if (physicsDeclared.length === 0) console.log(`  ..    ${PHYSICS_NONE_LINE}`);
   if (!facts.declaresStage) console.log(`  ..    ${STAGELESS_FRAMING.render}`);
   // A given box (issue #1414): said with the box it replaced, and every slot it leaves part of out, by set and frame.
   const outside = given === undefined ? [] : outsideViewport(sampled, viewport);
@@ -959,6 +970,7 @@ export function cmdRender(flags: Record<string, string>): void {
     const seamReading = seamReadings.get(name);
     if (seamReading !== undefined) writeFileSync(join(dir, SEAM_FILE), seamText(seamReading));
     const duration = frames[frames.length - 1].time;
+    const physics = physicsDeclared.length === 0 ? undefined : physicsSteppedOf(frames, fps);
     sets.push({
       dir: dirName,
       animation: name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name,
@@ -967,6 +979,7 @@ export function cmdRender(flags: Record<string, string>): void {
       written: frames.length,
       stride: 1,
       duration,
+      ...(physics === undefined ? {} : { physics: { stepped: physics.stepped.length, fps } }),
     });
     const how = frames.length === 1 ? 'a single pose' : `${duration.toFixed(3)}s`;
     const folding = foldReading?.meshes.filter((m) => m.worst !== null).length ?? 0;
@@ -977,6 +990,7 @@ export function cmdRender(flags: Record<string, string>): void {
     const seamNote = seamReading === undefined ? '' : ` + ${SEAM_FILE} (${opening} of ${seamReading.pairs.length} pair(s) open)`;
     const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}${seamNote}`;
     console.log(`  ..    ${name.padEnd(16)} ${frames.length} frame(s), ${how}${extras} -> ${dir}`);
+    if (physics !== undefined) console.log(`  ..    ${physicsLine(physics.stepped, physicsDeclared, fps, frames.length)}`);
     for (const mesh of foldReading?.meshes ?? []) {
       const key = `${mesh.slot}\u0000${mesh.attachment}`;
       const fault = faultsSaid.has(key) ? null : setupFaultLine(mesh);
@@ -1020,6 +1034,28 @@ export function cmdRender(flags: Record<string, string>): void {
   };
   writeFileSync(join(outRoot, FRAMES_SIDECAR), `${JSON.stringify(sidecar, null, 2)}\n`);
   console.log(`rigc: wrote ${join(outRoot, FRAMES_SIDECAR)}`);
+}
+
+/** `render`'s line for a rig that declares no physics constraint (issue #1467): nothing was stepped because nothing could be. */
+export const PHYSICS_NONE_LINE = 'physics: none in this rig — it declares no physics constraint, so no frame steps one';
+
+/** The physics constraints any frame of a set stepped (issue #1467), by name in code-unit order. */
+export function physicsSteppedOf(frames: readonly Frame[], fps: number): { stepped: string[]; fps: number } {
+  const names = new Set<string>();
+  for (const frame of frames) for (const name of frame.physics ?? []) names.add(name);
+  return { stepped: [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), fps };
+}
+
+/**
+ * `render`'s `physics:` line for one set (issue #1467): how many constraints were stepped at the set's rate, and — when
+ * fewer than the rig declares — the ones that took no step, by name, with why a constraint takes none.
+ */
+export function physicsLine(stepped: readonly string[], declared: readonly string[], fps: number, frames: number): string {
+  const head = `physics: ${stepped.length} constraint(s) stepped at ${fps} fps`;
+  const idle = declared.filter((name) => !stepped.includes(name));
+  if (idle.length === 0) return head;
+  const why = frames === 1 ? 'a single pose takes no step' : 'inactive, or a mix of 0, on every frame';
+  return `${head} — ${idle.length} of the ${declared.length} declared took none: ${idle.map((n) => JSON.stringify(n)).join(', ')} (${why})`;
 }
 
 /** Where `inspect` writes when `--out` is not given, and the name it takes inside a directory `--out` names. */

@@ -118849,6 +118849,241 @@ function runRenderEnvironmentSuite(): number {
   return bad;
 }
 
+// ---------------------------------------------------------------------------
+// render's physics line (issue #1467)
+// ---------------------------------------------------------------------------
+import { physicsLine, PHYSICS_NONE_LINE, physicsSteppedOf } from './src/cli/core_commands.ts';
+import { environmentResponse } from './src/environment.ts';
+
+/**
+ * `render` says whether the physics ran (issue #1467): one `physics:` line per
+ * set — how many physics constraints the poser stepped, at what rate — or one
+ * `physics: none in this rig` line for a rig that declares none, and
+ * `frames.json` carries the same two figures on each set.
+ *
+ * - PH01: two rigs that declare physics (the overlay probe's one constraint and
+ *   the articulated probe's three), rendered through `cli.ts` (the core),
+ *   `cli.ts --poser spine` and `cli_core.ts`: one line per set naming every
+ *   declared constraint stepped at the render's rate, every file of the three
+ *   renders byte for byte equal, each set of frames.json carrying the figures.
+ * - PH02: gallery/nod declares none: the none line once, no count line, and
+ *   no set of frames.json carrying the field, on both entries.
+ * - PH03: the step removed reads 0 — planted on the core (a physics step that
+ *   does nothing) and on spine-core (`PhysicsConstraint.update` a no-op) — while
+ *   the unplanted posers read the declared count and agree frame by frame.
+ * - PH04: a declared constraint whose mix is 0 takes no step and the line
+ *   names it, so the count is a reading of the step and not of the declaration.
+ */
+function runRenderPhysicsSuite(): number {
+  console.log('\n── render: whether the physics ran, per set, on both posers and both entries (issue #1467) ──');
+  let bad = 0;
+  const say = (name: string, ok: boolean, detail: string, why: string): void => {
+    bad += reportCase(name, ok, detail, why);
+  };
+  const names = [
+    'PH01_A_PHYSICS_RIG_PRINTS_ONE_STEPPED_LINE_PER_SET_AND_WRITES_THE_SAME_FILES_ON_BOTH_POSERS_AND_BOTH_ENTRIES',
+    'PH02_A_RIG_WITH_NO_PHYSICS_SAYS_SO_ONCE_AND_FRAMES_JSON_CARRIES_NO_FIELD',
+    'PH03_THE_STEP_REMOVED_READS_0_ON_THE_CORE_AND_ON_SPINE_CORE',
+    'PH04_A_CONSTRAINT_AT_MIX_0_TAKES_NO_STEP_AND_IS_NAMED',
+  ];
+  const ORIGIN = 'issue #1467: a fold reading taken with physics has to be told from one taken without, so the render says what the step did rather than what the rig declares';
+  const FPS = PROTOCOL_FPS;
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-render-physics-'));
+  const entry = (file: string, args: string[]): { status: number | null; stdout: string; stderr: string } => {
+    const r = spawnSync(process.execPath, [file, ...args], { cwd: import.meta.dir, encoding: 'utf8' });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const tree = (root: string): string[] => {
+    const out: string[] = [];
+    const walk = (rel: string): void => {
+      for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
+        const r = rel === '' ? e.name : `${rel}/${e.name}`;
+        if (e.isDirectory()) walk(r);
+        else out.push(r);
+      }
+    };
+    walk('');
+    return out.sort();
+  };
+  const lines = (stdout: string): string[] => stdout.split('\n').filter((l) => /^ {2}\.\. {4}physics: /.test(l)).map((l) => l.replace(/^ {2}\.\. {4}/, ''));
+  try {
+    const built = new Map<string, string>();
+    const problems: string[] = [];
+    const build = (label: string, args: string[]): void => {
+      const out = join(work, `build-${built.size}`);
+      const r = runCli(['build', ...args, '--out', out]);
+      if (r.status === 0) built.set(label, out);
+      else problems.push(`${label} did not build (exit ${String(r.status)}): ${r.stderr.trim().split('\n').slice(-1)[0] ?? ''}`);
+    };
+    const fixtureArgs = (f: typeof OVERLAY): string[] => ['--rig', f.rigPath, '--motion', f.motionPath, ...(f.manifestPath === undefined ? [] : ['--manifest', f.manifestPath])];
+    build(`the ${OVERLAY.rig} fixture`, fixtureArgs(OVERLAY));
+    build(`the ${ARTICULATED.rig} fixture`, fixtureArgs(ARTICULATED));
+    build('gallery/nod', ['--rig', join(import.meta.dir, 'gallery', 'nod', 'rig.json'), '--motion', join(import.meta.dir, 'gallery', 'nod', 'motion.json')]);
+    if (problems.length > 0) {
+      for (const name of names) say(name, false, problems.join('; '), ORIGIN);
+      return bad;
+    }
+    const declaredOf = (out: string): string[] => environmentResponse(readFileSync(join(out, 'skeleton.json'), 'utf8')).declared;
+    const physicsRigs = [`the ${OVERLAY.rig} fixture`, `the ${ARTICULATED.rig} fixture`];
+
+    // --- PH01 -------------------------------------------------------------------------------------------------
+    {
+      const probes: string[] = [];
+      const rows: string[] = [];
+      for (const label of physicsRigs) {
+        const out = built.get(label) as string;
+        const declared = declaredOf(out);
+        if (declared.length === 0) probes.push(`${label} declares no physics constraint, so it cannot carry this control`);
+        const runs = [
+          { name: 'cli.ts (the core)', dir: join(work, `ph01-${physicsRigs.indexOf(label)}-core`), file: 'cli.ts', extra: [] as string[] },
+          { name: 'cli.ts --poser spine', dir: join(work, `ph01-${physicsRigs.indexOf(label)}-spine`), file: 'cli.ts', extra: ['--poser', 'spine'] },
+          { name: 'cli_core.ts', dir: join(work, `ph01-${physicsRigs.indexOf(label)}-entry`), file: 'cli_core.ts', extra: [] as string[] },
+        ];
+        let sets = 0;
+        for (const run of runs) {
+          const r = entry(run.file, ['render', '--candidate', out, ...run.extra, '--out', run.dir]);
+          if (r.status !== 0) {
+            probes.push(`${label}, ${run.name}: exit ${String(r.status)}: ${r.stderr.trim().split('\n').slice(-1)[0] ?? ''}`);
+            continue;
+          }
+          const sidecar = JSON.parse(readFileSync(join(run.dir, FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
+          sets = sidecar.sets.length;
+          const want = physicsLine(declared, declared, FPS, 2);
+          const got = lines(r.stdout);
+          if (got.length !== sidecar.sets.length) probes.push(`${label}, ${run.name}: ${got.length} physics line(s) for ${sidecar.sets.length} set(s)`);
+          for (const line of got) if (line !== want) probes.push(`${label}, ${run.name}: printed ${JSON.stringify(line)}, not ${JSON.stringify(want)}`);
+          if (r.stdout.includes(PHYSICS_NONE_LINE)) probes.push(`${label}, ${run.name}: printed the none line on a rig that declares physics`);
+          for (const set of sidecar.sets) {
+            if (set.physics?.stepped !== declared.length || set.physics?.fps !== FPS) probes.push(`${label}, ${run.name}: frames.json set "${set.dir}" carries physics ${JSON.stringify(set.physics ?? null)}, not { stepped: ${declared.length}, fps: ${FPS} }`);
+          }
+        }
+        const [a, ...others] = runs.map((run) => run.dir);
+        if (!existsSync(a)) continue;
+        for (const b of others) {
+          if (!existsSync(b)) continue;
+          const fa = tree(a);
+          const fb = tree(b);
+          if (fa.join() !== fb.join()) probes.push(`${label}: ${b} wrote other files than ${a}`);
+          for (const f of fa.filter((x) => fb.includes(x))) if (!readFileSync(join(a, f)).equals(readFileSync(join(b, f)))) probes.push(`${label}: ${f} differs between ${a} and ${b}`);
+        }
+        rows.push(`${label}: ${declared.length} declared, ${sets} set(s), each "${physicsLine(declared, declared, FPS, 2)}"`);
+      }
+      const ok = probes.length === 0;
+      say(names[0], ok, probeDetail(ok, probes.slice(0, 12), `${rows.join('; ')} — on the core, on spine-core and through cli_core.ts, every file of the three renders byte for byte equal`), ORIGIN);
+    }
+
+    // --- PH02 -------------------------------------------------------------------------------------------------
+    {
+      const probes: string[] = [];
+      const out = built.get('gallery/nod') as string;
+      if (declaredOf(out).length !== 0) probes.push('gallery/nod declares a physics constraint, so it cannot carry this control');
+      let sets = 0;
+      for (const file of ['cli.ts', 'cli_core.ts']) {
+        const dir = join(work, `ph02-${file}`);
+        const r = entry(file, ['render', '--candidate', out, '--out', dir]);
+        if (r.status !== 0) {
+          probes.push(`${file}: exit ${String(r.status)}`);
+          continue;
+        }
+        const got = lines(r.stdout);
+        if (got.length !== 1 || got[0] !== PHYSICS_NONE_LINE) probes.push(`${file}: physics line(s) ${JSON.stringify(got)}, not the one none line`);
+        const text = readFileSync(join(dir, FRAMES_SIDECAR), 'utf8');
+        const sidecar = JSON.parse(text) as FramesSidecar;
+        sets = sidecar.sets.length;
+        if (sidecar.sets.some((s) => s.physics !== undefined) || text.includes('"physics"')) probes.push(`${file}: frames.json carries a physics field on a rig with nothing to step`);
+      }
+      const ok = probes.length === 0;
+      say(names[1], ok, probeDetail(ok, probes.slice(0, 12), `gallery/nod, ${sets} set(s), on cli.ts and cli_core.ts: ${JSON.stringify(PHYSICS_NONE_LINE)} once, no count line, frames.json with no physics field`), ORIGIN);
+    }
+
+    // --- PH03 -------------------------------------------------------------------------------------------------
+    {
+      const probes: string[] = [];
+      const rows: string[] = [];
+      const read = (poser: Poser): Array<{ name: string; frames: Frame[] }> => poser.animations.map((a) => ({ name: a.name, frames: sampleAnimation(poser, a.name, FPS, { physics: true }) }));
+      const summary = (sets: Array<{ name: string; frames: Frame[] }>): number[] => sets.map((s) => physicsSteppedOf(s.frames, FPS).stepped.length);
+      let redCore = 0;
+      let redSpine = 0;
+      for (const label of physicsRigs) {
+        const out = built.get(label) as string;
+        const declared = declaredOf(out);
+        const modelPath = join(out, MODEL_DOCUMENT_FILE);
+        const modelText = readFileSync(modelPath, 'utf8');
+        const atlasText = readFileSync(join(out, 'skeleton.atlas'), 'utf8');
+        const skeletonPath = join(out, 'skeleton.json');
+        const skeletonBytes = readFileSync(skeletonPath);
+        const core = (plants: CorePoserPlants = {}): Poser => corePoser(modelText, atlasText, modelPath, { path: skeletonPath, bytes: skeletonBytes }, undefined, plants);
+        const spine = spinePoser(loadOracleData(skeletonBytes.toString('utf8'), atlasText, label));
+        const cored = read(core());
+        const spined = read(spine);
+        // The positive control: every set reads the declared count on both, and the two agree on every frame.
+        for (const [who, sets] of [['the core', cored], ['spine-core', spined]] as const) {
+          for (const [k, n] of summary(sets).entries()) if (n !== declared.length) probes.push(`${label}, ${who}: "${sets[k].name}" read ${n} stepped of ${declared.length} declared`);
+        }
+        cored.forEach((s, k) => {
+          const other = spined.find((x) => x.name === s.name)?.frames ?? [];
+          const at = s.frames.findIndex((f, i) => JSON.stringify(f.physics) !== JSON.stringify(other[i]?.physics));
+          if (at !== -1) probes.push(`${label} "${s.name}": frame ${at} stepped ${JSON.stringify(s.frames[at].physics)} on the core and ${JSON.stringify(other[at]?.physics)} on spine-core`);
+          if (s.frames[0]?.physics?.length !== 0) probes.push(`${label} "${s.name}": frame 0, the reset pose, read ${JSON.stringify(s.frames[0]?.physics)} stepped`);
+          void k;
+        });
+        // The mutants: the step removed, on each poser.
+        const plantedCore = summary(read(core({ physicsStep: () => false })));
+        if (plantedCore.every((n) => n === 0)) redCore++;
+        else probes.push(`${label}: a core physics step that does nothing still read ${JSON.stringify(plantedCore)} stepped`);
+        const update = Object.getOwnPropertyDescriptor(PhysicsConstraint.prototype, 'update');
+        let plantedSpine: number[] = [];
+        try {
+          Object.defineProperty(PhysicsConstraint.prototype, 'update', { value: function noStep(): void {}, configurable: true, writable: true });
+          plantedSpine = summary(read(spinePoser(loadOracleData(skeletonBytes.toString('utf8'), atlasText, label))));
+        } finally {
+          if (update !== undefined) Object.defineProperty(PhysicsConstraint.prototype, 'update', update);
+        }
+        if (plantedSpine.length > 0 && plantedSpine.every((n) => n === 0)) redSpine++;
+        else probes.push(`${label}: spine-core with PhysicsConstraint.update a no-op still read ${JSON.stringify(plantedSpine)} stepped`);
+        const line = physicsLine(physicsSteppedOf(read(core({ physicsStep: () => false }))[0].frames, FPS).stepped, declared, FPS, 2);
+        if (!line.startsWith('physics: 0 constraint(s) stepped')) probes.push(`${label}: the planted core's line reads ${JSON.stringify(line)}`);
+        rows.push(`${label}: ${cored.length} set(s) read ${declared.length} on both and agree on every frame; the step removed reads ${JSON.stringify(plantedCore)} on the core, ${JSON.stringify(plantedSpine)} on spine-core — "${line}"`);
+      }
+      const ok = probes.length === 0 && redCore === physicsRigs.length && redSpine === physicsRigs.length;
+      say(names[2], ok, probeDetail(ok, probes.slice(0, 12), rows.join('; ')), ORIGIN);
+    }
+
+    // --- PH04 -------------------------------------------------------------------------------------------------
+    {
+      const probes: string[] = [];
+      const label = `the ${OVERLAY.rig} fixture`;
+      const out = built.get(label) as string;
+      const forged = join(work, 'ph04-mix0');
+      mkdirSync(forged);
+      for (const f of readdirSync(out)) if (f !== MODEL_DOCUMENT_FILE && statSync(join(out, f)).isFile()) copyFileSync(join(out, f), join(forged, f));
+      const skeleton = JSON.parse(readFileSync(join(out, 'skeleton.json'), 'utf8')) as { constraints?: Array<Record<string, unknown>>; animations?: Record<string, Record<string, unknown>> };
+      const physics = (skeleton.constraints ?? []).filter((c) => c.type === 'physics');
+      for (const c of physics) c.mix = 0;
+      // A physics timeline could key the mix back up; the forged rig keys none, so the mix stays 0 on every frame.
+      for (const body of Object.values(skeleton.animations ?? {})) delete body.physics;
+      writeFileSync(join(forged, 'skeleton.json'), `${JSON.stringify(skeleton)}\n`);
+      const r = runCli(['render', '--candidate', forged, '--out', join(work, 'ph04-render')]);
+      const declared = physics.map((c) => String(c.name));
+      const want = physicsLine([], declared, FPS, 2);
+      const got = lines(r.stdout);
+      if (r.status !== 0) probes.push(`exit ${String(r.status)}: ${r.stderr.trim().split('\n').slice(-1)[0] ?? ''}`);
+      else {
+        if (!/\bposer {4}spine-core\b/.test(r.stdout)) probes.push(`the forged export was not posed by spine-core — ${r.stdout.split('\n').find((l) => l.includes('poser')) ?? 'no poser line'}`);
+        if (got.length === 0 || got.some((l) => l !== want)) probes.push(`printed ${JSON.stringify(got)}, not ${JSON.stringify(want)} on every set`);
+        const sidecar = JSON.parse(readFileSync(join(work, 'ph04-render', FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
+        if (sidecar.sets.some((s) => s.physics?.stepped !== 0)) probes.push(`frames.json reads ${JSON.stringify(sidecar.sets.map((s) => s.physics ?? null))}, not 0 on every set`);
+      }
+      if (!want.includes(JSON.stringify(declared[0] ?? ''))) probes.push(`the line ${JSON.stringify(want)} does not name the constraint`);
+      const ok = probes.length === 0;
+      say(names[3], ok, probeDetail(ok, probes.slice(0, 12), `${label} with every physics constraint's mix set to 0 and no physics timeline, rendered from the Spine export alone on spine-core: ${got.length} set(s), each "${want}"`), ORIGIN);
+    }
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  return bad;
+}
+
 function runLoopSeamSuite(): number {
   let bad = 0;
   console.log('\n── the loop-seam tool: sampling clause (issue #337) ──');
@@ -140551,6 +140786,7 @@ function main(): void {
   tally.of('ingest', runIngestSuite);
   tally.of('loop-seam', runLoopSeamSuite);
   tally.of('render-environment', runRenderEnvironmentSuite);
+  tally.of('render-physics', runRenderPhysicsSuite);
   tally.of('run-tally', () => runRunTallySuite(tally), { live: true, whole: true });
   tally.of('partial-run', () => runPartialRunSuite(tally));
   tally.of('gate-helper', runGateHelperSuite);

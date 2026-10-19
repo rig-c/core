@@ -102,6 +102,7 @@ import { clipThrough, type ClipShape, type ShapeClipper } from './core/clipping.
 import { activeBones, CoreInputError, readModel, sourceOfDoc, underNoSkin, underSkin, type CompiledDocument, type CoreSlotRow } from './core/index.ts';
 import { PHYSICS_CLOCK_LEAD, physicsClockStep, poseRawAnimationEach, poseRawSetup, type RawDrawn, type RawPose, type StepEnvironment } from './core/raw.ts';
 import type { TimelinePlant } from './core/animation.ts';
+import { stepPhysics, type PhysicsStepper } from './core/constraints_physics.ts';
 import { CORE_DEFAULT_SKIN, lookupSkins } from './core/skins.ts';
 import { documentPageLookup, drawnRegions, meshPageUvs, readUvSequences, regionPageUvs, type DrawnRegion, type UvRegion, type UvSource } from './core/uvs.ts';
 import { regionCorners, worldVertices } from './core/vertices.ts';
@@ -378,10 +379,14 @@ export const CORE_RAW_WALK: CoreRawWalk = (doc, animation, steps, plant, visit, 
  */
 export { PHYSICS_CLOCK_LEAD, physicsClockStep };
 
-/** What a suite passes `corePoser` in place of the poser's own parts — `PieceArrays` (`RC43`) and the raw walk (`RC44`). */
+/**
+ * What a suite passes `corePoser` in place of the poser's own parts — `PieceArrays` (`RC43`), the raw walk (`RC44`), and
+ * the physics step the walk runs (issue #1467: a step that does nothing has to read 0 on the render's `physics:` line).
+ */
 export interface CorePoserPlants {
   arrays?: () => PieceArrays;
   walk?: CoreRawWalk;
+  physicsStep?: PhysicsStepper;
 }
 
 /**
@@ -457,7 +462,7 @@ function clipCover(pose: RawPose, active: ReadonlySet<string>): Map<string, Clip
 }
 
 /** One posed moment of the core, read through the seam's `Posed`. */
-function corePosed(input: CoreInput, pose: RawPose, through: ShapeClipper): Posed {
+function corePosed(input: CoreInput, pose: RawPose, through: ShapeClipper, stepped: readonly string[]): Posed {
   const slotRows = new Map<string, CoreSlotRow>(pose.slots.map((row) => [row[0], row]));
   let regions: Map<string, DrawnRegion> | null = null;
   const regionsOf = (): Map<string, DrawnRegion> => {
@@ -501,6 +506,7 @@ function corePosed(input: CoreInput, pose: RawPose, through: ShapeClipper): Pose
     },
     attachments: (): AttachmentPose[] =>
       pose.drawn.map((d) => ({ slot: d.slot, attachment: d.attachment, vertices: [...d.vertices], color: tintOf(d) })),
+    physics: (): string[] => [...stepped],
   };
 }
 
@@ -752,7 +758,7 @@ export function corePoser(
     subset: (opts, skin) => subsetOver(roster, opts, skin),
     setup: (skin) => {
       const input = inputOf(skin);
-      return corePosed(input, poseRawSetup(input.doc, { through }), through);
+      return corePosed(input, poseRawSetup(input.doc, { through }), through, []);
     },
     animation: (name, skin, fps, count, visit, environment) => {
       const input = inputOf(skin);
@@ -762,10 +768,22 @@ export function corePoser(
       // walk that refuses a later pose still refuses the call, and a draw that throws is re-thrown once the walk has
       // finished without refusing — the first such throw, by frame — and no frame after it is drawn.
       const drawFailed: unknown[] = [];
-      walk(input.doc, name, new Array<number>(count).fill(step), { through }, (pose, i) => {
+      // `Posed.physics` on the core (issue #1467): the constraints whose state's clock reads the skeleton's after a step
+      // that moved it — spine-core's reading (`steppedPhysicsOf` in `src/render.ts`), taken off the same state the step
+      // writes, as each constraint is stepped, and handed to the pose the step made.
+      const steppedNow = new Set<string>();
+      const inner = plants.physicsStep ?? stepPhysics;
+      const physicsStep: PhysicsStepper = (r, w, length, ctx) => {
+        const moved = inner(r, w, length, ctx);
+        if (ctx.time > 0 && ctx.states.get(r.name)?.lastTime === ctx.time) steppedNow.add(r.name);
+        return moved;
+      };
+      walk(input.doc, name, new Array<number>(count).fill(step), { through, physicsStep }, (pose, i) => {
+        const stepped = [...steppedNow].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        steppedNow.clear();
         if (drawFailed.length > 0) return;
         try {
-          visit(i, corePosed(input, pose, through));
+          visit(i, corePosed(input, pose, through, stepped));
         } catch (thrown) {
           drawFailed.push(thrown);
         }

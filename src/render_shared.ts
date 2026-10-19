@@ -190,6 +190,20 @@ export interface FrameSet {
    * file could only ever be the stale one.
    */
   duration: number;
+  /**
+   * Whether the physics ran while these frames were posed (issue #1467): how
+   * many physics constraints the poser stepped on at least one frame of this
+   * set, and the rate it stepped them at — the set's own `fps`, one skeleton
+   * update a frame. `render` prints the same two figures on its `physics:` line.
+   *
+   * ⭐ Absent on a rig that declares no physics constraint, for `skin`'s
+   * reason in `FramesSidecar`: there is nothing for the field to count, and
+   * every frame set written before it existed says the same. Present, a 0 is a
+   * claim — the rig declares physics and no constraint took a step on any
+   * frame — and that is what tells a reading taken with physics from one
+   * taken without.
+   */
+  physics?: { stepped: number; fps: number };
 }
 
 export interface FramesSidecar {
@@ -445,6 +459,8 @@ export interface PoseOptions {
    * so `framingViewport` keeps it and the box holds what the frames draw.
    */
   environment?: readonly EnvironmentStep[];
+  /** Also record the physics constraints the step that posed each frame stepped — see `Frame.physics` (issue #1467). */
+  physics?: boolean;
 }
 
 /**
@@ -586,6 +602,12 @@ export interface Frame {
    * second derivation of it.
    */
   attachments?: AttachmentPose[];
+  /**
+   * The physics constraints the step that posed this frame stepped, by name in
+   * code-unit order — present only when `PoseOptions.physics` asked for it
+   * (issue #1467). See `Posed.physics` for what counts as a step.
+   */
+  physics?: string[];
 }
 
 /**
@@ -1055,6 +1077,16 @@ export interface Posed {
   bones(): BoneSnapshot[];
   /** Every slot's region or mesh attachment, whole, in the posed draw order. */
   attachments(): AttachmentPose[];
+  /**
+   * The physics constraints the step that posed this moment stepped, by name in
+   * code-unit order (issue #1467). A constraint is stepped when, after a step
+   * that moved the skeleton's clock, its own clock reads the skeleton's: the
+   * physics update sets it there, and every way of not running — inactive, a
+   * mix of 0, the step skipped — leaves it behind. Read off the posed state on
+   * both posers, never off which call was made, so a step removed reads 0. The
+   * setup pose and a reset pose, where the clock has not moved, step none.
+   */
+  physics(): string[];
 }
 
 /**
@@ -1126,6 +1158,7 @@ function frameOf(index: number, time: number, posed: Posed, draw: DrawOptions, o
     pieces: posed.pieces(draw),
     ...(opts?.bones ? { bones: posed.bones() } : {}),
     ...(opts?.geometry ? { attachments: posed.attachments() } : {}),
+    ...(opts?.physics ? { physics: posed.physics() } : {}),
   };
 }
 

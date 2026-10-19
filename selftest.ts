@@ -69444,11 +69444,22 @@ function runBuildRefusalSuite(): number {
  * `fcntl` (Bun has none): `mkfifo`, then `node:fs` opens both ends non-blocking — and reads 4 KB every 10 ms, so a
  * command that prints faster than that meets a full pipe. A `head` job instead reads a plain pipe until its first
  * chunk and closes it, as `| head -1` does. Each job's figures go to its `result` file.
+ *
+ * ⚠️ Each FIFO job is started through `perl`, which sets `O_NONBLOCK` on its stdout again and then `exec`s the
+ * command. Measured: from Bun 1.4.3 a PARENT's `spawn` — `node:child_process` and `Bun.spawn` alike — hands the
+ * child an inherited pipe put back into blocking mode, so under a 1.4.3 reader one raw 196,608-byte `writeSync`
+ * came through whole from a 1.4.2 child and from a 1.4.3 child, where a 1.4.2 parent cut both to 8,192 bytes; with
+ * the shim all four pairs are cut. That is what turned CLI119 red on CI (ubuntu, Bun 1.4.3). `perl` is on the
+ * ubuntu runners and on macOS; without it every FIFO job reports the refusal by name, and CLI118 and CLI119 go red
+ * rather than reading a blocking pipe as a pass.
  */
 const NON_BLOCKING_READER = `
 import { closeSync, constants, openSync, readFileSync, readSync, writeFileSync, writeSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const shim = process.argv[1].replace(/reader\.mjs$/, 'nonblock.pl');
+const perl = spawnSync('perl', ['-e', '1']);
+const noPerl = perl.error !== undefined || perl.status !== 0 ? 'perl is not on PATH, so the non-blocking shim could not run and no non-blocking pipe was handed to the command' : null;
 for (const job of JSON.parse(readFileSync(process.argv[2], 'utf8'))) {
   if (job.head) {
     const child = spawn(process.execPath, job.argv, { cwd: job.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -69460,6 +69471,10 @@ for (const job of JSON.parse(readFileSync(process.argv[2], 'utf8'))) {
     writeFileSync(job.result, JSON.stringify({ code, signal, first, stderr }));
     continue;
   }
+  if (noPerl !== null) {
+    writeFileSync(job.result, JSON.stringify({ error: noPerl }));
+    continue;
+  }
   if (spawnSync('mkfifo', [job.fifo]).status !== 0) {
     writeFileSync(job.result, JSON.stringify({ error: 'mkfifo could not make a FIFO, so no non-blocking pipe was built' }));
     continue;
@@ -69467,7 +69482,7 @@ for (const job of JSON.parse(readFileSync(process.argv[2], 'utf8'))) {
   const r = openSync(job.fifo, constants.O_RDONLY | constants.O_NONBLOCK);
   const w = openSync(job.fifo, constants.O_WRONLY | constants.O_NONBLOCK);
   const out = openSync(job.out, 'w');
-  const child = spawn(process.execPath, job.argv, { cwd: job.cwd, stdio: ['ignore', w, 'ignore'] });
+  const child = spawn('perl', [shim, process.execPath, ...job.argv], { cwd: job.cwd, stdio: ['ignore', w, 'ignore'] });
   closeSync(w);
   let exit = null;
   child.on('exit', (code, signal) => { exit = { code, signal }; });
@@ -69507,6 +69522,8 @@ function nonBlockingStdoutControls(say: (name: string, ok: boolean, detail: stri
   const work = mkdtempSync(join(harnessTemp(), 'rigc-nonblocking-'));
   const reader = join(work, 'reader.mjs');
   writeFileSync(reader, NON_BLOCKING_READER);
+  // The shim: stdout set O_NONBLOCK again in the child, then the command — see NON_BLOCKING_READER for why.
+  writeFileSync(join(work, 'nonblock.pl'), "use Fcntl;\nmy $fl = fcntl(STDOUT, F_GETFL, 0) or die \"F_GETFL: $!\";\nfcntl(STDOUT, F_SETFL, $fl | O_NONBLOCK) or die \"F_SETFL: $!\";\nexec @ARGV or die \"exec: $!\";\n");
   const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex').slice(0, 12);
   const LARGE = 64 * 1024;
   const explainLook = ['explain', '--rig', join(import.meta.dir, 'gallery', 'look', 'rig.json'), '--motion', join(import.meta.dir, 'gallery', 'look', 'motion.json'), '--out', join(work, 'explain-out')];
@@ -69576,12 +69593,42 @@ function nonBlockingStdoutControls(say: (name: string, ok: boolean, detail: stri
     );
   }
 
-  // CLI119 — the plant the reader must catch on every Bun: the routing replaced by one raw writeSync per line. A
-  // write to a full non-blocking FIFO returns short or EAGAIN at the kernel, whatever the runtime does with
-  // console.log, so this is the proof that CLI118's reader can see a cut at all.
-  // CLI121 — the baseline this card was filed on: console.log unrouted. Cut on Bun 1.2.0 and 1.4.2; on 1.4.3 the
-  // same tree through the same reader on the same machine came through whole, so there the plant cannot be seen
-  // to cut and the control says so by name rather than passing.
+  // CLI119 — the reader must be able to see a cut, on every Bun and with no timing to win: a child writes
+  // 196,608 bytes with ONE raw writeSync, and one write larger than the pipe is short at the kernel — 65,536 on
+  // linux, 8,192 on macOS — because the reader cannot drain inside a syscall. The same bytes through writeWhole
+  // are the positive half. A plant inside the tree is not timing-free, measured twice: one writeSync per line
+  // fills a 64 KiB pipe only when the writer outruns the 4 KB / 10 ms drain, and explain computes between its
+  // lines; one writeSync at exit came through whole on Bun 1.4.3, which flushes stdout blocking at exit.
+  // CLI121 — the baseline this card was filed on: console.log unrouted. Cut on Bun 1.2.0 and 1.4.2; Bun 1.4.3's
+  // console.log survives the same non-blocking pipe (measured under a 1.4.2 parent, child 1.4.3: whole), so there
+  // the plant cannot be seen to cut and the control says so by name rather than passing.
+  {
+    const faults119: string[] = [];
+    const burst = join(work, 'burst.ts');
+    writeFileSync(
+      burst,
+      [
+        "import { writeSync } from 'node:fs';",
+        `import { writeWhole } from ${JSON.stringify(join(import.meta.dir, 'src', 'cli', 'write_whole.ts'))};`,
+        "const text = `${Array.from({ length: 4096 }, (_, i) => String(i).padStart(47, '0')).join('\\n')}\\n`;",
+        "if (process.argv[2] === 'whole') writeWhole(1, text);",
+        'else writeSync(1, text);',
+        '',
+      ].join('\n'),
+    );
+    const [raw, whole] = read(work, 'burst.ts', [['raw'], ['whole']]);
+    const rawWhy = apart(raw);
+    if (raw.file.length !== 196608) faults119.push(`the burst wrote ${raw.file.length} byte(s) to a file, not 196608`);
+    if (rawWhy === null) faults119.push(`one raw writeSync of ${raw.file.length} byte(s) came through whole — the reader cannot see a cut`);
+    const wholeWhy = apart(whole);
+    if (wholeWhy !== null) faults119.push(`the same bytes through writeWhole: ${wholeWhy}`);
+    say(
+      'CLI119_ONE_RAW_WRITESYNC_LARGER_THAN_THE_PIPE_IS_CUT_SHORT_BY_THE_SAME_READER_AND_WRITEWHOLE_IS_NOT',
+      faults119.length === 0,
+      probeDetail(faults119.length === 0, faults119, `one raw writeSync of 196608 bytes: ${rawWhy ?? 'whole'}; the same bytes through writeWhole: whole, exit 0`),
+      'a reader that never fills is a blocking pipe by another name: CLI118 is only a reading if a writer that cannot survive a full pipe fails it — one raw write larger than a non-blocking FIFO is short at the kernel on every Bun, with no timing to win',
+    );
+  }
   {
     const root = absentTree(join(work, 'plant'));
     const file = join(root, 'src', 'cli', 'shared.ts');
@@ -69593,28 +69640,14 @@ function nonBlockingStdoutControls(say: (name: string, ok: boolean, detail: stri
       const [r] = read(root, 'cli_core.ts', [explainLook]);
       return r;
     };
-    const faults119: string[] = [];
-    let detail119 = '';
-    if (n !== 1) faults119.push(`the plant found its text ${n} time(s) in src/cli/shared.ts, not once`);
-    else {
-      const r = planted("  console.log = (...parts: unknown[]): void => { require('node:fs').writeSync(1, `${parts.map(String).join(' ')}\\n`); };\n");
-      const why = apart(r);
-      if (why === null) faults119.push(`${r.label} with one raw writeSync per line came through whole (${r.file.length} byte(s)) — the reader cannot see a cut`);
-      else detail119 = `${r.label} with one raw writeSync per line: ${why}`;
-    }
-    say(
-      'CLI119_A_PLANTED_TREE_WRITING_EACH_LINE_WITH_ONE_RAW_WRITESYNC_IS_CUT_SHORT_BY_THE_SAME_READER',
-      faults119.length === 0,
-      probeDetail(faults119.length === 0, faults119, `caught: ${detail119}`),
-      'a reader that never fills is a blocking pipe by another name: CLI118 is only a reading if a writer that cannot survive a full pipe fails it — and a raw write to a full non-blocking FIFO is short at the kernel on every Bun',
-    );
+    if (n !== 1) say('CLI121_THE_UNROUTED_CONSOLE_LOG_OF_THIS_BUN_IS_CUT_SHORT_BY_THE_SAME_READER', false, `the plant found its text ${n} time(s) in src/cli/shared.ts, not once`, 'issue #1493 was filed on this cut');
     if (n === 1) {
       const r = planted('');
       const why = apart(r);
       const name = 'CLI121_THE_UNROUTED_CONSOLE_LOG_OF_THIS_BUN_IS_CUT_SHORT_BY_THE_SAME_READER';
       if (why === null) {
-        console.log(`  SKIP  ${name}  (Bun ${Bun.version} delivered ${r.label} with console.log unrouted whole through the reader, ${r.file.length} of ${r.file.length} byte(s), so the plant cannot be seen to cut on this Bun)`);
-        console.log(`          ⚠️ This is a HOLE in this run, not a pass — Bun 1.2.0 and 1.4.2 cut it (explain on gallery/look to 80,776 of 98,260 bytes on 1.4.2, linux, this reader); on this Bun the route is held by CLI118 and the reader by CLI119.`);
+        console.log(`  SKIP  ${name}  (Bun ${Bun.version}'s own console.log, unrouted, survived the non-blocking pipe: ${r.label} came through whole, ${r.file.length} of ${r.file.length} byte(s), so the cut this card was filed on cannot be seen on this Bun)`);
+        console.log(`          ⚠️ This is a HOLE in this run, not a pass — the pipe is non-blocking (CLI119 cut a raw write through it in this run); Bun 1.2.0 and 1.4.2 cut console.log (explain on gallery/look to 80,776 of 98,260 bytes on 1.4.2, linux, this reader), and Bun 1.4.3 queues it instead, measured. On this Bun the route is held by CLI118 and the reader by CLI119.`);
       } else {
         say(name, true, `caught: ${r.label} with console.log unrouted: ${why}`, 'issue #1493 was filed on this cut: console.log on a non-blocking stdout stopped near the pipe\'s capacity with exit 0 on Bun 1.2.0 and 1.4.2');
       }

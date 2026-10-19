@@ -73088,7 +73088,7 @@ function compileGuideCensus(files: ReadonlyArray<{ path: string; text: string }>
     return all.get(name) ?? [];
   };
   // These are runtime values, not prose factories: their string representation is deliberately a hole.
-  const valuePrinters = new Set(['String', 'JSON.stringify', 'f32', 'round', 'r6', 'channelHex', 'dottedPath', 'nameDistance']);
+  const valuePrinters = new Set(['String', 'JSON.stringify', 'f32', 'round', 'r6', 'channelHex', 'dottedPath', 'nameDistance', 'stopFigure']);
   const unwrap = (node: ts.Expression): ts.Expression => {
     while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isNonNullExpression(node)) node = node.expression;
     return node;
@@ -138660,8 +138660,8 @@ const stopBone = (rig: StopJson, name: string): StopJson => (rig.bones as StopJs
  * calling the expansion, or the control would be the message agreeing with
  * itself.
  */
-function legStopBoundRefusal(at: readonly [number, number]): string {
-  const { skirt, root, hipY, thighX, outward } = LEG_STOP_PLATE;
+function legStopBoundRefusal(at: readonly [number, number], outward: number = LEG_STOP_PLATE.outward): string {
+  const { skirt, root, hipY, thighX } = LEG_STOP_PLATE;
   const degrees = (r: number): number => r / (Math.PI / 180);
   const hang = -90;
   const rootWorld = [root[0] - skirt.width / 2, hipY - root[1]];
@@ -138670,12 +138670,28 @@ function legStopBoundRefusal(at: readonly [number, number]): string {
   const rest = hang - aim;
   const sign = rest < 0 ? 1 : -1;
   const off = Math.abs(rest);
+  // Issue #1463's printing, by hand: what the author typed as typed; a reading
+  // to three decimals; a figure past ±180° rounded away from zero and a remedy
+  // toward it, here by ceil and floor on the magnitude rather than the helper's
+  // nudge, so the two roundings are not one piece of code agreeing with itself.
+  const reading = (v: number): string => v.toFixed(3);
+  const past = (v: number): string => (Math.sign(v) * Math.ceil(Math.abs(v) * 1000) / 1000).toFixed(3);
+  const remedy = (v: number): string => (Math.sign(v) * Math.floor(Math.abs(v) * 1000) / 1000).toFixed(3);
+  const where = (p: readonly number[]): string => p.map(reading).join(', ');
   return (
-    `stop "hem": "outward" ${outward} puts "hem0_d"'s bound at ${rest - sign * outward}°, past ±180° — the clamp reads a local rotation in (-180, 180], so a bound past it is never reached and the range it states is not the one that holds. ` +
-    `"hem0" hangs at ${hang}° from its root at [${rootWorld.join(', ')}], and "hem_touch" ("at" [${at.join(', ')}] on "thigh") sits at [${point.join(', ')}] — Spine world, y up, at the setup pose — ` +
-    `so the aim from that root to the point lies ${off}° off the hang (rest ${rest}°): |rest| ${off}° + "outward" ${outward}° is ${off + outward}°, above 180°. ` +
-    `Move "hem_touch" to within ${180 - outward}° (180° − "outward") of the direction "hem0" hangs in from its root, ${hang}°, or state "outward" at most ${180 - off}°`
+    `stop "hem": "outward" ${outward} puts "hem0_d"'s bound at ${past(rest - sign * outward)}°, past ±180° — the clamp reads a local rotation in (-180, 180], so a bound past it is never reached and the range it states is not the one that holds. ` +
+    `"hem0" hangs at ${reading(hang)}° from its root at [${where(rootWorld)}], and "hem_touch" ("at" [${at.join(', ')}] on "thigh") sits at [${where(point)}] — Spine world, y up, at the setup pose — ` +
+    `so the aim from that root to the point lies ${reading(off)}° off the hang (rest ${reading(rest)}°): |rest| ${reading(off)}° + "outward" ${outward}° is ${past(off + outward)}°, above 180°. ` +
+    `Move "hem_touch" to within ${remedy(180 - outward)}° (180° − "outward") of the direction "hem0" hangs in from its root, ${reading(hang)}°, or state "outward" at most ${remedy(180 - off)}°`
   );
+}
+
+/** The probe's rest angle at its own point, worked as `legStopBoundRefusal` works it: how far the aim at `touch` lies off `hem0`'s hang. */
+function legStopRestOff(): number {
+  const { skirt, root, hipY, thighX, touch } = LEG_STOP_PLATE;
+  const rootWorld = [root[0] - skirt.width / 2, hipY - root[1]];
+  const point = [thighX + touch[0], hipY + touch[1]];
+  return Math.abs(-90 - Math.atan2(point[1] - rootWorld[1], point[0] - rootWorld[0]) / (Math.PI / 180));
 }
 
 function legStopRefusals(): Array<{ code: string; edit: (rig: StopJson, motion: StopJson) => void; says: string; what: string }> {
@@ -138945,9 +138961,9 @@ function runLegStopSuite(): number {
     // remedy — and leaves the whole-message figures to LG33's exact frame.
     const wants = [
       `"outward" ${outward} puts "hem0_d"'s bound at`,
-      '"hem0" hangs at -90° from its root at',
+      '"hem0" hangs at -90.000° from its root at',
       `"hem_touch" ("at" [${leg.height}, 0] on "rise") sits at`,
-      `Move "hem_touch" to within ${180 - outward}° (180° − "outward") of the direction "hem0" hangs in from its root, -90°`,
+      `Move "hem_touch" to within ${(180 - outward).toFixed(3)}° (180° − "outward") of the direction "hem0" hangs in from its root, -90.000°`,
     ];
     if (refusal === null) probes.push(`the point at the rising leg's far end [${leg.height}, 0] compiled clean`);
     else for (const want of wants) if (!refusal.includes(want)) probes.push(`the point at the rising leg's far end was refused without ${JSON.stringify(want)}: ${refusal}`);
@@ -138967,6 +138983,77 @@ function runLegStopSuite(): number {
       ok,
       probeDetail(ok, probes, `on "rise", a bone at the knee pointing up: "at" [${leg.height}, 0] (the ankle, above "hem0"'s root) is refused with ${refusal ?? 'nothing'}; "at" [0, 0] (the knee, below it) builds through the whole gate and "skirt:leg" passes through on ${passingOf(knee.core)} — on the core and on spine-core, one ${PASS_THROUGH_FILE} on both`),
       'issue #1455 Bar 1: a prone figure\'s shin rises from behind the cloth, so the point a hanging leg puts at its far end lands above the chain — the refusal has to say where, and the knee has to be the point that holds',
+    );
+  }
+
+  // LG35 — issue #1463 Bar 4: an "outward" a millionth of a degree past what the
+  // point allows is refused with a sum that reads above 180°, never 180.000°, and
+  // the "at most" it offers, stated, builds.
+  {
+    const probes: string[] = [];
+    const off = legStopRestOff();
+    const outward = 180 - off + 1e-6;
+    const refusalOf = (value: number): string | null => {
+      const rig = read(probe.rigPath);
+      stopEntry(rig).outward = value;
+      try {
+        compile(optsOf(written(`LG35_outward_${value}`, rig)));
+        return null;
+      } catch (err) {
+        return err instanceof CompileError ? err.message : `NOT a CompileError: ${(err as Error).message}`;
+      }
+    };
+    const refusal = refusalOf(outward);
+    const want = legStopBoundRefusal(LEG_STOP_PLATE.touch, outward);
+    let offered: string | null = null;
+    if (refusal === null) probes.push(`"outward" ${outward}, 1e-6° past 180° − |rest|, compiled clean`);
+    else {
+      if (!refusal.includes(want)) probes.push(`"outward" ${outward} was refused without ${JSON.stringify(want)}: ${refusal}`);
+      if (refusal.includes('180.000°')) probes.push(`"outward" ${outward} was refused printing 180.000°, which reads as inside the range: ${refusal}`);
+      offered = /at most (-?[0-9.]+)°$/.exec(refusal)?.[1] ?? null;
+      if (offered === null) probes.push(`the refusal offers no "at most": ${refusal}`);
+      else {
+        const again = refusalOf(Number(offered));
+        if (again !== null) probes.push(`"outward" ${offered}, the "at most" the refusal offers, is refused in turn: ${again}`);
+      }
+    }
+    const ok = probes.length === 0;
+    say(
+      'LG35_A_BOUND_A_HAIR_PAST_A_HALF_TURN_READS_PAST_IT_AND_ITS_REMEDY_BUILDS',
+      ok,
+      probeDetail(ok, probes, `"outward" ${outward} (|rest| ${off} + it is 180 + 1e-6): refused printing the sum ${/is (-?[0-9.]+)°, above/.exec(refusal ?? '')?.[1] ?? '?'}° and offering "at most" ${offered ?? '?'}°, which builds`),
+      'issue #1463 Bar 4: rounding must not turn a refusal into an apparent acceptance, nor a remedy into a second refusal',
+    );
+  }
+
+  // LG36 — issue #1463 Bar 1: every degree src/stop.ts prints goes through its
+  // one helper, `stopFigure`. The source is scanned for an interpolation followed by
+  // "°" that is not `stopFigure(…)` or the constant `BOUND`; a planted raw double is
+  // caught.
+  {
+    const probes: string[] = [];
+    const text = readFileSync(join(import.meta.dir, 'src', 'stop.ts'), 'utf8');
+    const degreeSites = (source: string): { held: number; raw: string[] } => {
+      const raw: string[] = [];
+      let held = 0;
+      for (const m of source.matchAll(/\$\{((?:[^{}]|\{[^{}]*\})*)\}°/g)) {
+        if (/^stopFigure\(/.test(m[1]) || m[1] === 'BOUND') held++;
+        else raw.push(m[0]);
+      }
+      return { held, raw };
+    };
+    const live = degreeSites(text);
+    for (const site of live.raw) probes.push(`src/stop.ts prints ${site} without the helper`);
+    if (live.held === 0) probes.push('src/stop.ts printed no degree through `stopFigure` — the scan read nothing');
+    const plantFrom = "${stopFigure(off, 'reading')}°";
+    if (!text.includes(plantFrom)) probes.push(`no ${plantFrom} to plant on`);
+    else if (raisedBy(degreeSites(text.replace(plantFrom, '${off}°')).raw, { at: '${off}°', was: live.raw }).length !== 1) probes.push('a planted ${off}° was not caught');
+    const ok = probes.length === 0;
+    say(
+      'LG36_EVERY_DEGREE_A_STOP_PRINTS_GOES_THROUGH_ONE_HELPER',
+      ok,
+      probeDetail(ok, probes, `${live.held} degree interpolation(s) in src/stop.ts, every one \`stopFigure(…)\` or \`BOUND\`; \`\${off}°\` planted is caught`),
+      'issue #1463 Bar 1: one number format for the stops refusals, held by the source rather than by a reading of it',
     );
   }
 

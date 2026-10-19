@@ -56,7 +56,15 @@ const entry = present === null ? 'cli_core.ts' : 'cli.ts';
 const args = process.argv.slice(2);
 const result = spawnSync('bun', [path.join(root, entry), ...args], { stdio: 'inherit' });
 
-if (!result.error && result.status === 0 && args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
+// ⚠️ The exit and the signal are read before `error` (issue #1488): Bun 1.2.0 —
+// the declared minimum, and what runs this file as `bun bin/rigc.cjs` — sets
+// `error` on every child that exits non-zero, so reading it first answered the
+// CLI's own refusal (exit 2) with "could not launch bun" and exit 1. `error` is
+// a launch that failed only where the child left neither a status nor a signal.
+// Node never sets `error` beside a status, so under node nothing here changes.
+const launched = typeof result.status === 'number' || result.signal !== null;
+
+if (launched && result.status === 0 && args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
   process.stderr.write(
     present === null
       ? `entry: ${entry} — ${RUNTIME} absent — the round trip and the commands that need it are not available here; see --help\n`
@@ -64,20 +72,18 @@ if (!result.error && result.status === 0 && args.length === 1 && (args[0] === '-
   );
 }
 
-if (result.error) {
-  if (result.error.code === 'ENOENT') {
-    process.stderr.write('rigc runs on Bun, which was not found on PATH — install it from https://bun.sh\n');
-  } else {
-    process.stderr.write(`rigc: could not launch bun: ${result.error.message}\n`);
-  }
-  process.exit(1);
-}
-
-if (result.signal) {
+if (typeof result.status === 'number') {
+  process.exit(result.status);
+} else if (result.signal !== null) {
   // A signal (e.g. Ctrl-C) killed the child — die the same way instead of
   // inventing an exit code, so the caller sees the same thing it would have
   // seen running bun directly.
   process.kill(process.pid, result.signal);
 } else {
-  process.exit(typeof result.status === 'number' ? result.status : 1);
+  if (result.error && result.error.code === 'ENOENT') {
+    process.stderr.write('rigc runs on Bun, which was not found on PATH — install it from https://bun.sh\n');
+  } else if (result.error) {
+    process.stderr.write(`rigc: could not launch bun: ${result.error.message}\n`);
+  }
+  process.exit(1);
 }

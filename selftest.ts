@@ -69904,6 +69904,86 @@ function runLauncherSuite(): number | null {
     );
   }
 
+  // Issue #1488: the bin run under Bun rather than node. `bun bin/rigc.cjs` is a
+  // real way in — the file is plain CommonJS — and under Bun 1.2.0, the declared
+  // minimum, `spawnSync` sets `error` on every child that exits non-zero
+  // ({ code: <the status>, errno: -1 }), so a launcher that read `error` before
+  // `status` answered the CLI's own refusal with "could not launch bun" and exit
+  // 1. The Bun that runs this file (CI's, current) does not set it, so on its own
+  // it cannot see that order at all: the old launcher was measured exit 2 under
+  // it. `BIN05` therefore runs the bin with a preload that gives `spawnSync`
+  // 1.2.0's shape, and holds the old order planted back red under it — 1.2.0
+  // itself was measured by hand, not here.
+  const refusal = runCli(['build']);
+  const underBun = (launcher: string, preload?: string): { status: number | null; stderr: string } => {
+    const ran = spawnSync(process.execPath, [...(preload === undefined ? [] : ['--preload', preload]), launcher, 'build'], {
+      cwd: import.meta.dir,
+      encoding: 'utf8',
+    });
+    return { status: ran.status, stderr: ran.stderr };
+  };
+  const ownRefusal = (got: { status: number | null; stderr: string }): boolean =>
+    got.status === 2 && got.stderr === refusal.stderr && !got.stderr.includes('could not launch');
+  const shown = (got: { status: number | null; stderr: string }): string =>
+    `exit=${String(got.status)} last stderr line=${JSON.stringify(got.stderr.trim().split('\n').at(-1) ?? '')}`;
+
+  {
+    const got = underBun(LAUNCHER);
+    say(
+      'BIN04_UNDER_BUN_A_REFUSING_COMMAND_KEEPS_THE_CLIS_OWN_EXIT_AND_MESSAGE',
+      refusal.status === 2 && ownRefusal(got),
+      `bun bin/rigc.cjs build: ${shown(got)}; bun cli.ts build: exit=${String(refusal.status)}`,
+      'a refusal handed through the launcher has to arrive as the refusal, not as a launch failure — issue #1488',
+    );
+  }
+
+  {
+    const work = mkdtempSync(join(harnessTemp(), 'rigc-bin-order-'));
+    const shim = join(work, 'bun120_spawnsync.cjs');
+    writeFileSync(
+      shim,
+      "const cp = require('node:child_process');\n" +
+        'const real = cp.spawnSync;\n' +
+        'cp.spawnSync = function (...a) {\n' +
+        '  const r = real.apply(this, a);\n' +
+        "  if (typeof r.status === 'number' && r.status !== 0 && !r.error) r.error = Object.assign(new Error(''), { code: r.status, errno: -1 });\n" +
+        '  return r;\n' +
+        '};\n',
+    );
+    // The plant is the shipped file with the old order put back: `error` read
+    // before anything else. Its root is pinned to this checkout so it can sit in
+    // the temp dir and still hand off to the same cli.ts.
+    const source = readFileSync(LAUNCHER, 'utf8');
+    const rootLine = "const root = path.join(__dirname, '..');";
+    const decision = 'const launched = ';
+    const planted = join(work, 'rigc.cjs');
+    const plantable = source.split(rootLine).length === 2 && source.split(decision).length === 2;
+    writeFileSync(
+      planted,
+      source
+        .replace(rootLine, () => `const root = ${JSON.stringify(import.meta.dir)};`)
+        .replace(
+          decision,
+          () =>
+            'if (result.error) {\n' +
+            "  if (result.error.code === 'ENOENT') process.stderr.write('rigc runs on Bun, which was not found on PATH — install it from https://bun.sh\\n');\n" +
+            '  else process.stderr.write(`rigc: could not launch bun: ${result.error.message}\\n`);\n' +
+            '  process.exit(1);\n}\n' +
+            decision,
+        ),
+    );
+    const real = underBun(LAUNCHER, shim);
+    const plant = underBun(planted, shim);
+    say(
+      'BIN05_UNDER_BUN_120S_SPAWNSYNC_THE_STATUS_IS_READ_BEFORE_ERROR_AND_THE_OLD_ORDER_PLANTED_BACK_IS_RED',
+      plantable && ownRefusal(real) && !ownRefusal(plant) && plant.status === 1 && plant.stderr.includes('could not launch bun'),
+      `shipped bin: ${shown(real)}; error-first plant: ${shown(plant)}` +
+        (plantable ? '' : ' — the plant could not be placed: the root line or the decision line is not in bin/rigc.cjs exactly once'),
+      'Bun 1.2.0 sets `error` beside a status on every non-zero exit; reading it first turned the CLI\'s exit 2 ' +
+        'into "could not launch bun" and exit 1 — issue #1488',
+    );
+  }
+
   return bad;
 }
 
@@ -142227,8 +142307,8 @@ function main(): void {
     launcherBad === null
       ? '\n  ⚠️ No `node` binary was found on PATH, so the packaged bin/rigc.cjs launcher (issue #220) was not ' +
         'exercised in this run.'
-      : ', + ' + n('bin-launcher') + ' bin-launcher controls (`--version` and an unknown command match direct invocation, and the exact ' +
-        'message printed when Bun is missing from PATH)';
+      : ', + ' + n('bin-launcher') + ' bin-launcher controls (`--version` and an unknown command match direct invocation, the exact ' +
+        'message printed when Bun is missing from PATH, and a refusal run under Bun — 1.2.0\'s `spawnSync` included — arriving as the CLI\'s own exit 2)';
   const roundtripRefusals =
     ', + ' + n('editor-roundtrip') + ' editor-roundtrip refusal controls (issue #410 — the half of `tools/editor_roundtrip.ts` a machine ' +
     'with no editor can answer for, which is the half that had never run: a missing editor refused by the path ' +

@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.63.0](https://github.com/rig-c/core/compare/v2.62.0...v2.63.0) (2026-10-19)
+
+
+### Features
+
+* **render:** --overlaps names which slot covers which, per frame, with an outline plate ([#1483](https://github.com/rig-c/core/issues/1483)) ([3e10594](https://github.com/rig-c/core/commit/3e1059408911e1a7fad49a73ea62420db604fac2)), closes [#1480](https://github.com/rig-c/core/issues/1480)
+
+
+### Bug Fixes
+
+* **render:** the overlaps plate spells slot names in lowercase and places labels that do not collide ([#1491](https://github.com/rig-c/core/issues/1491)) ([396655d](https://github.com/rig-c/core/commit/396655d47897477e25dbe1df176f0784abc48d46)), closes [#1484](https://github.com/rig-c/core/issues/1484)
+* **selftest:** run on the declared minimum Bun 1.2.0, reporting what it cannot check as a SKIP and a HOLE ([#1489](https://github.com/rig-c/core/issues/1489)) ([9b3aa9b](https://github.com/rig-c/core/commit/9b3aa9b82d6482d7d175a2bdd90633556de4fa09)), closes [#1482](https://github.com/rig-c/core/issues/1482)
+
 ## [2.62.0](https://github.com/rig-c/core/compare/v2.61.1...v2.62.0) (2026-10-19)
 
 

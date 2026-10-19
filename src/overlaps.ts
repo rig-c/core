@@ -141,7 +141,7 @@ export interface OverlapPlant {
 }
 
 /** One frame's per-pixel lists of the slots that drew there, in draw order — what both the counts and the plate read. */
-interface FrameDraw {
+export interface FrameDraw {
   /** Slot names, in the order they first drew on this frame. */
   slots: string[];
   /** Per pixel, row major, the indices into `slots` that drew it, in draw order; `null` where nothing did. */
@@ -369,29 +369,94 @@ export const dashOn = (x: number, y: number): boolean => (x + y) % 4 < 2;
 const crowds = (a: [number, number, number, number], b: [number, number, number, number]): boolean =>
   a[0] < b[0] + b[2] + 1 && b[0] < a[0] + a[2] + 1 && a[1] < b[1] + b[3] + 1 && b[1] < a[1] + a[3] + 1;
 
+/** One label the plate drew: the slot's name as printed, its box, the contour pixel it names, and whether a leader line joins them. */
+export interface PlateLabel {
+  /** The slot's name, exactly as the lines print it. */
+  name: string;
+  /** The label's ink box `[x0, y0, x1, y1]`, frame pixels, both ends inclusive — the text's full 5x7 cells. */
+  box: OverlapBox;
+  /** The contour pixel the label names: the slot's topmost boundary pixel, the leftmost on a tie. */
+  anchor: [number, number];
+  /** Whether no candidate along the contour was free and the label sits at the nearest free spot, joined by a line. */
+  leader: boolean;
+  /** Whether no free spot was left on the plate at all, so the label sits at its first candidate and may crowd another — stated, never silent. */
+  crowded: boolean;
+}
+
+/**
+ * A planted defect of the plate, for the suite's mutants only (`OX07`, `OX08`
+ * in `selftest.ts`). Production passes none.
+ */
+export interface OverlapPlatePlant {
+  /** Every label at its first candidate, above the contour's top, whatever it crowds — placement off. */
+  atTop?: boolean;
+  /** Labels drawn in capitals, as the font once drew every name. */
+  upper?: boolean;
+}
+
+/** An outline plate and the labels on it, as the writer placed them. */
+export interface LabelledPlate {
+  plate: Plate;
+  /** In draw order, one per participant drawn on the frame. */
+  labels: PlateLabel[];
+}
+
+/** A one-pixel line from (x0, y0) to (x1, y1), integer steps along the longer axis — no antialiasing, one pixel set per step. */
+function leaderLine(plate: Plate, x0: number, y0: number, x1: number, y1: number, colour: RGBA): void {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+  for (let s = 0; s <= n; s++) {
+    const x = n === 0 ? x0 : x0 + Math.round(((x1 - x0) * s) / n);
+    const y = n === 0 ? y0 : y0 + Math.round(((y1 - y0) * s) / n);
+    if (x >= 0 && y >= 0 && x < plate.width && y < plate.height) plate.set(x, y, colour);
+  }
+}
+
 /**
  * The outline plate of one frame: on `PLATE_BACKGROUND`, every slot of
  * `participants` that draws on the frame as its mask boundary — a drawn pixel
  * with an undrawn 4-neighbour, or on the plate's edge — in its colour, in the
  * frame's draw order; a boundary pixel some slot drawn later also drew is
- * covered, and drawn dashed (`dashOn`). Each slot's name sits above its
- * contour's topmost pixel (the leftmost on a tie), moved down a text line at a
- * time while an earlier label crowds it, in draw order.
+ * covered, and drawn dashed (`dashOn`). Each slot's name is printed as the
+ * lines print it, in the case it has.
+ *
+ * ## Where a label goes (issue #1484)
+ *
+ * Labels are placed one at a time in the frame's draw order; a label is a box
+ * of `textWidth(name)` by `GLYPH_H` pixels, and a box is **free** when it does
+ * not touch or sit within one pixel of any box placed before it (`crowds`).
+ * Every candidate box is clamped into the plate before it is tried, so no label
+ * leaves the plate (a name wider than the plate is the one exception: it starts
+ * at x 0 and runs off the right edge). The candidates, in this fixed order:
+ *
+ * 1. for every boundary pixel of the slot's contour in raster order (top row
+ *    first, left to right — so the first is the contour's topmost pixel, the
+ *    leftmost on a tie, which is the label's anchor), the box above it
+ *    (`GLYPH_H + 1` up, left edge on the pixel), then below it (2 down), then to
+ *    its left (`2 +` the label's width), then to its right (2 across), the last
+ *    two centred on the pixel's row;
+ * 2. none free: every in-plate position in raster order, and the one whose box
+ *    centre is nearest the anchor (squared distance, the first in raster order
+ *    on a tie) wins, joined to the anchor by a one-pixel leader line drawn from
+ *    the anchor to the nearest pixel of the box, in the slot's colour;
+ * 3. no position free at all: the first candidate of step 1, marked `crowded`.
+ *
+ * The first free candidate wins. No randomness and no search order that
+ * depends on anything but the frame: one frame, one plate, on every machine.
  */
-export function overlapPlate(reading: OverlapReading, index: number, participants: readonly string[], viewport: Viewport): Plate | null {
+export function overlapPlateLabelled(reading: OverlapReading, index: number, participants: readonly string[], viewport: Viewport, plant: OverlapPlatePlant = {}): LabelledPlate | null {
   const draw = reading.plated.get(index);
   if (draw === undefined) return null;
   const { width, height } = viewport;
   const plate = new Plate(width, height);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) plate.set(x, y, PLATE_BACKGROUND);
-  const labels: Array<{ name: string; colour: RGBA; x: number; y: number }> = [];
+  const contours: Array<{ name: string; colour: RGBA; boundary: Array<[number, number]> }> = [];
   for (let id = 0; id < draw.slots.length; id++) {
     const name = draw.slots[id];
     const place = participants.indexOf(name);
     if (place < 0) continue;
     const colour = PLATE_COLOURS[place % PLATE_COLOURS.length];
     const has = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < width && y < height && (draw.lists[y * width + x]?.includes(id) ?? false);
-    let top: [number, number] | null = null;
+    const boundary: Array<[number, number]> = [];
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const list = draw.lists[y * width + x];
@@ -399,23 +464,73 @@ export function overlapPlate(reading: OverlapReading, index: number, participant
         const k = list.indexOf(id);
         if (k < 0) continue;
         if (has(x - 1, y) && has(x + 1, y) && has(x, y - 1) && has(x, y + 1)) continue;
-        top ??= [x, y];
+        boundary.push([x, y]);
         const covered = k < list.length - 1;
         if (!covered || dashOn(x, y)) plate.set(x, y, colour);
       }
     }
-    if (top !== null) labels.push({ name, colour, x: top[0], y: top[1] });
+    if (boundary.length > 0) contours.push({ name, colour, boundary });
   }
   const taken: Array<[number, number, number, number]> = [];
-  for (const label of labels) {
-    const w = textWidth(label.name, 1);
-    const x = Math.max(0, Math.min(width - w, label.x));
-    let box: [number, number, number, number] = [x, Math.max(0, label.y - GLYPH_H - 1), w, GLYPH_H];
-    for (let step = 0; step < 8 && taken.some((t) => crowds(t, box)); step++) box = [box[0], box[1] + GLYPH_H + 2, box[2], box[3]];
+  const labels: PlateLabel[] = [];
+  const h = GLYPH_H;
+  for (const { name, colour, boundary } of contours) {
+    const text = plant.upper ? name.toUpperCase() : name;
+    const w = textWidth(text, 1);
+    const clamp = (x: number, y: number): [number, number, number, number] => [Math.max(0, Math.min(width - w, x)), Math.max(0, Math.min(height - h, y)), w, h];
+    const free = (box: [number, number, number, number]): boolean => !taken.some((t) => crowds(t, box));
+    const anchor = boundary[0];
+    const first = clamp(anchor[0], anchor[1] - h - 1);
+    let box: [number, number, number, number] | null = null;
+    let leader = false;
+    let crowded = false;
+    if (plant.atTop) box = first;
+    for (let i = 0; box === null && i < boundary.length; i++) {
+      const [cx, cy] = boundary[i];
+      const mid = cy - Math.floor(h / 2);
+      for (const c of [clamp(cx, cy - h - 1), clamp(cx, cy + 2), clamp(cx - w - 2, mid), clamp(cx + 2, mid)]) {
+        if (free(c)) {
+          box = c;
+          break;
+        }
+      }
+    }
+    if (box === null) {
+      let best: [number, number, number, number] | null = null;
+      let bestD = Number.POSITIVE_INFINITY;
+      for (let y = 0; y + h <= height; y++) {
+        for (let x = 0; x + w <= width; x++) {
+          const c: [number, number, number, number] = [x, y, w, h];
+          const dx = 2 * x + w - 1 - 2 * anchor[0];
+          const dy = 2 * y + h - 1 - 2 * anchor[1];
+          const d = dx * dx + dy * dy;
+          if (d < bestD && free(c)) {
+            best = c;
+            bestD = d;
+          }
+        }
+      }
+      if (best !== null) {
+        box = best;
+        leader = true;
+        const lx = Math.max(best[0], Math.min(best[0] + w - 1, anchor[0]));
+        const ly = Math.max(best[1], Math.min(best[1] + h - 1, anchor[1]));
+        leaderLine(plate, anchor[0], anchor[1], lx, ly, colour);
+      } else {
+        box = first;
+        crowded = true;
+      }
+    }
     taken.push(box);
-    plate.text(label.name, box[0], box[1], 1, label.colour);
+    plate.text(text, box[0], box[1], 1, colour);
+    labels.push({ name: text, box: [box[0], box[1], box[0] + w - 1, box[1] + h - 1], anchor: [anchor[0], anchor[1]], leader, crowded });
   }
-  return plate;
+  return { plate, labels };
+}
+
+/** The outline plate of one frame, without its label list — `overlapPlateLabelled`'s picture. */
+export function overlapPlate(reading: OverlapReading, index: number, participants: readonly string[], viewport: Viewport): Plate | null {
+  return overlapPlateLabelled(reading, index, participants, viewport)?.plate ?? null;
 }
 
 /** A set's participants: every slot in a varying pair, in code-unit order — what the plate colours index. */

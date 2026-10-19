@@ -8952,8 +8952,13 @@ frame where a moving pair covers: a white plate of the frame's size; every slot 
 moving pair drawn as its **contour** — a drawn pixel with an undrawn neighbour left,
 right, above or below — in its own colour, in draw order; a contour pixel some slot
 drawn later also drew is **dashed** (drawn where `(x + y) % 4 < 2`); and the slot's
-name above its contour's topmost pixel, moved down a line while an earlier name
-crowds it. A slot keeps one colour across a set's plates (a fixed table of eight,
+name, spelled as the lines spell it (`arm_b`, not `ARM_B`). Names are placed in draw
+order and no two touch: each takes the first free box, trying for every contour pixel
+in raster order (the first is the topmost, the leftmost on a tie) the box above it,
+below it, to its left and to its right; when none is free, the free spot nearest the
+topmost pixel, joined to it by a one-pixel leader line; every box clamped inside the
+plate. A plate with no free spot left prints the name at its first box anyway — the
+one case two names can meet. A slot keeps one colour across a set's plates (a fixed table of eight,
 by the slot's place among the set's moving slots in code-unit order); the colour
 means only "another slot" — the name says which.
 

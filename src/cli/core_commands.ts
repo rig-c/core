@@ -38,6 +38,8 @@ import { FOLDS_FILE, foldLine, foldsFileOf, foldsOf, foldsText, setupFaultLine }
 import { AngleRangeError, angleRangeLine, type AngleRangeReading, angleRangesOf, type BonePair, readBonePairs } from '../anglerange.ts';
 import { outsideLine, outsideViewport, pinnedRecord, readViewportBox, viewportOfFramesFile, ViewportError } from '../viewportpin.ts';
 import { PASS_THROUGH_FILE, passFrameLine, type PassPair, passSummaryLine, passThroughFileOf, passThroughOf, passThroughText, PassThroughError, readPassPairs } from '../passthrough.ts';
+import type { Plate } from '../../tools/plate.ts';
+import { OVERLAPS_FILE, OverlapError, overlapLine, overlapPlate, overlapsFileOf, overlapsOf, overlapsPlateFile, overlapsText, plateParticipants, staticLine } from '../overlaps.ts';
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
@@ -704,6 +706,22 @@ export function cmdRender(flags: Record<string, string>): void {
     }
   }
 
+  // The overlap reading (issue #1480) is its own flag for --folds' reason, and refused beside a subset for
+  // --pass-through's: who covers whom is a fact of every slot the rig draws, and a subset drops some of them — a slot
+  // left out covers nothing, so the pairs it is in would vanish and the reading would describe a picture of part of the rig.
+  const overlaps = flags.overlaps !== undefined;
+  if (overlaps) {
+    for (const flag of ['slot', 'hide'] as const) {
+      if (flags[flag] !== undefined) {
+        throw new UsageError(
+          `--overlaps takes no --${flag}: it reads which slot covers which as the whole rig draws them, and a subset of the ` +
+            `drawn slots would drop the pairs the slots left out are in. Run \`rigc render --overlaps\` on the whole rig for the reading, and --${flag} ${flags[flag]} ` +
+            'without --overlaps for the pictures — both land on the same grid',
+        );
+      }
+    }
+  }
+
   // The seam reading (issue #1456) is its own flag for --folds' reason, and refused beside a subset for --pass-through's:
   // it reads the two slots as the whole rig draws them.
   const seam = flags.seam;
@@ -913,9 +931,30 @@ export function cmdRender(flags: Record<string, string>): void {
         }
       }
     }
-    return { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings };
+    // The overlap reading, off the very pieces the frames are drawn from, in their draw order, on the frames' own
+    // viewport — one per set — and its outline plates, drawn here so a refusal leaves nothing written.
+    const overlapReadings = new Map<string, { file: ReturnType<typeof overlapsFileOf>; plates: Map<number, Plate> }>();
+    if (overlaps) {
+      for (const [name, frames] of sampled) {
+        const animation = name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name;
+        try {
+          const reading = overlapsOf(frames, pages, viewport);
+          const participants = plateParticipants(reading.pairs);
+          const plates = new Map<number, Plate>();
+          for (const index of reading.plated.keys()) {
+            const plate = overlapPlate(reading, index, participants, viewport);
+            if (plate !== null) plates.set(index, plate);
+          }
+          overlapReadings.set(name, { file: overlapsFileOf(animation, fps, skin, reading), plates });
+        } catch (err) {
+          if (err instanceof OverlapError) throw new UsageError(`--overlaps, ${JSON.stringify(name)}: ${err.message}`);
+          throw err;
+        }
+      }
+    }
+    return { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings };
   });
-  const { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings } = posed.value;
+  const { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings } = posed.value;
   console.log(`  ..    poser    ${posed.note}`);
   if (environment !== undefined) {
     const response = environmentResponse(skeletonText);
@@ -969,6 +1008,11 @@ export function cmdRender(flags: Record<string, string>): void {
     if (passReading !== undefined) writeFileSync(join(dir, PASS_THROUGH_FILE), passThroughText(passReading));
     const seamReading = seamReadings.get(name);
     if (seamReading !== undefined) writeFileSync(join(dir, SEAM_FILE), seamText(seamReading));
+    const overlapReading = overlapReadings.get(name);
+    if (overlapReading !== undefined) {
+      writeFileSync(join(dir, OVERLAPS_FILE), overlapsText(overlapReading.file));
+      for (const [index, plate] of overlapReading.plates) plate.writePng(join(dir, overlapsPlateFile(index)));
+    }
     const duration = frames[frames.length - 1].time;
     const physics = physicsDeclared.length === 0 ? undefined : physicsSteppedOf(frames, fps);
     sets.push({
@@ -980,6 +1024,7 @@ export function cmdRender(flags: Record<string, string>): void {
       stride: 1,
       duration,
       ...(physics === undefined ? {} : { physics: { stepped: physics.stepped.length, fps } }),
+      ...(overlapReading === undefined ? {} : { overlaps: overlapsRecord(overlapReading.file, overlapReading.plates.size) }),
     });
     const how = frames.length === 1 ? 'a single pose' : `${duration.toFixed(3)}s`;
     const folding = foldReading?.meshes.filter((m) => m.worst !== null).length ?? 0;
@@ -988,7 +1033,11 @@ export function cmdRender(flags: Record<string, string>): void {
     const passNote = passReading === undefined ? '' : ` + ${PASS_THROUGH_FILE} (${passing} of ${passReading.pairs.length} pair(s) pass through)`;
     const opening = seamReading?.pairs.filter((p) => p.opens.length > 0).length ?? 0;
     const seamNote = seamReading === undefined ? '' : ` + ${SEAM_FILE} (${opening} of ${seamReading.pairs.length} pair(s) open)`;
-    const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}${seamNote}`;
+    const overlapNote =
+      overlapReading === undefined
+        ? ''
+        : ` + ${OVERLAPS_FILE} (${overlapReading.file.pairs.filter((p) => p.varies).length} moving pair(s), ${overlapReading.plates.size} outline plate(s))`;
+    const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}${seamNote}${overlapNote}`;
     console.log(`  ..    ${name.padEnd(16)} ${frames.length} frame(s), ${how}${extras} -> ${dir}`);
     if (physics !== undefined) console.log(`  ..    ${physicsLine(physics.stepped, physicsDeclared, fps, frames.length)}`);
     for (const mesh of foldReading?.meshes ?? []) {
@@ -1004,6 +1053,11 @@ export function cmdRender(flags: Record<string, string>): void {
       for (const frame of pair.frames) console.log(`  ..    pass     ${passFrameLine(passReading?.animation ?? null, pair, frame)}`);
     }
     for (const pair of seamReading?.pairs ?? []) console.log(`  ..    seam     ${seamLine(seamReading?.animation ?? null, fps, pair)}`);
+    if (overlapReading !== undefined) {
+      const still = staticLine(overlapReading.file.animation, overlapReading.file.pairs);
+      if (still !== null) console.log(`  ..    overlap  ${still}`);
+      for (const pair of overlapReading.file.pairs) if (pair.varies) console.log(`  ..    overlap  ${overlapLine(overlapReading.file.animation, pair)}`);
+    }
     for (const reading of angleReadings.get(name) ?? []) {
       console.log(`  ..    angle    ${angleRangeLine(name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name, fps, reading)}`);
     }
@@ -1034,6 +1088,21 @@ export function cmdRender(flags: Record<string, string>): void {
   };
   writeFileSync(join(outRoot, FRAMES_SIDECAR), `${JSON.stringify(sidecar, null, 2)}\n`);
   console.log(`rigc: wrote ${join(outRoot, FRAMES_SIDECAR)}`);
+}
+
+/**
+ * `frames.json`'s record of one set's overlap reading (issue #1480), so a reader that cannot open a plate still has
+ * the figures: the file, how many pairs cover anything, how many of them are static layering, how many plates were
+ * drawn, and every pair that moves with its frame count and its most pixels — the figures its line prints.
+ */
+export function overlapsRecord(file: ReturnType<typeof overlapsFileOf>, plates: number): NonNullable<FrameSet['overlaps']> {
+  return {
+    file: OVERLAPS_FILE,
+    pairs: file.pairs.length,
+    static: file.pairs.filter((p) => !p.varies).length,
+    plates,
+    moving: file.pairs.filter((p) => p.varies).map((p) => ({ under: p.under, over: p.over, frames: p.frames, most: p.most })),
+  };
 }
 
 /** `render`'s line for a rig that declares no physics constraint (issue #1467): nothing was stepped because nothing could be. */

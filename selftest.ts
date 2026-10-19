@@ -32,10 +32,10 @@
  * did not already have the fixtures.
  *
  * So the fixtures are written fresh into a temp directory on every run, by
- * [`fixtures/public.ts`](fixtures/public.ts). Seven of them, one per shape the
+ * [`fixtures/public.ts`](fixtures/public.ts). Eight of them, one per shape the
  * assertions care about: `overlay_probe`, `articulated_probe`,
  * `contained_probe`, `segments_probe` (with no manifest), `skirt_probe`,
- * `pass_through_probe` and `leg_stop_probe`. Two further suites build their own even smaller rigs inline
+ * `pass_through_probe`, `leg_stop_probe` and `overlap_probe`. Two further suites build their own even smaller rigs inline
  * (static rigs, draw-order timelines).
  *
  * Other suites measure against the official Spine example corpus that
@@ -715,6 +715,8 @@ import {
   overlayFixture,
   LEG_STOP_PLATE,
   legStopFixture,
+  OVERLAP_PLATE,
+  overlapFixture,
   PASS_PLATE,
   passThroughFixture,
   placeFixturesUnder,
@@ -107323,6 +107325,8 @@ function posedDigests(poser: Poser, pages: Map<string, Plate>, skin: string | un
     const animation = poser.animations.length === 0 ? null : name;
     out.set(`${name}/geometry`, sha(geometryText(geometryFileOf(poser, animation, PROTOCOL_FPS, frames, viewport, skin))));
     out.set(`${name}/bones`, sha(JSON.stringify(frames.map((f) => f.bones ?? null))));
+    // The overlap reading (issue #1480 Bar 4): who covers whom, read off the pieces this poser drew, so the two posers agree pair for pair.
+    out.set(`${name}/overlaps`, sha(overlapsText(overlapsFileOf(animation, PROTOCOL_FPS, skin, overlapsOf(frames, pages, viewport)))));
   }
   out.set('setup', sha(renderFrame(sampleSetupPose(poser, opts)[0], pages, viewport, BACKGROUND).data));
   const plain = (frames: Frame[]): string =>
@@ -137397,7 +137401,382 @@ function runPassThroughSuite(): number {
     );
   }
 
+  // The overlap reading's controls (issue #1480) run here rather than as a suite of their own: they read the same
+  // kind of thing — which slot a frame draws over which — and a suite of their own is dealt round-robin until the shard base is regenerated.
+  runOverlapControls(say);
+
   return bad;
+}
+
+// ---------------------------------------------------------------------------
+// overlaps — which slot a frame drew over which (issue #1480), run inside the pass-through suite
+// ---------------------------------------------------------------------------
+
+import { OVERLAPS_FILE, overlapsFileOf, overlapsOf, overlapsPlateFile, type OverlapPlant, type OverlapsFile, overlapsText } from './src/overlaps.ts';
+import { viewportOfFramesFile } from './src/viewportpin.ts';
+
+/** The overlap probe's sets and the arm's x at a time; every one is `OVERLAP_PLATE`'s numbers alone. */
+const OVERLAP_PROBE_SETS = {
+  cross: (t: number) => OVERLAP_PLATE.from + ((OVERLAP_PLATE.to - OVERLAP_PLATE.from) * t) / OVERLAP_PLATE.duration,
+  cross_behind: (t: number) => OVERLAP_PLATE.from + ((OVERLAP_PLATE.to - OVERLAP_PLATE.from) * t) / OVERLAP_PLATE.duration,
+  still: (_t: number) => OVERLAP_PLATE.from,
+} as const;
+const OVERLAP_PROBE_DURATIONS: Record<keyof typeof OVERLAP_PROBE_SETS, number> = { cross: OVERLAP_PLATE.duration, cross_behind: OVERLAP_PLATE.duration, still: 1 };
+
+/** The probe's render size: big enough that the arm spans a dozen pixels and more. */
+const OVERLAP_PROBE_MAX = 160;
+
+/** One frame's derived covered area: the pixel count and box `[x0, y0, x1, y1]` (inclusive), or `null` box when nothing is covered. */
+interface OverlapProbeFrame {
+  px: number;
+  box: [number, number, number, number] | null;
+  /** Pixels whose drawn state moves when the texel coordinates move by 1e-4 — the probe's numbers on a boundary. */
+  fragile: number;
+}
+
+/**
+ * Whether a plate of `w` × `h` texels with a transparent margin of `margin`
+ * (none when 0) is drawn at texel point (tx, ty) — derived here, not read off
+ * the renderer: the page is the plate, sampled bilinearly at the texel point
+ * less half a texel with its taps clamped to the plate, so its alpha is the
+ * product of two one-dimensional ramps, and a pixel is drawn at half opacity
+ * (127.5 of 255, which rounds to `DRAWN_ALPHA`) or more.
+ */
+function overlapProbeDrawn(tx: number, ty: number, w: number, h: number, margin: number): boolean {
+  if (tx < 0 || tx > w || ty < 0 || ty > h) return false;
+  const ramp = (t: number, n: number): number => {
+    const c = t - 0.5;
+    const i = Math.floor(c);
+    const at = (k: number): number => {
+      const j = Math.max(0, Math.min(n - 1, k));
+      return j >= margin && j <= n - 1 - margin ? 1 : 0;
+    };
+    return at(i) + (at(i + 1) - at(i)) * (c - i);
+  };
+  return 255 * ramp(tx, w) * ramp(ty, h) >= 127.5;
+}
+
+/**
+ * One frame of the probe, derived from `OVERLAP_PLATE` and the frame grid alone:
+ * every pixel centre of the grid carried to the world (`minX + (x + ½) / scale`,
+ * `maxY − (y + ½) / scale`), then into each plate's texels — a region slid, not
+ * turned, so its texel point is the world point less its top-left corner, y
+ * flipped — and counted when both the body and the arm draw it.
+ */
+function overlapProbeFrame(viewport: Viewport, armX: number): OverlapProbeFrame {
+  const { body, arm, margin, bodyAt, armY } = OVERLAP_PLATE;
+  const out: OverlapProbeFrame = { px: 0, box: null, fragile: 0 };
+  const both = (wx: number, wy: number): boolean =>
+    overlapProbeDrawn(wx - (bodyAt[0] - body.width / 2), bodyAt[1] + body.height / 2 - wy, body.width, body.height, margin) &&
+    overlapProbeDrawn(wx - (armX - arm.width / 2), armY + arm.height / 2 - wy, arm.width, arm.height, margin);
+  for (let y = 0; y < viewport.height; y++) {
+    for (let x = 0; x < viewport.width; x++) {
+      const wx = viewport.minX + (x + 0.5) / viewport.scale;
+      const wy = viewport.maxY - (y + 0.5) / viewport.scale;
+      const here = both(wx, wy);
+      for (const [dx, dy] of [[1e-4, 0], [-1e-4, 0], [0, 1e-4], [0, -1e-4]]) if (both(wx + dx, wy + dy) !== here) out.fragile++;
+      if (!here) continue;
+      out.px++;
+      out.box = out.box === null ? [x, y, x, y] : [Math.min(out.box[0], x), Math.min(out.box[1], y), Math.max(out.box[2], x), Math.max(out.box[3], y)];
+    }
+  }
+  return out;
+}
+
+/** A set's derived frames at `fps` on `viewport`. */
+function overlapProbeFrames(set: keyof typeof OVERLAP_PROBE_SETS, fps: number, viewport: Viewport): OverlapProbeFrame[] {
+  const out: OverlapProbeFrame[] = [];
+  for (let i = 0; i <= Math.round(OVERLAP_PROBE_DURATIONS[set] * fps); i++) out.push(overlapProbeFrame(viewport, OVERLAP_PROBE_SETS[set](i / fps)));
+  return out;
+}
+
+/** The line the derived frames say `render --overlaps` prints for one pair, built here rather than by `overlapLine`. */
+function overlapProbeLine(set: string, under: string, over: string, frames: readonly OverlapProbeFrame[]): string {
+  const on = frames.flatMap((f, i) => (f.px > 0 ? [i] : []));
+  const runs: string[] = [];
+  for (let k = 0; k < on.length; ) {
+    let j = k;
+    while (j + 1 < on.length && on[j + 1] === on[j] + 1) j++;
+    runs.push(j === k ? String(on[k]) : `${on[k]}–${on[j]}`);
+    k = j + 1;
+  }
+  let most = on[0];
+  for (const i of on) if (frames[i].px > frames[most].px) most = i;
+  const px = String(frames[most].px).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `"${set}": OVERLAP "${under}" under "${over}": frames ${runs.join(', ')} (${on.length} of ${frames.length}), covered up to ${px} px at frame ${most}`;
+}
+
+type OverlapFiles = ReadonlyMap<string, OverlapsFile>;
+
+/**
+ * One crossing set's reading against the derived frames: exactly one moving
+ * pair, `under` under `over`, on exactly the derived frames with each frame's
+ * derived pixel count and box, the turned-round pair absent, and the two
+ * backdrop pairs static.
+ */
+function overlapCrossFaults(files: OverlapFiles, set: 'cross' | 'cross_behind', under: string, over: string, want: readonly OverlapProbeFrame[]): string[] {
+  const file = files.get(set);
+  if (file === undefined) return [`no ${OVERLAPS_FILE} for "${set}"`];
+  const faults: string[] = [];
+  const moving = file.pairs.filter((p) => p.varies).map((p) => `${p.under}<${p.over}`);
+  if (JSON.stringify(moving) !== JSON.stringify([`${under}<${over}`])) faults.push(`"${set}" reads the moving pair(s) [${moving.join(', ')}], the probe's numbers give exactly ["${under}" under "${over}"]`);
+  const stillPairs = file.pairs.filter((p) => !p.varies).map((p) => `${p.under}<${p.over}`).sort();
+  if (JSON.stringify(stillPairs) !== JSON.stringify(['stage<arm', 'stage<body'])) faults.push(`"${set}" reads the static pair(s) [${stillPairs.join(', ')}], required the stage under the arm and under the body`);
+  for (let i = 0; i < want.length; i++) {
+    const got = file.frames[i]?.pairs.find((p) => p.under === under && p.over === over);
+    const turned = file.frames[i]?.pairs.find((p) => p.under === over && p.over === under);
+    if (turned !== undefined) faults.push(`"${set}" frame ${i} reads "${over}" under "${under}" — the draw order puts "${under}" first`);
+    if (want[i].px === 0 && got !== undefined) faults.push(`"${set}" frame ${i} reads ${got.px} px covered, the probe's numbers cover none`);
+    if (want[i].px > 0 && (got === undefined || got.px !== want[i].px || JSON.stringify(got.box) !== JSON.stringify(want[i].box))) {
+      faults.push(`"${set}" frame ${i} reads ${JSON.stringify(got && { px: got.px, box: got.box })}, the probe's numbers give ${JSON.stringify({ px: want[i].px, box: want[i].box })}`);
+    }
+  }
+  return faults;
+}
+
+/** OX03's reading: the arm held clear of the body covers nothing that moves — every pair static, none of the two slots' pairs present. */
+function overlapStillFaults(files: OverlapFiles): string[] {
+  const file = files.get('still');
+  if (file === undefined) return [`no ${OVERLAPS_FILE} for "still"`];
+  const faults: string[] = [];
+  const moving = file.pairs.filter((p) => p.varies);
+  if (moving.length > 0) faults.push(`"still" reads moving pair(s) [${moving.map((p) => `"${p.under}" under "${p.over}"`).join(', ')}], required none — the arm never reaches the body`);
+  if (file.pairs.some((p) => [p.under, p.over].includes('arm') && [p.under, p.over].includes('body'))) faults.push('"still" reads a pair of the arm and the body, which never draw on one pixel');
+  if (file.pairs.filter((p) => !p.varies).length !== 2) faults.push(`"still" reads ${file.pairs.filter((p) => !p.varies).length} static pair(s), required 2 — the stage under each`);
+  return faults;
+}
+
+/** Two readings of the same sets, byte for byte: the names of the sets whose texts differ. */
+function overlapByteFaults(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>, what: string): string[] {
+  const faults: string[] = [];
+  for (const set of Object.keys(OVERLAP_PROBE_SETS)) if (a.get(set) === undefined || a.get(set) !== b.get(set)) faults.push(`"${set}": ${what}`);
+  return faults;
+}
+
+/** The files a render wrote under `root`, relative, sorted. */
+const overlapTreeFiles = (root: string): string[] => (existsSync(root) ? readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile()).sort() : []);
+
+/**
+ * OX05's reading: a run without the flag (`plain`) beside one with it
+ * (`flagged`): the flagged run adds exactly the overlap files, every other
+ * file is the plain run's bytes — `frames.json` once each set's `overlaps`
+ * record is taken off — and the plain run wrote no overlap file and printed
+ * no overlap line.
+ */
+function overlapNoFlagFaults(plain: string, plainOut: string, flagged: string, wantExtra: readonly string[]): string[] {
+  const faults: string[] = [];
+  const plainFiles = overlapTreeFiles(plain);
+  const extra = overlapTreeFiles(flagged).filter((f) => !plainFiles.includes(f));
+  if (JSON.stringify(extra) !== JSON.stringify([...wantExtra].sort())) faults.push(`render --overlaps wrote [${extra.join(', ')}] beyond the plain render's files, required [${[...wantExtra].sort().join(', ')}]`);
+  for (const f of plainFiles) {
+    if (f === FRAMES_SIDECAR) {
+      const flaggedSidecar = JSON.parse(readFileSync(join(flagged, f), 'utf8')) as FramesSidecar;
+      for (const set of flaggedSidecar.sets) delete set.overlaps;
+      if (`${JSON.stringify(flaggedSidecar, null, 2)}\n` !== readFileSync(join(plain, f), 'utf8')) faults.push(`${f} differs between the plain render and render --overlaps beyond each set's "overlaps" record`);
+    } else if (!existsSync(join(flagged, f)) || !readFileSync(join(plain, f)).equals(readFileSync(join(flagged, f)))) faults.push(`${f} differs between the plain render and render --overlaps`);
+  }
+  if (/\.\.\s+overlap\s/.test(plainOut) || plainFiles.some((f) => f.endsWith(OVERLAPS_FILE) || /overlaps-f\d{4}\.png$/.test(f))) faults.push('the run without --overlaps printed an overlap line or wrote an overlap file');
+  if (/"overlaps"/.test(existsSync(join(plain, FRAMES_SIDECAR)) ? readFileSync(join(plain, FRAMES_SIDECAR), 'utf8') : '')) faults.push(`the run without --overlaps wrote an "overlaps" record into ${FRAMES_SIDECAR}`);
+  return faults;
+}
+
+/** OX06's reading: each command exits 2 naming the refusal, and writes nothing. */
+function overlapRefusalFaults(runs: ReadonlyArray<{ args: string; status: number | null; stderr: string; said: string; wrote: boolean }>): string[] {
+  const faults: string[] = [];
+  for (const run of runs) {
+    if (run.status !== 2 || !run.stderr.includes(run.said)) faults.push(`${run.args}: exit ${String(run.status)}, stderr ${JSON.stringify(run.stderr.trim().split('\n')[0])} — required exit 2 and "${run.said}"`);
+    if (run.wrote) faults.push(`${run.args} was refused and still wrote its output directory`);
+  }
+  return faults;
+}
+
+/** The OX controls: `render --overlaps` on the overlap probe, each control with the plant it is seen red under. */
+function runOverlapControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const fps = PROTOCOL_FPS;
+  const probe = overlapFixture();
+  const pre: string[] = [];
+  const build = runCli(['build', '--rig', probe.rigPath, '--motion', probe.motionPath, '--images', probe.imagesDir, '--out', probe.outDir]);
+  if (build.status !== 0) pre.push(`the probe did not build (exit ${String(build.status)}): ${(build.stdout + build.stderr).trim().slice(-400)}`);
+  const dir = (name: string): string => join(probe.dir, name);
+  const render = (name: string, extra: string[]): ReturnType<typeof runCli> | null => (pre.length > 0 ? null : runCli(['render', '--candidate', probe.outDir, '--max', String(OVERLAP_PROBE_MAX), ...extra, '--out', dir(name)]));
+  const flagged = render('overlaps', ['--overlaps']);
+  const again = render('again', ['--overlaps']);
+  const spine = render('spine', ['--overlaps', '--poser', 'spine']);
+  const plain = render('plain', []);
+  for (const [name, run] of [['--overlaps', flagged], ['--overlaps again', again], ['--overlaps --poser spine', spine], ['plain', plain]] as const) {
+    if (run !== null && run.status !== 0) pre.push(`render ${name} exited ${String(run.status)}: ${run.stderr.trim().slice(0, 300)}`);
+  }
+  const sets = Object.keys(OVERLAP_PROBE_SETS) as Array<keyof typeof OVERLAP_PROBE_SETS>;
+  const texts = (root: string): Map<string, string> => {
+    const out = new Map<string, string>();
+    for (const set of sets) {
+      const path = join(root, set, OVERLAPS_FILE);
+      if (existsSync(path)) out.set(set, readFileSync(path, 'utf8'));
+    }
+    return out;
+  };
+  const cliTexts = pre.length === 0 ? texts(dir('overlaps')) : new Map<string, string>();
+  const cli = new Map<string, OverlapsFile>([...cliTexts].map(([set, text]) => [set, JSON.parse(text) as OverlapsFile]));
+  if (pre.length === 0) for (const set of sets) if (!cli.has(set)) pre.push(`render --overlaps wrote no ${OVERLAPS_FILE} for "${set}"`);
+  const viewport: Viewport | null = pre.length === 0 ? viewportOfFramesFile(JSON.parse(readFileSync(join(dir('overlaps'), FRAMES_SIDECAR), 'utf8')), FRAMES_SIDECAR) : null;
+  const want = new Map(sets.map((set) => [set, viewport === null ? [] : overlapProbeFrames(set, fps, viewport)]));
+  // The design of the probe, checked before anything is read off it: "cross" covers on some frames and not others,
+  // "still" covers on none, and no derived pixel sits on a boundary the rounding of a texel point could move.
+  if (viewport !== null) {
+    const cross = want.get('cross') ?? [];
+    const on = cross.filter((f) => f.px > 0).length;
+    if (on === 0 || on === cross.length) pre.push(`the probe's numbers cover on ${on} of ${cross.length} frame(s) of "cross" — the control needs frames with a crossing and frames without`);
+    if ((want.get('still') ?? []).some((f) => f.px > 0)) pre.push('the probe\'s numbers cover the body on "still" — the negative control needs the arm clear of it');
+    for (const set of sets) {
+      const fragile = (want.get(set) ?? []).flatMap((f, i) => (f.fragile > 0 ? [i] : []));
+      if (fragile.length > 0) pre.push(`"${set}" frame(s) [${fragile.join(', ')}] have pixels whose drawn state moves when a texel point moves by 1e-4 — the probe's numbers sit on a boundary`);
+    }
+  }
+  const lines = (flagged?.stdout ?? '').split('\n');
+
+  // The library over spine-core's poses of the same build, on the CLI render's grid: the reading recomputed, and the
+  // mutants planted, off the pieces a second poser hands it.
+  const library = (plant: OverlapPlant = {}): Map<string, string> => {
+    const out = new Map<string, string>();
+    if (pre.length > 0 || viewport === null) return out;
+    const posable = posableFromText(readFileSync(join(probe.outDir, 'skeleton.json'), 'utf8'), readFileSync(join(probe.outDir, 'skeleton.atlas'), 'utf8'), probe.outDir);
+    const poser = spinePoser(posable.data);
+    for (const set of sets) out.set(set, overlapsText(overlapsFileOf(set, fps, undefined, overlapsOf(sampleAnimation(poser, set, fps), posable.pages, viewport, plant))));
+    return out;
+  };
+  const parsed = (m: ReadonlyMap<string, string>): Map<string, OverlapsFile> => new Map([...m].map(([set, text]) => [set, JSON.parse(text) as OverlapsFile]));
+  const crossOf = (files: OverlapFiles): string[] => overlapCrossFaults(files, 'cross', 'body', 'arm', want.get('cross') ?? []);
+  const behindOf = (files: OverlapFiles): string[] => overlapCrossFaults(files, 'cross_behind', 'arm', 'body', want.get('cross_behind') ?? []);
+  const red = (reader: (files: OverlapFiles) => string[], plant: OverlapPlant): string[] => (pre.length > 0 ? [] : reader(parsed(library(plant))));
+  const redLine = (faults: string[], plant: OverlapPlant): string => (faults.length === 0 ? `${JSON.stringify(plant)} planted and the reading found nothing` : `planted ${JSON.stringify(plant)}: ${faults[0]}`);
+
+  // OX01 — the crossing is named on exactly the derived frames, with each frame's derived pixels, and its line.
+  {
+    const probes = pre.length > 0 ? [...pre] : crossOf(cli);
+    const wantLine = pre.length > 0 ? '' : overlapProbeLine('cross', 'body', 'arm', want.get('cross') ?? []);
+    if (pre.length === 0) {
+      if (!lines.some((l) => l === `  ..    overlap  ${wantLine}`)) probes.push(`render --overlaps printed no line ${JSON.stringify(wantLine)}`);
+      const plates = overlapTreeFiles(join(dir('overlaps'), 'cross')).filter((f) => f.startsWith('overlaps-f'));
+      const wantPlates = (want.get('cross') ?? []).flatMap((f, i) => (f.px > 0 ? [overlapsPlateFile(i)] : []));
+      if (JSON.stringify(plates) !== JSON.stringify(wantPlates)) probes.push(`"cross" has the outline plate(s) [${plates.join(', ')}], required one per covered frame [${wantPlates.join(', ')}]`);
+    }
+    const planted = [red(crossOf, { reverse: true }), red(crossOf, { anyAlpha: true })];
+    const ok = probes.length === 0 && planted.every((p) => p.length > 0);
+    say(
+      'OX01_A_SLOT_SLID_ACROSS_ANOTHER_IS_NAMED_ON_EXACTLY_THE_FRAMES_IT_COVERS_IT',
+      ok,
+      probes.length > 0
+        ? probeDetail(false, probes, '')
+        : planted.some((p) => p.length === 0)
+          ? `a plant went unseen: ${redLine(planted[0], { reverse: true })}; ${redLine(planted[1], { anyAlpha: true })}`
+          : `${wantLine} — every frame's pixel count and box derived from the probe's numbers and the frame grid, one outline plate per covered frame; red under {"reverse":true} (${planted[0][0]}) and {"anyAlpha":true} (${planted[1][0]})`,
+      'issue #1480 Bar 1: an arm crossing a body is silent on a build that passes everything; the reading is held to pixels derived from the keys, not to a reading',
+    );
+  }
+
+  // OX02 — a draw-order key that puts the arm first names the turned-round pair, with the same frames and pixels.
+  {
+    const probes = pre.length > 0 ? [...pre] : behindOf(cli);
+    const wantLine = pre.length > 0 ? '' : overlapProbeLine('cross_behind', 'arm', 'body', want.get('cross_behind') ?? []);
+    if (pre.length === 0 && !lines.some((l) => l === `  ..    overlap  ${wantLine}`)) probes.push(`render --overlaps printed no line ${JSON.stringify(wantLine)}`);
+    const planted = red(behindOf, { reverse: true });
+    const ok = probes.length === 0 && planted.length > 0;
+    say(
+      'OX02_A_DRAW_ORDER_KEY_TURNS_THE_PAIR_ROUND',
+      ok,
+      probes.length > 0 ? probeDetail(false, probes, '') : planted.length === 0 ? redLine(planted, { reverse: true }) : `${wantLine} — the same slide with a draw-order key putting the arm first; red under {"reverse":true} (${planted[0]})`,
+      'issue #1480 Bar 3: the draw-order key is the author\'s remedy, so the reading has to follow it — a reading of the setup order would name the arm in front where the frames hide it',
+    );
+  }
+
+  // OX03 — the arm held clear prints no OVERLAP line: only the static line, and no plate.
+  {
+    const probes = pre.length > 0 ? [...pre] : overlapStillFaults(cli);
+    if (pre.length === 0) {
+      if (lines.some((l) => l.includes('"still": OVERLAP'))) probes.push('render --overlaps printed an OVERLAP line for "still"');
+      if (!lines.some((l) => l.startsWith('  ..    overlap  "still": 2 pair(s) cover on every frame'))) probes.push('render --overlaps printed no static line counting 2 pair(s) for "still"');
+      const plates = overlapTreeFiles(join(dir('overlaps'), 'still')).filter((f) => f.startsWith('overlaps-f'));
+      if (plates.length > 0) probes.push(`"still" has outline plate(s) [${plates.join(', ')}], required none`);
+    }
+    const planted = red(overlapStillFaults, { noStatic: true });
+    const ok = probes.length === 0 && planted.length > 0;
+    say(
+      'OX03_NO_CROSSING_PRINTS_NO_OVERLAP_LINE',
+      ok,
+      probes.length > 0 ? probeDetail(false, probes, '') : planted.length === 0 ? redLine(planted, { noStatic: true }) : `"still" holds the arm clear of the body: no OVERLAP line, no plate, the stage under each read as static layering; red under {"noStatic":true} (${planted[0]})`,
+      'issue #1480 Bar 3: the positive control with no crossing prints nothing — a reading that printed every layered pair would bury the one that moved',
+    );
+  }
+
+  // OX04 — two renders, and the two posers, write one byte sequence; and the library reads what the CLI wrote.
+  {
+    const probes = [...pre];
+    if (pre.length === 0) {
+      probes.push(...overlapByteFaults(cliTexts, texts(dir('again')), `a second render --overlaps wrote another ${OVERLAPS_FILE}`));
+      probes.push(...overlapByteFaults(cliTexts, texts(dir('spine')), `render --overlaps --poser spine wrote a ${OVERLAPS_FILE} that is not the core's bytes`));
+      probes.push(...overlapByteFaults(cliTexts, library(), `overlapsOf over spine-core's poses is not render --overlaps's ${OVERLAPS_FILE}`));
+      for (const set of sets) {
+        for (const f of overlapTreeFiles(join(dir('overlaps'), set)).filter((p) => p.startsWith('overlaps-f'))) {
+          for (const other of ['again', 'spine']) {
+            const path = join(dir(other), set, f);
+            if (!existsSync(path) || !readFileSync(path).equals(readFileSync(join(dir('overlaps'), set, f)))) probes.push(`"${set}" ${f} is not the same bytes in the ${other} render`);
+          }
+        }
+      }
+    }
+    const planted = pre.length > 0 ? [] : overlapByteFaults(cliTexts, library({ reverse: true }), 'differs');
+    const ok = probes.length === 0 && planted.length > 0;
+    say(
+      'OX04_THE_READING_IS_ONE_BYTE_SEQUENCE_ACROSS_RUNS_AND_POSERS',
+      ok,
+      probes.length > 0 ? probeDetail(false, probes, '') : planted.length === 0 ? 'a reversed reading compared equal' : `every set's ${OVERLAPS_FILE} and outline plates: two core renders, --poser spine and overlapsOf over spine-core's frames read the same bytes; a reading planted {"reverse":true} is told apart (${planted[0]})`,
+      'issue #1480 Bar 2 and Bar 4: A18-grade determinism, and one reading on both posers — two posers reading two answers would be a reading of the poser',
+    );
+  }
+
+  // OX05 — without the flag nothing changes: no file, no line, every other byte the plain render's.
+  {
+    const probes = [...pre];
+    const wantExtra =
+      pre.length > 0 ? [] : sets.flatMap((set) => [join(set, OVERLAPS_FILE), ...(want.get(set) ?? []).flatMap((f, i) => (f.px > 0 ? [join(set, overlapsPlateFile(i))] : []))]);
+    if (pre.length === 0) probes.push(...overlapNoFlagFaults(dir('plain'), plain?.stdout ?? '', dir('overlaps'), wantExtra));
+    // Planted: the flagged run read as the run without the flag — it wrote the files and printed the lines.
+    const planted = pre.length > 0 ? [] : overlapNoFlagFaults(dir('overlaps'), flagged?.stdout ?? '', dir('plain'), []);
+    const ok = probes.length === 0 && planted.length > 0;
+    say(
+      'OX05_THE_FLAG_MOVES_NO_OTHER_BYTE',
+      ok,
+      probes.length > 0 ? probeDetail(false, probes, '') : planted.length === 0 ? 'the flagged run read as the plain one found nothing' : `--overlaps adds one ${OVERLAPS_FILE} per set and its outline plates; every frame, sheet and frames.json (less each set's "overlaps" record) is the plain render's bytes; without it no file and no line — the flagged run read as unflagged is red (${planted[0]})`,
+      'issue #1480: with no --overlaps nothing changes',
+    );
+  }
+
+  // OX06 — a subset beside the flag is refused by name, nothing written.
+  {
+    const probes = [...pre];
+    const attempt = (args: string[], said: string, n: number): { args: string; status: number | null; stderr: string; said: string; wrote: boolean } => {
+      const out = dir(`overlaps_refused_${n}`);
+      const run = runCli(['render', '--candidate', probe.outDir, ...args, '--max', '64', '--out', out]);
+      return { args: args.join(' '), status: run.status, stderr: run.stderr, said, wrote: existsSync(out) };
+    };
+    if (pre.length === 0) {
+      probes.push(
+        ...overlapRefusalFaults([
+          attempt(['--overlaps', '--hide', 'arm'], '--overlaps takes no --hide', 0),
+          attempt(['--overlaps', '--slot', 'arm,body'], '--overlaps takes no --slot', 1),
+        ]),
+      );
+    }
+    // Planted: the same reader over a command that is not refused — the subset without the flag.
+    const planted = pre.length > 0 ? [] : overlapRefusalFaults([attempt(['--hide', 'arm'], '--overlaps takes no --hide', 2)]);
+    const ok = probes.length === 0 && planted.length > 0;
+    say(
+      'OX06_A_SUBSET_BESIDE_THE_FLAG_IS_REFUSED_BY_NAME',
+      ok,
+      probes.length > 0 ? probeDetail(false, probes, '') : planted.length === 0 ? 'a command that is not refused read as refused' : `--overlaps with --hide and with --slot each exit 2 naming the flag, and write nothing; the reader is red on --hide without the flag (${planted[0]})`,
+      'issue #1480: a subset of the drawn slots drops the pairs the slots left out are in, so a reading beside one would describe part of the rig',
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

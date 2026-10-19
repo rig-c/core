@@ -40,6 +40,7 @@ import { depthStepLevels, type FoldLimit, type TurnCeiling } from '../depth.ts';
 import { FOLDS_FILE } from '../folds.ts';
 import { DRAWN_ALPHA, PASS_THROUGH_FILE, PASS_THROUGH_RUN } from '../passthrough.ts';
 import { SEAM_FILE } from '../seam.ts';
+import { OVERLAPS_FILE } from '../overlaps.ts';
 import { readViewportBox, ViewportError } from '../viewportpin.ts';
 import { parseJsonWithPosition } from '../json-position.ts';
 import { RUNG_IDS } from '../ladder.ts';
@@ -146,7 +147,7 @@ export { PACKAGE_ROOT, readPackageMeta, readVersion };
  * needs a value` (issue #328). `CLI10`/`CLI11` in `selftest.ts` now hold the two
  * halves together by reading `--help` rather than by naming a flag.
  */
-const BOOLEAN_FLAGS = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'folds', 'accept-skeleton-differences', 'keep-pages', 'dim']);
+const BOOLEAN_FLAGS = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'folds', 'overlaps', 'accept-skeleton-differences', 'keep-pages', 'dim']);
 
 /**
  * The flags a command is allowed to spell more than once.
@@ -1052,6 +1053,14 @@ const FLAG_MEANINGS: Record<string, string> = {
     'world units, one texel of the coarser drawing to a step — each with the depth and the world box. One line per pair, and one per frame that passes through. ' +
     'The order is the declaration: the first name must draw over the second for a frame to be read. A reading, not a gate. ' +
     'An unknown slot, a slot that draws on no frame, a malformed list and a pair named twice are refused by name. Not with --slot/--hide',
+  overlaps:
+    `also read which slot each frame drew over which, and write ${OVERLAPS_FILE} into each frame directory: per frame, every pair ` +
+    `of slots where the slot drawn later covers pixels the earlier one drew (drawn at ${DRAWN_ALPHA} of 255 or more, on the frames' own ` +
+    'pixels), with the pixel count and the pixel box. One OVERLAP line per pair that covers anything — the frames, and the most pixels ' +
+    'and the frame of them — and one line counting the pairs that cover the same pixels on every frame (layering the motion does not move). ' +
+    'Each frame with a moving pair also gets an outline plate, overlaps-f<NNNN>.png: every slot in a moving pair as its contour in its own ' +
+    'colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the ' +
+    "author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Not with --slot/--hide",
   seam:
     `also read, for each <slot>:<slot> pair, where the two drawings stop meeting, and write ${SEAM_FILE} into each frame directory: ` +
     'per pair, the frames with a gap — background inside the hull of the band the two drawings share at the setup pose, carried to the frame by both — ' +
@@ -1733,10 +1742,11 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --environment <schedule.json>   (the wind and gravity the physics answers, in time)',
       'rigc render … --pass-through <cloth>:<leg>[,…]   (the frames where a cloth drawn over a leg passes through it)',
       'rigc render … --seam <slot>:<slot>[,…]   (the frames where two slots that meet open a gap or show a ghost)',
+      'rigc render … --overlaps   (which slot each frame drew over which, by name, with an outline plate)',
       'rigc render … --angle-range <bone>:<relative-to>[,…]   (how far a bone turns against another, per animation)',
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'seam', 'angle-range', 'environment', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range', 'environment', 'poser', 'out'],
     overrides: {
       out: { value: '<dir>', meaning: 'directory to write the frame series into (default `render/`)' },
       fps: {

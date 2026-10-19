@@ -204,6 +204,23 @@ export interface FrameSet {
    * taken without.
    */
   physics?: { stepped: number; fps: number };
+  /**
+   * The overlap reading, when `render --overlaps` asked for it (issue #1480):
+   * the file it wrote, how many slot pairs cover anything on any frame, how
+   * many of those are static layering (the same pixels on every frame), how
+   * many outline plates were drawn, and every pair that moves — under, over,
+   * the frames it covers on and the frame it covers the most pixels on.
+   *
+   * ⭐ Absent unless asked for, for `skin`'s reason in `FramesSidecar`: a render
+   * without the flag stays the bytes it always was.
+   */
+  overlaps?: {
+    file: string;
+    pairs: number;
+    static: number;
+    plates: number;
+    moving: Array<{ under: string; over: string; frames: number; most: { index: number; px: number } }>;
+  };
 }
 
 export interface FramesSidecar {

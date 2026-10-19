@@ -1093,6 +1093,89 @@ export function passThroughFixture(): SpecOnlyFixture {
 }
 
 // ---------------------------------------------------------------------------
+// overlap_probe
+// ---------------------------------------------------------------------------
+
+/**
+ * The overlap probe's numbers (issue #1480), world units: every plate is drawn
+ * one texel to a unit. `stage` is opaque — no transparent margin — and every
+ * other plate carries `writePlate`'s margin of `margin` texels.
+ *
+ * - `stage` hangs on the root, centred on it, drawn first: every other slot lies
+ *   wholly on it on every frame, which is layering the motion does not move.
+ * - `body` sits on its own bone at `bodyAt`, still; `arm` on its own bone at
+ *   `armY`, drawn after the body.
+ * - `cross` slides the arm along x from `from` to `to`, linearly over
+ *   `duration` seconds, carrying it across the body and out the other side;
+ *   `cross_behind` is the same slide with a draw-order key at 0 that puts the arm
+ *   before the body for the whole animation; `still` holds the arm at `from`,
+ *   clear of the body.
+ */
+export const OVERLAP_PLATE = {
+  stage: { width: 200, height: 160 },
+  body: { width: 40, height: 80 },
+  arm: { width: 24, height: 16 },
+  margin: 2,
+  bodyAt: [0, 0],
+  armY: 10,
+  from: -60,
+  to: 60,
+  duration: 2,
+} as const;
+
+/**
+ * A still body and an arm slid across it — the crossing the reading behind
+ * `render --overlaps` is held to (issue #1480). Regions only, and only slid:
+ * which frame pixel each draws is the probe's numbers through the frame's own
+ * viewport, which the suite derives on its own.
+ */
+export function overlapFixture(): SpecOnlyFixture {
+  const dir = makeDir('overlap_probe');
+  const imagesDir = join(dir, 'parts');
+  const { stage, body, arm, bodyAt, armY, from, to, duration } = OVERLAP_PLATE;
+  writePlate(join(imagesDir, 'stage.png'), stage.width, stage.height, 'stage', true);
+  writePlate(join(imagesDir, 'body.png'), body.width, body.height, 'body');
+  writePlate(join(imagesDir, 'arm.png'), arm.width, arm.height, 'arm');
+
+  const rigPath = join(dir, 'overlap_probe.rig.json');
+  writeJson(rigPath, {
+    spec: 'rigc-rig/1',
+    name: 'overlap_probe',
+    images: 'parts',
+    skeleton: { width: stage.width, height: stage.height },
+    bones: [{ name: 'root' }, { name: 'body', parent: 'root', x: bodyAt[0], y: bodyAt[1] }, { name: 'arm', parent: 'root', x: 0, y: armY }],
+    slots: [
+      { name: 'stage', bone: 'root', attachment: 'stage' },
+      { name: 'body', bone: 'body', attachment: 'body' },
+      { name: 'arm', bone: 'arm', attachment: 'arm' },
+    ],
+    skins: {
+      default: {
+        stage: { stage: { image: 'stage.png' } },
+        body: { body: { image: 'body.png' } },
+        arm: { arm: { image: 'arm.png' } },
+      },
+    },
+  });
+
+  const slide = { bone: 'arm', property: 'translate', keys: [{ t: 0, v: [from, 0] }, { t: duration, v: [to, 0] }] };
+  const motionPath = join(dir, 'overlap_probe.motion.json');
+  writeJson(motionPath, {
+    spec: 'rigc-motion/1',
+    archetype: 'overlap_probe',
+    cut: 'overlap_probe',
+    easings: {},
+    animations: {
+      cross: { duration, loop: false, tracks: [slide] },
+      cross_behind: { duration, loop: false, drawOrder: [{ t: 0, offsets: [{ slot: 'arm', offset: -1 }] }], tracks: [slide] },
+      still: { duration: 1, loop: false, tracks: [{ bone: 'arm', property: 'translate', keys: [{ t: 0, v: [from, 0] }, { t: 1, v: [from, 0] }] }] },
+    },
+  });
+
+  return { rig: 'overlap_probe', dir, rigPath, motionPath, imagesDir, outDir: join(dir, 'spine') };
+}
+
+// ---------------------------------------------------------------------------
 // leg_stop_probe
 // ---------------------------------------------------------------------------
 

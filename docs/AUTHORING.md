@@ -261,6 +261,7 @@ What the flags mean:
 | `--folds` | `render` only: also read which mesh triangles **fold** — turn over against the setup pose — and write a `folds.json` into each frame directory: per mesh, the frames with a folded triangle, the worst frame's count and which triangles, by index, with their world box and setup-pose area. One printed line per mesh that folds; a triangle degenerate or inverted at the setup pose is said once and never counted. A reading, not a gate. Every other file is byte for byte what the render writes without it, `geometry.json` included. Refused with `--slot`/`--hide`, for `--geometry`'s reason — **§8.3** |
 | `--pass-through` | `render` only: `<cloth>:<leg>[,<cloth>:<leg>…]` — also read where each cloth slot **passes through** its leg slot, and write a `pass-through.json` into each frame directory: the frames where the cloth draws over the leg and its drawn side lies inside the leg's drawn outline by 2 steps or more, each with the depth and the world box. One printed line per pair, and one per frame that passes through. The first name must draw over the second for a frame to be read — the declared order, never both. A reading, not a gate. Every other file is byte for byte what the render writes without it. An unknown slot, a slot that draws on no frame, a malformed list and a pair named twice are refused by name, and so is `--slot`/`--hide` beside it — **§8.5** |
 | `--seam` | `render` only: `<slot>:<slot>[,<slot>:<slot>…]` — also read, for each pair, where the two drawings **stop meeting**, and write a `seam.json` into each frame directory: per pair, the frames with a **gap** (background inside the joint, where the two covered together at the setup pose) and the frames with a **ghost** (the overlap band of one showing where, from its partner's point of view, nothing was drawn), each with its cell count, area and world box, and as runs of frames with their times. One printed line per pair; a pair whose drawings share no cell at the setup pose is a **SKIP**. A reading, not a gate: the exit status never moves. Every other file is byte for byte what the render writes without it. An unknown slot, a slot with itself, a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name, and so is `--slot`/`--hide` beside it — **§8.8** |
+| `--overlaps` | `render` only: also read **which slot each frame drew over which**, and write an `overlaps.json` into each frame directory: per frame, every pair of slots where the slot drawn later covers pixels the earlier one drew (drawn at 128 of 255 or more, on the frames' own pixels), with the pixel count and the pixel box. One `OVERLAP` line per pair that covers anything — its frames as runs, how many of the set, and the most pixels and the frame of them — and one line counting the pairs that are layering the motion does not move. Each frame with a moving pair also gets an **outline plate**, `overlaps-f<NNNN>.png`: every slot in a moving pair as its contour in its own colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Every other file is byte for byte what the render writes without it, and `frames.json` gains each set's `overlaps` record. Refused beside `--slot`/`--hide` — **§8.9** |
 | `--angle-range` | `render` only: `<bone>:<relative-to>[,<bone>:<relative-to>…]` — also read, for each pair, the range of the first bone's world direction against the second's over each set's frames, and print one line per pair per set: the lowest and the highest angle in degrees, the span, and the frame each was first reached on. A reading, not a gate: nothing is written, and every file is the bytes the render writes without it. An unknown bone (with the bones there are), a bone against itself, a malformed list and a pair named twice are refused by name, and so is a bone with no direction on a frame — **§8.7** |
 | `--viewport`, `--viewport-from` | `render`: give the box every frame is drawn over instead of fitting one — `--viewport <x,y,w,h>`, a world box, y up, `x,y` its bottom-left corner, at the pixel size `--max` gives; or `--viewport-from <frames.json \| dir>`, an earlier render's grid exactly (its box, scale and pixel size), so two candidates land on one pixel grid. A slot that reaches past the box is named by set and frame, and `frames.json` records the box was given under `pinned`. The two together are refused, and so is `--max` beside `--viewport-from` — **§8.6**. On `check` and `inspect`, `--viewport` pins the box those commands draw over instead |
 | `--environment` | `render` only: the wind and gravity the rig's physics constraints answer, in time — a schedule file `{ "spec": "rigc-environment/1", "steps": [{ "t": <seconds>, "wind"?: [x, y], "gravity"?: [x, y] }, …] }`, x right and **y down**, each step holding from its `t` until the next. Both posers set each change before the step that poses the first frame at or after its `t`, and draw the same frames, `geometry.json` and `frames.json` (`RE01`). `frames.json` and `geometry.json` record it, and the framing reads it. A malformed file, a half no physics constraint answers, two steps on one frame and a step after every set's last frame are refused by name, exit 2, nothing written; `check` refuses a frame set drawn under one as a reference. Without it every file is the bytes it always was. An inspection of the response the rig states, not a scene — **§8.4** |
@@ -1137,6 +1138,7 @@ bun cli.ts render   --candidate path/to/spine --geometry   # + geometry.json per
 bun cli.ts render   --candidate path/to/spine --folds      # + folds.json per set: which mesh triangles turn over, and when
 bun cli.ts render   --candidate path/to/spine --pass-through skirt:leg   # + pass-through.json: where a cloth goes through a leg
 bun cli.ts render   --candidate path/to/spine --seam thigh:shin   # + seam.json: where two slots that meet open a gap or show a ghost
+bun cli.ts render   --candidate path/to/spine --overlaps   # + overlaps.json and outline plates: which slot each frame drew over which
 bun cli.ts render   --candidate path/to/spine --angle-range tail:hip   # how far a bone turns against another, per animation
 bun cli.ts render   --candidate path/to/spine --viewport-from render/   # an earlier render's grid: two builds, one pixel grid
 bun cli.ts preview  --candidate path/to/spine [--candidate path/to/another …] [--animation …] [--out preview.html]
@@ -8879,6 +8881,102 @@ same file, and two runs write the same bytes (the selftest's `seam` suite).
 look at a frame it names, draw that set over the box it printed:
 `render --animation <name> --viewport <x,y,w,h> --max 400`.
 
+### 8.9 Which slot covers which — `render --overlaps`
+
+An arm the draw order puts behind the torso simply vanishes from the frames, on a
+build that passes every assertion and every check, and nothing in the frames names
+it. `--overlaps` reads it off the frames `render` draws: **who covers whom, on which
+frames, by how many pixels**. On the selftest's probe (`overlap_probe`,
+`fixtures/public.ts`: an opaque stage, a still body, and an arm drawn after the body
+slid along x across it and out the other side):
+
+```bash
+bun cli.ts render --candidate path/to/spine --animation cross --overlaps --max 160 [--skin …] [--fps 12]
+# rigc render
+#   ..    cross            25 frame(s), 2.000s + contact.png + overlaps.json (1 moving pair(s), 11 outline plate(s)) -> …/cross
+#   ..    overlap  "cross": 2 pair(s) cover on every frame by the same pixels, or with the slot in front drawn wholly on the one behind — layering the motion does not move; overlaps.json lists them
+#   ..    overlap  "cross": OVERLAP "body" under "arm": frames 7–17 (11 of 25), covered up to 135 px at frame 11
+```
+
+⭐ **The render reports what was drawn; who should be in front is the author's, and
+the draw-order key in the motion spec is the remedy** (§4.7, `drawOrder`). The same
+slide with a key that puts the arm before the body reads `OVERLAP "arm" under
+"body"` on the same frames and pixels (`OX02`). On `gallery/walk` at `--fps 20 --max
+288` the back arm reads `OVERLAP "arm_b" under "torso": frames 0–18 (19 of 19),
+covered up to 643 px at frame 15`; with `arm_b` moved after `torso` in the rig's
+slots, that line is gone and `OVERLAP "torso" under "arm_b"` reads the same 643 px at
+frame 15.
+
+**Which frames are read.** Every frame of every set drawn, in **that frame's own
+draw order** — the order its pieces are drawn in, so a draw-order key is honoured.
+
+**What covering means.** Every piece is rasterised in draw order on the render's own
+viewport, so a pixel here is a pixel of `f<NNNN>.png`. A pixel is drawn by a slot
+when the renderer paints it at half opacity or more (128 of 255) — the line every
+other reading draws outlines at. Each pixel keeps the slots that have drawn it so
+far; a slot drawing a pixel earlier slots already drew **covers** each of them there,
+one pixel to each (earlier, later) pair. `under` is the earlier-drawn slot, `over`
+the later-drawn one. Pairs are by slot name, so `a` under `b` and `b` under `a` —
+one draw-order key apart — are two pairs.
+
+**Layering the motion does not move.** A pair that covers on **every** frame, and on
+each either by the **same** pixel count or with the slot in front drawn **wholly on**
+the one behind (every pixel `over` draws is one `under` drew first), is static
+layering: a backdrop under a part that never leaves it, a face drawn over the head
+that carries it. It is counted on one line and listed in the file, never printed
+pair by pair. ⚠️ The pixel count alone was measured not to be enough: on
+`gallery/walk`, a part turning over the backdrop changes its pixel count from frame to
+frame by rasterisation alone, so none of its 35 pairs read as static and 14 backdrop lines (and the eyes over the head) buried the ones that mattered.
+Every other pair that covers anything prints one `OVERLAP` line; a pair that never
+covers prints nothing.
+
+**Blind spots, stated.** A fringe painted under half opacity covers nothing here
+although it tints the frame. A slot in front lying wholly on the one behind on every
+frame reads as layering however it moves across it — an arm swung over the torso
+without ever leaving it. A slot drawing more than one piece is one slot. And the
+counts are pixels at the render's `--max`: quote the size beside a figure.
+
+**The file.** `overlaps.json`, `rigc-overlaps/1`, beside each set's frames:
+`animation`, `skin` (absent when none was set), `fps`, `reading` (`drawnAlpha` 128,
+`unit` `"frame pixels"`, and `rule`, the definition above), `frames[]` — every
+frame, with `index`, `time` and `pairs[]` (`under`, `over`, `px`, and `box`
+`[x0, y0, x1, y1]`: frame pixels, x right, y down, both ends inclusive) — and
+`pairs[]`, one per pair that covers on any frame: `under`, `over`, `frames` (how
+many it covers on), `of` (the set's frames), `runs` (`[[first, last], …]`,
+inclusive), `most` (`{ index, px }`, the earliest on a tie), `inside` (the slot in
+front wholly on the one behind on every frame it covers on) and `varies` (`false`
+for static layering). Both lists are ordered by `under`, then `over`, by code unit.
+
+**The outline plate.** `overlaps-f<NNNN>.png`, numbered as the frames are, for each
+frame where a moving pair covers: a white plate of the frame's size; every slot in a
+moving pair drawn as its **contour** — a drawn pixel with an undrawn neighbour left,
+right, above or below — in its own colour, in draw order; a contour pixel some slot
+drawn later also drew is **dashed** (drawn where `(x + y) % 4 < 2`); and the slot's
+name above its contour's topmost pixel, moved down a line while an earlier name
+crowds it. A slot keeps one colour across a set's plates (a fixed table of eight,
+by the slot's place among the set's moving slots in code-unit order); the colour
+means only "another slot" — the name says which.
+
+**`frames.json`.** Each set gains `overlaps`: `file`, `pairs` (how many cover on any
+frame), `static` (how many of those are layering), `plates`, and `moving[]` — each
+moving pair's `under`, `over`, `frames` and `most` — so a reader that cannot open a
+plate has the figures.
+
+**Refused, nothing written:** `--slot`/`--hide` beside the flag. A slot left out
+covers nothing, so the pairs it is in would vanish and the reading would describe a
+picture of part of the rig — run `render --overlaps` on the whole rig and the subset
+without it; both land on one grid.
+
+**Nothing else moves.** The PNGs, `contact.png` and every other file are byte for
+byte what the render writes without the flag, and `frames.json` differs only by
+each set's `overlaps` record (`OX05`); two runs and both posers write the same file
+and plates (`OX04`).
+
+**A reading, not a gate.** It never changes the exit status. Whether a covered arm
+is a defect is yours; when it is, the remedy is a `drawOrder` key in the motion
+spec (or the slot's place in the rig's `slots`), and the next render says whether
+the line moved.
+
 ---
 
 ## 9. Checking against the frames — `rigc check`
@@ -11706,6 +11804,7 @@ pixel (`IN09`).
 | Does this part's edge follow that bone? | `--show art,weights:<bone>,mesh --overlay-slot <part> --zoom slot:<part>` | the part's own triangles and the bone's weight over them alone, over the whole painting. Where slots stack — a neck under the face, the hair, a collar — every mesh crossing the box is drawn and the heat is the union of every slot the bone moves, so the part's edge has no pixel of its own until the others are left out. The legend's `meshes[]` gives the part's weight for the bone at every vertex, so "does the top row follow the head" is read as numbers as well as colour |
 | Is this rig's density where its motion is? | `--show art,density --dim` | each region and mesh filled by its **ratio** — its triangles per world unit² over the figure's — on one ramp, log-scaled and centred on 1×: grey is as dense as the figure, pink to magenta denser (4×, 16×), light to dark green sparser (1/4×, 1/16×), clamped past the end stops (the stops are in the legend). A part's area is its posed mesh's own, the sum of its triangles' areas at the pose drawn, not the image's box; a region is two triangles over its quad. Where parts overlap the pixel is the part drawn last, as in the art, so a part under others is read with `--overlay-slot <part>`. The figure's totals are always over every slot the pose shows — the filter picks what is drawn and listed, never what the figure is — and the legend's `density` gives each slot's attachment, kind, vertices, triangles, hull, area, triangles per area, ratio and the bones it is weighted to, in draw order. A measurement, not a verdict: no bar is drawn, and `A13_MESH_BUDGET` stays the one gate on counts |
 | Does a joint tear in this animation? | `render --seam <a>:<b> --animation <name>` (§8.8) | One line per pair: the frames where background opens inside the joint (gap) or the overlap band of one piece shows past its partner (ghost), with the worst frame's cell count and world box; `seam.json` carries every frame and its time, and the runs of frames. A pair whose drawings never overlap is a SKIP, said by name. A reading, not a verdict — the exit status never moves |
+| Which slot covers which in this animation? | `render --overlaps --animation <name>` (§8.9) | One `OVERLAP "<under>" under "<over>"` line per pair that moves: the frames it covers on, as runs, and the most pixels it covers and the frame of them; one line counting the layering the motion does not move. `overlaps.json` carries every frame's pairs with their pixel count and box, and `overlaps-f<NNNN>.png` draws each covered frame's contours, the covered part dashed. A reading, not a verdict — the draw-order key is the remedy |
 | Does anything fold in this animation? | `render --folds --animation <name>` (§8.3), then `inspect --show art,folds,mesh --animation <name> --at <the worst frame's time> --zoom folds` | `render --folds` prints one line per mesh with a triangle turned over against the setup pose: the frames, the worst frame's count, which triangles, their world box at that frame and their setup-pose area. The view fills those triangles at the pose drawn — every pixel whose centre a folded triangle holds — in the colour the legend's `folds` states, and the legend's `folds[]` names, per mesh, the folded triangles by index with the same box and area, and the setup pose's degenerate and inverted ones, which are never counted. A fold is usually a sliver a few units across, invisible in a picture of the whole mesh: `--zoom folds` frames the picture to the folded triangles' box. A thin sliver still needs pixels — raise `--max` when the fill is a line. A reading, not a verdict |
 | How is this part triangulated? | `--show art,mesh,hull --zoom slot:<slot>` | each mesh's triangle edges, and over them its hull — vertex 0 to 1 to … to `hull − 1` and back. Regions are not drawn: a region is not a mesh. The legend lists every vertex in world units and in pixels |
 | Which is drawn over which? | `--show art,slots` | each slot that shows a region or mesh numbered by its place in the draw order **at the pose drawn** (0 is drawn first), on a white box at the centre of its attachment's box — so a `drawOrder` key (§4.7) shows from the first frame `render` draws it on |

@@ -138424,6 +138424,27 @@ function fpsNamingFragments(name: (animation: string, fps: number) => string): s
   ];
 }
 
+/**
+ * README.md's two statements of where `render` writes (issue #1468): the render
+ * paragraph of the walkthrough, from its bold lead to the next command's, and the
+ * `render` row of the Commands table. Each is cut out by its own lead so a
+ * sentence moved into the neighbouring paragraph does not count, and a lead that
+ * is gone is returned as the fault rather than read as an empty, clean place.
+ */
+function readmeRenderPlaces(readme: string): { places: Array<readonly [string, string]>; faults: string[] } {
+  const places: Array<readonly [string, string]> = [];
+  const faults: string[] = [];
+  const lead = '**`render`** samples every animation';
+  const at = readme.indexOf(lead);
+  const end = at < 0 ? -1 : readme.indexOf('**`preview`**', at);
+  if (at < 0 || end < 0) faults.push(`README.md has no render paragraph from ${JSON.stringify(lead)} to the **\`preview\`** one`);
+  else places.push(['README.md render paragraph', readme.slice(at, end)]);
+  const row = readme.split('\n').find((line) => line.startsWith('| `render --candidate <dir>` |'));
+  if (row === undefined) faults.push('README.md\'s Commands table has no "| `render --candidate <dir>` |" row');
+  else places.push(['README.md Commands row', row]);
+  return { places, faults };
+}
+
 /** Each place's text against the fragments, whitespace folded so a wrapped line reads as one. */
 function fpsNamingFaults(places: ReadonlyArray<readonly [string, string]>, name: (animation: string, fps: number) => string): string[] {
   const faults: string[] = [];
@@ -138502,7 +138523,10 @@ function runRenderNamingSuite(): number {
   for (const [name, run] of [['--fps 24', at24], ['--geometry', atDefault], ['--geometry --skin --environment', full]] as const) {
     if (pre.length === 0 && (run === null || run.status !== 0)) pre.push(`render ${name} exited ${String(run?.status)}: ${(run?.stderr ?? '').trim().slice(0, 300)}`);
   }
-  const places = [['render --help', help.stdout], ['docs/AUTHORING.md', guide]] as const;
+  const readme = readFileSync(join(import.meta.dir, 'README.md'), 'utf8');
+  const readmeRender = readmeRenderPlaces(readme);
+  pre.push(...readmeRender.faults);
+  const places: ReadonlyArray<readonly [string, string]> = [['render --help', help.stdout], ['docs/AUTHORING.md', guide], ...readmeRender.places];
   const planted = (animation: string, fps: number): string => (fps === PROTOCOL_FPS ? animation : `${animation}_${fps}fps`);
 
   // RN01 — item 4: the sentence is in both places, held to the naming function, and the directories on disk are its.
@@ -138521,8 +138545,8 @@ function runRenderNamingSuite(): number {
     say(
       'RN01_THE_FPS_DIRECTORY_SENTENCE_IS_THE_NAMING_FUNCTIONS',
       ok,
-      probeDetail(ok, probes, `render --help and docs/AUTHORING.md each say ${fpsNamingFragments(frameSetDir).join(', ')} — every fragment derived from frameSetDir — and a render at 24 fps and at the default writes the directories it names`),
-      'issue #1414 item 4: `--fps 24` wrote `dance@24fps/` and nothing a reader could open said so; a sentence held to the function cannot drift from it',
+      probeDetail(ok, probes, `${places.map(([label]) => label).join(', ')} each say ${fpsNamingFragments(frameSetDir).join(', ')} — every fragment derived from frameSetDir — and a render at 24 fps and at the default writes the directories it names`),
+      'issue #1414 item 4: `--fps 24` wrote `dance@24fps/` and nothing a reader could open said so; a sentence held to the function cannot drift from it — and issue #1468: README.md described `<animation>/` at every rate, so its two places are held to the same function',
     );
   }
 
@@ -138580,6 +138604,30 @@ function runRenderNamingSuite(): number {
             ? 'a file planted with a frame key `pieces` the sentence does not name read clean'
             : `\`slots\` planted for \`attachments\`: ${wrongWord[0]}; a frame key \`pieces\` planted in the file: ${extraKey[0]}`,
       'issue #1414: the polisher\'s own wrong word is the plant — the check has to name it',
+    );
+  }
+
+  // RN05 — issue #1468: README.md with the sentence taken out of either place is red, by that place's name.
+  {
+    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults(readmeRender.places, frameSetDir);
+    const fragment = fpsNamingFragments(frameSetDir)[0];
+    const misses: string[] = [];
+    for (const [label, text] of readmeRender.places) {
+      const without = text.replace(/\s+/g, ' ').split(fragment).join('');
+      const named = fpsNamingFaults([[label, without]], frameSetDir);
+      if (!named.some((f) => f.startsWith(label))) misses.push(`${label} with ${fragment} removed read clean`);
+    }
+    const cut = readmeRenderPlaces(readme.replace('**`render`** samples every animation', '**`render`** draws every animation'));
+    if (cut.faults.length === 0) misses.push('a README.md whose render paragraph lost its lead was still read as a place');
+    say(
+      'RN05_README_WITHOUT_THE_FPS_DIRECTORY_SENTENCE_IS_RED',
+      cleanFaults.length === 0 && misses.length === 0 && readmeRender.places.length === 2,
+      cleanFaults.length > 0
+        ? `the unplanted README.md is already red: ${cleanFaults[0]}`
+        : misses.length > 0
+          ? misses[0]
+          : `${fragment} removed from each of ${readmeRender.places.map(([label]) => label).join(' and ')} is named by that place, and a paragraph whose lead is gone is a fault rather than an empty place`,
+      'issue #1468: a doc check nobody has seen fail is not a check — the sentence gone is the plausible regression, and a place that silently stopped being found would pass on nothing',
     );
   }
 

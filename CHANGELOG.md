@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.62.0](https://github.com/rig-c/core/compare/v2.61.1...v2.62.0) (2026-10-19)
+
+
+### Features
+
+* **scripts:** verify:nova, a thin hand that prepares the tree the full selftest needs on the pool ([#1478](https://github.com/rig-c/core/issues/1478)) ([a40e7f8](https://github.com/rig-c/core/commit/a40e7f80b6d2a4be05d0ae61f73d10e84286050d)), closes [#1474](https://github.com/rig-c/core/issues/1474)
+
+
+### Bug Fixes
+
+* **selftest:** CUR11 asks git with a pattern no Bun can drop, and refuses an empty listing ([#1481](https://github.com/rig-c/core/issues/1481)) ([3e77fb9](https://github.com/rig-c/core/commit/3e77fb9dc6794c277d93ef615433a554b7d7b624)), closes [#1477](https://github.com/rig-c/core/issues/1477)
+
 ## [2.61.1](https://github.com/rig-c/core/compare/v2.61.0...v2.61.1) (2026-10-19)
 
 

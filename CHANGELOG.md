@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.61.1](https://github.com/rig-c/core/compare/v2.61.0...v2.61.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **review:** refuse an empty argument by name where the running Bun would drop it ([#1476](https://github.com/rig-c/core/issues/1476)) ([352bb01](https://github.com/rig-c/core/commit/352bb0165bdfa49958639671b3f9d2b7e0c01ab2)), closes [#1465](https://github.com/rig-c/core/issues/1465)
+* **stop:** one number format for the stops refusals, rounded so it never fakes an acceptance ([#1473](https://github.com/rig-c/core/issues/1473)) ([687cbb1](https://github.com/rig-c/core/commit/687cbb1be966391447d771e115236dbf4f711ff4)), closes [#1463](https://github.com/rig-c/core/issues/1463)
+
 ## [2.61.0](https://github.com/rig-c/core/compare/v2.60.0...v2.61.0) (2026-10-19)
 
 

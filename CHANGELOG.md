@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.61.0](https://github.com/rig-c/core/compare/v2.60.0...v2.61.0) (2026-10-19)
+
+
+### Features
+
+* **render:** say whether the physics ran, per set ([#1467](https://github.com/rig-c/core/issues/1467)) ([#1472](https://github.com/rig-c/core/issues/1472)) ([e356dab](https://github.com/rig-c/core/commit/e356dab1a18659b6b0027fcf7e1b55662257999e))
+
+
+### Bug Fixes
+
+* **build:** name the remedy for a directory input and a missing --out ([#1469](https://github.com/rig-c/core/issues/1469)) ([c5b3bce](https://github.com/rig-c/core/commit/c5b3bce6d2edf5ecad9debed3a5759eccacb9f43)), closes [#1466](https://github.com/rig-c/core/issues/1466)
+
 ## [2.60.0](https://github.com/rig-c/core/compare/v2.59.0...v2.60.0) (2026-10-18)
 
 

@@ -21959,6 +21959,131 @@ function runKeyTimeSuite(): number {
     'K08\'s negative control: one float step is all that separates the right frame from the next one here, so a ' +
       'key-time rule that rounded to nearest float would be the #99 defect again, one decimal place further in',
   );
+
+  // --- K10-K13: a key that does not come after the one before it (issue #1506)
+  //
+  // The refusal used to print only the later key's time, `(at t=1)`, and a
+  // phrase generated as four one-second cycles each written t = 0…1 collides at
+  // every cycle boundary — which read exactly like an ordinary slip. The message
+  // now names both keys, and adds the cycle sentence only when the keys after the
+  // pair repeat the spacing of the keys before it. Each case is held with a plant
+  // that moves the sentence the other way, so a predicate that accepted any text
+  // would be seen to.
+  const orderMotion = (duration: number, track: Record<string, unknown>): Record<string, unknown> => ({
+    spec: 'rigc-motion/1',
+    archetype: 'static_probe',
+    cut: 'static_probe',
+    easings: {},
+    animations: { order: { duration, tracks: [track] } },
+  });
+  const orderRefusal = (motion: Record<string, unknown>): { code: string | null; message: string } => {
+    const motionPath = join(dirs.dir, 'probe.motion.json');
+    writeFileSync(motionPath, `${JSON.stringify(motion, null, 2)}\n`);
+    try {
+      compile({ rigPath: dirs.rigPath, motionPath, outDir: dirs.outDir, imagesDir: dirs.dir });
+      return { code: null, message: 'the compile went through' };
+    } catch (err) {
+      return err instanceof CompileError ? { code: err.code ?? null, message: err.message } : { code: null, message: `NOT a CompileError: ${(err as Error).message}` };
+    }
+  };
+  const ORDER_CODE = 'CE_COMPILE_KEY_TIMES_NOT_INCREASING';
+  const CYCLE_SENTENCE = 'ends one key before its period';
+  const pair = (i: number, at: number, before: number): string => `key ${i} at t=${at} does not come after key ${i - 1} at t=${before}`;
+  /** The probes one refusal fails: the code, the leading phrase, the pair, and the cycle sentence present or absent. */
+  const orderProbes = (got: { code: string | null; message: string }, named: string, cycle: boolean): string[] => [
+    ...(got.code === ORDER_CODE ? [] : [`refused under ${String(got.code)}, not ${ORDER_CODE}: ${got.message}`]),
+    ...(got.message.includes('key times must strictly increase') ? [] : ['the leading phrase the guide row and existing readers match is gone']),
+    ...(got.message.includes(named) ? [] : [`the message does not name the pair "${named}": ${got.message}`]),
+    ...(got.message.includes(CYCLE_SENTENCE) === cycle ? [] : [`the cycle sentence is ${cycle ? 'missing' : 'present'}: ${got.message}`]),
+  ];
+  const orderCase = (
+    name: string,
+    got: { code: string | null; message: string },
+    named: string,
+    cycle: boolean,
+    planted: string,
+    why: string,
+  ): void => {
+    const probes = orderProbes(got, named, cycle);
+    // The plant: the same refusal with the sentence moved the other way must fail.
+    const raised = raisedBy(orderProbes({ code: got.code, message: planted }, named, cycle), { at: `the cycle sentence is ${cycle ? 'missing' : 'present'}` });
+    if (raised.length !== 1) probes.push(`the plant (${cycle ? 'sentence removed' : 'sentence appended'}) was not caught: it raised [${raised.join('; ')}]`);
+    const held = probes.length === 0;
+    say(name, held, probeDetail(held, probes, `refused with: ${got.message} — plant (${cycle ? 'sentence removed' : 'sentence appended'}) caught`), why);
+  };
+
+  // The exam shape: a 4 s phrase of four 1 s cycles, each generated t = c … c + 1,
+  // so key 5 repeats key 4's t=1. Driven through a bone track and a slot track,
+  // two of the six call sites.
+  const cycles = (v: (k: number) => unknown): Array<{ t: number; v: unknown }> =>
+    [0, 1, 2, 3].flatMap((c) => [0, 0.25, 0.5, 0.75, 1].map((s, k) => ({ t: c + s, v: v(k) })));
+  const examBone = orderRefusal(orderMotion(4, { bone: 'block', property: 'rotate', keys: cycles((k) => [k % 2 === 0 ? 0 : 20]) }));
+  const examSlot = orderRefusal(orderMotion(4, { slot: 'block', property: 'rgba', keys: cycles((k) => [1, 1, 1, k % 2 === 0 ? 1 : 0.5]) }));
+  const examCycleCut = (message: string): string => message.slice(0, message.indexOf('. The keys from'));
+  orderCase(
+    'K10_a_phrase_whose_cycles_each_end_on_the_next_ones_first_key_is_refused_with_the_pair_and_the_cycle_sentence',
+    examBone,
+    pair(5, 1, 1),
+    true,
+    examCycleCut(examBone.message),
+    'issue #1506: four cycles generated t = 0…1 each collided at every boundary, and `(at t=1)` read like a slip — the fix took a journal entry to find',
+  );
+  orderCase(
+    'K11_the_same_phrase_on_a_slot_track_goes_through_the_same_text',
+    examSlot,
+    pair(5, 1, 1),
+    true,
+    examCycleCut(examSlot.message),
+    'the refusal is thrown at six sites, one helper — a second timeline kind on the same input shows the text is shared rather than copied',
+  );
+  const offPeriod = orderRefusal(orderMotion(2, { slot: 'block', property: 'rgba', keys: [0, 0.5, 0.5, 0.75].map((t) => ({ t, v: [1, 1, 1, 1] })) }));
+  orderCase(
+    'K12_a_duplicate_whose_following_keys_do_not_repeat_the_phrase_carries_the_pair_alone',
+    offPeriod,
+    pair(2, 0.5, 0.5),
+    false,
+    `${offPeriod.message}. ${CYCLE_SENTENCE}`,
+    'the sentence is read off the keys, not guessed: keys 0, 0.5 then 0.5, 0.75 do not repeat a 0.5 s spacing, so naming a cycle there would invent one',
+  );
+  const backwards = orderRefusal(orderMotion(2, { slot: 'block', property: 'rgba', keys: [0, 0.6, 0.4].map((t) => ({ t, v: [1, 1, 1, 1] })) }));
+  orderCase(
+    'K13_a_key_earlier_than_the_one_before_it_carries_the_pair_alone',
+    backwards,
+    pair(2, 0.4, 0.6),
+    false,
+    `${backwards.message}. ${CYCLE_SENTENCE}`,
+    'a plain out-of-order key is not a cycle boundary, and the pair is what tells the author which two keys to swap',
+  );
+
+  // K14: one text, one place. The six sites throw through `refuseKeyOrder`, so
+  // the phrase and the code each appear once in the compiler; a seventh copy
+  // spelled at a call site is the drift the helper exists to stop.
+  const compileText = readFileSync(join(import.meta.dir, 'src/compile.ts'), 'utf8');
+  const orderSiteFaults = (text: string): string[] => {
+    const phrase = text.split('key times must strictly increase').length - 1;
+    const code = text.split(`'${ORDER_CODE}'`).length - 1;
+    const calls = text.split('refuseKeyOrder(where,').length - 1;
+    return [
+      ...(phrase === 1 ? [] : [`"key times must strictly increase" appears ${phrase} time(s) in src/compile.ts, not once`]),
+      ...(code === 1 ? [] : [`'${ORDER_CODE}' appears ${code} time(s) in src/compile.ts, not once`]),
+      ...(calls >= 1 ? [] : ['no call site goes through refuseKeyOrder']),
+    ];
+  };
+  const siteFaults = orderSiteFaults(compileText);
+  const sitePlant = `${compileText}\nthrow new CompileError(\`x: key times must strictly increase (at t=1)\`, '${ORDER_CODE}');\n`;
+  const siteRaised = raisedBy(orderSiteFaults(sitePlant), { at: '"key times must strictly increase" appears 2 time(s)', was: siteFaults });
+  if (siteRaised.length !== 1) siteFaults.push(`the plant (a seventh copy of the old throw) was not caught: it raised [${siteRaised.join('; ')}]`);
+  const siteHeld = siteFaults.length === 0;
+  say(
+    'K14_every_key_order_refusal_is_thrown_through_one_helper',
+    siteHeld,
+    probeDetail(
+      siteHeld,
+      siteFaults,
+      `the phrase and the code appear once each in src/compile.ts, in refuseKeyOrder, which ${compileText.split('refuseKeyOrder(where,').length - 1} call site(s) throw through — plant (a copied throw) raised: ${siteRaised.join('; ')}`,
+    ),
+    'issue #1506: six sites spelled the text six times, so a change to one would have left five readers on the old wording',
+  );
   return bad;
 }
 

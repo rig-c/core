@@ -504,6 +504,15 @@ and `plan` does not run on one; any other dispatch runs `plan`, where the
 resolve step resolves a `tag` alone and refuses the rest. `CUR131` holds that
 shape, each refusal's name and order, and this section.
 
+**One run publishes at a time.** A push cut and a `tag` dispatch share one
+concurrency group, `release-publish`, with nothing cancelled: a `tag` dispatch
+queues behind a cut in flight, and a cut behind a republish, so two runs never
+reach `publish` together. A `version` dispatch publishes nothing and runs in
+`release-confirm`, so a confirmation does not queue behind either. The ref is
+not in the group — the registry is one per package, and a dispatch may name any
+ref. `CUR132` evaluates the group over a push, a `tag` dispatch and a `version`
+dispatch, and holds the first two to one group and the third to another.
+
 **Half-published.** The aliases `spine-rigc` and `@rig-c/core` are published
 after `rig-c`, in the same job, so a failure between those steps leaves the
 version up under the package name and missing under one alias or both.

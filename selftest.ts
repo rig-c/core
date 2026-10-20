@@ -80176,6 +80176,199 @@ function runCurrencySuite(): number {
       );
     }
 
+    // --- CUR132: one concurrency group for the runs that may publish (issue #1510)
+    //
+    // 🚨 The group was keyed on the event name, so a push cut ran in one group
+    // and every dispatch in another: a `tag` republish and a push cut never
+    // queued behind each other — two runs could reach `publish` together —
+    // while a `version` confirmation, which publishes nothing, queued behind a
+    // republish. The opposite of what each needs, and nothing read the group.
+    // This evaluates the group expression as GitHub would, over a push, a `tag`
+    // dispatch from the default branch and from another ref, and a `version`
+    // dispatch, rather than matching its text: a rewrite that still reads the
+    // same passes, and one the evaluator cannot read is refused by name.
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR132_A_TAG_REPUBLISH_AND_A_PUSH_CUT_SHARE_ONE_CONCURRENCY_GROUP_AND_A_CONFIRMATION_DOES_NOT');
+    } else {
+      type ExprValue = string | boolean | null;
+      interface RunContext {
+        label: string;
+        values: Record<string, ExprValue>;
+      }
+      /** The paths the group may read; any other name is refused rather than read as null. */
+      const KNOWN_PATHS = ['github.ref', 'github.event_name', 'inputs.tag', 'inputs.version'] as const;
+      const runContext = (label: string, event: string, ref: string, tag: string | null, version: string | null): RunContext => ({
+        label,
+        values: { 'github.ref': ref, 'github.event_name': event, 'inputs.tag': tag, 'inputs.version': version },
+      });
+      // A push carries no inputs, so GitHub reads them as null there; a dispatch reads an omitted string input as ''.
+      const PUSH = runContext('a push cut', 'push', 'refs/heads/main', null, null);
+      const PUBLISHERS: readonly RunContext[] = [
+        PUSH,
+        runContext('a `tag` dispatch', 'workflow_dispatch', 'refs/heads/main', 'v1.2.3', ''),
+        runContext('a `tag` dispatch from another ref', 'workflow_dispatch', 'refs/heads/other', 'v1.2.3', ''),
+      ];
+      const CONFIRMATION = runContext('a `version` dispatch', 'workflow_dispatch', 'refs/heads/main', '', '1.2.3');
+      const truthy = (value: ExprValue): boolean => value !== null && value !== false && value !== '';
+      /** GitHub's coercion when two operands differ in type: both to numbers. */
+      const toNumber = (value: ExprValue): number =>
+        value === null ? 0 : typeof value === 'boolean' ? (value ? 1 : 0) : value.trim() === '' ? 0 : Number(value);
+      /** `==` as GitHub evaluates it: strings compare ignoring case, other mixed types compare as numbers. */
+      const equal = (a: ExprValue, b: ExprValue): boolean => {
+        if (typeof a === 'string' && typeof b === 'string') return a.toLowerCase() === b.toLowerCase();
+        if (typeof a === typeof b) return a === b;
+        return toNumber(a) === toNumber(b);
+      };
+      /** One `${{ }}` body, evaluated for one run: string literals, the four paths, `==`, `&&`, `||` and parentheses — nothing else. */
+      const evaluate = (body: string, run: RunContext): ExprValue => {
+        const tokens: string[] = [];
+        const lexer = /\s*(?:('(?:[^']|'')*')|(==|&&|\|\||\(|\))|([A-Za-z_][A-Za-z0-9_.-]*)|(\S))/gy;
+        // Every alternative consumes a character, and `(\S)` takes any the others do not, so only trailing space ends the scan early.
+        for (let m = lexer.exec(body); m !== null; m = lexer.exec(body)) {
+          const [, literal, operator, path, other] = m;
+          if (other !== undefined) throw new Error(`\`${other}\`, a token this evaluator does not read`);
+          if (path !== undefined && !(KNOWN_PATHS as readonly string[]).includes(path)) {
+            throw new Error(`\`${path}\`, a name this evaluator does not read (it reads ${KNOWN_PATHS.join(', ')})`);
+          }
+          tokens.push(literal ?? operator ?? path);
+        }
+        let at = 0;
+        const fail = (what: string): never => {
+          throw new Error(`${what} at token ${at + 1} of \`${body.trim()}\``);
+        };
+        const primary = (): ExprValue => {
+          const token = tokens[at++];
+          if (token === undefined) return fail('an operand missing');
+          if (token === '(') {
+            const value = or();
+            if (tokens[at++] !== ')') fail('an unclosed parenthesis');
+            return value;
+          }
+          if (token.startsWith("'")) return token.slice(1, -1).replace(/''/g, "'");
+          if ((KNOWN_PATHS as readonly string[]).includes(token)) return run.values[token] ?? null;
+          return fail(`\`${token}\` where an operand belongs`);
+        };
+        const comparison = (): ExprValue => {
+          let left = primary();
+          while (tokens[at] === '==') {
+            at++;
+            left = equal(left, primary());
+          }
+          return left;
+        };
+        const and = (): ExprValue => {
+          let left = comparison();
+          while (tokens[at] === '&&') {
+            at++;
+            const right = comparison();
+            left = truthy(left) ? right : left;
+          }
+          return left;
+        };
+        const or = (): ExprValue => {
+          let left = and();
+          while (tokens[at] === '||') {
+            at++;
+            const right = and();
+            left = truthy(left) ? left : right;
+          }
+          return left;
+        };
+        const value = or();
+        if (at !== tokens.length) fail(`\`${tokens[at]}\` left over`);
+        return value;
+      };
+      /** The group string for one run: literal text, and each `${{ }}` piece evaluated and joined. */
+      const groupFor = (template: string, run: RunContext): string =>
+        template.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, body: string) => {
+          const value = evaluate(body, run);
+          return value === null ? '' : String(value);
+        });
+      const concurrencyFaults = (yml: string): string[] => {
+        let wf: { concurrency?: unknown };
+        try {
+          wf = readYaml(yml) as { concurrency?: unknown };
+        } catch (error) {
+          return [`release.yml does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`];
+        }
+        const block = wf.concurrency;
+        if (block === null || typeof block !== 'object') return [`release.yml: the workflow's \`concurrency\` is ${JSON.stringify(block ?? null)}, not a block with a group and cancel-in-progress`];
+        const { group, 'cancel-in-progress': cancel } = block as { group?: unknown; 'cancel-in-progress'?: unknown };
+        const faults: string[] = [];
+        if (cancel !== false) faults.push(`release.yml: concurrency.cancel-in-progress is ${JSON.stringify(cancel ?? null)}, where false lets a run queued behind a publish wait instead of cancelling it`);
+        if (typeof group !== 'string') return [...faults, `release.yml: concurrency.group is ${JSON.stringify(group ?? null)}, not a string`];
+        let publishers: string[];
+        let confirmation: string;
+        try {
+          publishers = PUBLISHERS.map((run) => groupFor(group, run));
+          confirmation = groupFor(group, CONFIRMATION);
+        } catch (error) {
+          return [...faults, `release.yml: concurrency.group is refused by the evaluator: it holds ${error instanceof Error ? error.message : String(error)}`];
+        }
+        PUBLISHERS.forEach((run, k) => {
+          if (publishers[k] !== publishers[0]) faults.push(`release.yml: ${run.label} runs in group "${publishers[k]}" and ${PUSH.label} in "${publishers[0]}", so the two can reach publish together`);
+        });
+        if (confirmation === publishers[0]) faults.push(`release.yml: ${CONFIRMATION.label} runs in "${confirmation}", the publishers' own group, so a confirmation queues behind a release`);
+        return faults;
+      };
+
+      const standing = concurrencyFaults(releaseText);
+      const groupLine = /^ {2}group: .*$/m.exec(releaseText)?.[0] ?? null;
+      const one = (text: string, from: string | null, to: string): string | null => (from !== null && text.split(from).length === 2 ? text.replace(from, to) : null);
+      const plants: Array<{ what: string; yml: string | null; want: string; quiet?: boolean }> = [
+        { what: 'the group keyed on the event name again', yml: one(releaseText, groupLine, '  group: release-${{ github.ref }}-${{ github.event_name }}'), want: 'a `tag` dispatch runs in group' },
+        { what: 'the group with no event term', yml: one(releaseText, groupLine, '  group: release-${{ github.ref }}'), want: 'the publishers\' own group' },
+        { what: 'the ref back in the group', yml: one(releaseText, groupLine, `${groupLine ?? ''}-\${{ github.ref }}`), want: 'a `tag` dispatch from another ref runs in group' },
+        { what: 'cancel-in-progress true', yml: one(releaseText, '  cancel-in-progress: false\n', '  cancel-in-progress: true\n'), want: 'cancel-in-progress is true' },
+        {
+          what: 'a function the evaluator does not read',
+          yml: one(releaseText, groupLine, (groupLine ?? '').replace("github.event_name == 'workflow_dispatch'", "startsWith(github.event_name, 'workflow')")),
+          want: '`startsWith`, a name this evaluator does not read',
+        },
+        { what: 'an operator the evaluator does not read', yml: one(releaseText, groupLine, (groupLine ?? '').replace("inputs.tag == ''", "inputs.tag != ''")), want: 'refused by the evaluator' },
+        { what: 'the parentheses dropped', yml: one(releaseText, groupLine, (groupLine ?? '').replace('(', '').replace(')', '')), want: '', quiet: true },
+      ];
+      const probes: string[] = [];
+      const cases: string[] = [];
+      for (const plant of plants) {
+        if (plant.yml === null || plant.yml === releaseText) {
+          probes.push(`"${plant.what}": the edit found nothing to change, so this plant was never made`);
+          continue;
+        }
+        const raised = raisedBy(concurrencyFaults(plant.yml), { was: standing });
+        if (plant.quiet === true) {
+          if (raised.length > 0) probes.push(`"${plant.what}" reads the same and ${raised.length} fault(s) fired: ${raised[0].slice(0, 160)}`);
+          cases.push(`${plant.what} -> quiet`);
+          continue;
+        }
+        if (!raised.some((fault) => fault.includes(plant.want))) {
+          probes.push(`"${plant.what}" was planted and this gate did not fire the fault naming "${plant.want}" (raised: ${raised.join(' | ').slice(0, 200) || 'none'})`);
+          continue;
+        }
+        cases.push(`${plant.what} -> named`);
+      }
+      const evaluated = ((): string => {
+        try {
+          const group = (readYaml(releaseText) as { concurrency?: { group?: string } }).concurrency?.group ?? '';
+          return [...PUBLISHERS, CONFIRMATION].map((run) => `${run.label} = "${groupFor(group, run)}"`).join(', ');
+        } catch {
+          return 'not evaluated';
+        }
+      })();
+      const held = standing.length === 0 && probes.length === 0;
+      say(
+        'CUR132_A_TAG_REPUBLISH_AND_A_PUSH_CUT_SHARE_ONE_CONCURRENCY_GROUP_AND_A_CONFIRMATION_DOES_NOT',
+        held,
+        probeDetail(
+          held,
+          [...standing, ...probes],
+          `release.yml's concurrency group, evaluated: ${evaluated}; cancel-in-progress is false — over ${plants.length} plant(s): ${cases.join('; ')}`,
+        ),
+        'issue #1510: keyed on the event name, a republish and a push cut never queued behind each other while a confirmation queued ' +
+          'behind a republish; every run that may publish shares one group and a confirmation keeps its own',
+      );
+    }
+
     // --- CUR124–CUR125: the squash text release-please reads (issue #1354) ----
     //
     // The squash of #1352 (1c04a03) shipped nothing: line 20 of its body opened

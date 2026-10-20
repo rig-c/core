@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.64.2](https://github.com/rig-c/core/compare/v2.64.1...v2.64.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* **core:** apply transverse physics scale modes ([#1454](https://github.com/rig-c/core/issues/1454)) ([7e3fdf5](https://github.com/rig-c/core/commit/7e3fdf5e35267095c5b09e021670c0308d5662a8))
+
 ## [2.64.1](https://github.com/rig-c/core/compare/v2.64.0...v2.64.1) (2026-10-19)
 
 

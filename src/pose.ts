@@ -185,7 +185,7 @@ export const COARSE_STRIDE_FRACTION = 0.125;
  * trials found rather than 226, and 12 that placed on the old grid lost rather
  * than 9 (both at three minima per rung).
  */
-const COARSE_SUPPRESSION_CELLS = 4;
+export const COARSE_SUPPRESSION_CELLS = 4;
 
 /** How many scale rungs one octave gets in the coarse ladder. */
 export const SCALE_STEPS_PER_OCTAVE = 3;
@@ -254,7 +254,27 @@ export const BACKGROUND_BORDER_SHARE = 0.6;
  * carries it: 227 trials found against 226 at three, none lost, and a CPU cost
  * inside the grid's run-to-run noise.
  */
-const MINIMA_PER_SCALE = 5;
+export const MINIMA_PER_SCALE = 5;
+
+/**
+ * The three numbers that decide which basins the coarse pass sends down —
+ * `COARSE_STRIDE_FRACTION`, `COARSE_SUPPRESSION_CELLS`, `MINIMA_PER_SCALE` — as
+ * one value, so a control can run the search on the grid an earlier release
+ * used and show what the current one buys (issue #1519). See
+ * `PoseOptions.coarseGrid`.
+ */
+export interface PoseCoarseGrid {
+  strideFraction: number;
+  suppressionCells: number;
+  minimaPerScale: number;
+}
+
+/** The grid every caller gets — the three constants above, unchanged. */
+export const COARSE_GRID: PoseCoarseGrid = {
+  strideFraction: COARSE_STRIDE_FRACTION,
+  suppressionCells: COARSE_SUPPRESSION_CELLS,
+  minimaPerScale: MINIMA_PER_SCALE,
+};
 
 /**
  * How many candidates survive each refinement level.
@@ -388,13 +408,75 @@ export function floorClause(): string {
 }
 
 /**
+ * When an ambiguity is ONE part fitting several places at one size — the
+ * reading a left/right pair cut from one drawing gives, which no window
+ * resolves (issue #1519).
+ *
+ * Both bars are read off the measured gap between the two populations, and
+ * each sits at that gap's geometric middle — the same rule for both, so neither
+ * is a number chosen to make one case come out:
+ *
+ * - **Scale**, as `|alternate / best − 1|` and over EVERY alternate inside the
+ *   margin. Same-size repeats measured 0.00001–0.00034 (a pair of legs and a pair
+ *   of ears in a picture rendered from a rig), 0.0030 (the selftest's twin
+ *   fixture, PO34) and 0.0055 (the pose fixture's mirrored arms, PO02). Every
+ *   other ambiguous part above the floor on `tools/pose_floor.ts`'s 420 trials
+ *   had an alternate at least 0.0719 off its best's scale — two scales at one
+ *   spot — and so did a pair of eyes read at 1.000 and 0.922. √(0.0055 × 0.0719)
+ *   ≈ 0.020.
+ * - **Distance**, from the best's centre to the nearest alternate's, over the
+ *   part's span at the best's scale. On that grid every other alternate above
+ *   the floor sat within 0.336 span of its best — two readings of one spot — or
+ *   2.26 spans or more away at a scale more than 20% off, which the scale bar
+ *   already separates; the closest repeat measured was the legs at 0.603.
+ *   √(0.336 × 0.603) ≈ 0.45.
+ *
+ * ⚠️ One grid trial above the floor takes this branch and is not a repeat: a
+ * blurred 48 px shin whose four placements all stopped on the scale FLOOR of the
+ * default window, at 0.5 against a truth at 1.0. Every placement on one wall has
+ * one scale by construction. Its console line marks the wall beside the value,
+ * which is the first thing to move; nothing in the alternates alone separates it
+ * from a repeat — a pair of ears in the same picture also sat on a scale floor.
+ */
+export const REPEAT_SCALE_RATIO = 0.02;
+export const REPEAT_DISTANCE_SPANS = 0.45;
+
+/** How an ambiguity's placements stand to the best one, when they are one part in several places at one size. */
+export interface PoseRepeat {
+  /** The largest `|alternate.scale / best.scale − 1|` inside the margin. */
+  scaleRatio: number;
+  /** The nearest alternate's centre distance from the best's, in spans at the best's scale. */
+  spans: number;
+}
+
+/**
+ * Whether every alternate inside the margin is a DIFFERENT place at the SAME
+ * scale as the best, against `REPEAT_SCALE_RATIO` and `REPEAT_DISTANCE_SPANS`
+ * — `null` when any one is not, or there is none. `span` is the part's longest
+ * material side in frame pixels at the best placement's scale.
+ *
+ * ⭐ Exported so the selftest can hand it a forged alternate and watch the
+ * reading change branch; the search calls it with exactly what it reported.
+ */
+export function repeatedPlaces(best: PosePlacement, alternates: readonly PosePlacement[], span: number): PoseRepeat | null {
+  if (alternates.length === 0 || !(span > 0)) return null;
+  const scaleRatio = Math.max(...alternates.map((a) => Math.abs(a.scale / best.scale - 1)));
+  const spans = Math.min(...alternates.map((a) => hypot2(a.x - best.x, a.y - best.y) / span));
+  return scaleRatio <= REPEAT_SCALE_RATIO && spans >= REPEAT_DISTANCE_SPANS ? { scaleRatio, spans } : null;
+}
+
+/**
  * The sentence that tells "the part is wrong" from "the part is too small or too
  * plain for `pose`", with every figure it rests on (issue #857).
  *
  * ⭐ Exported for the reason `windowEdgeNote` is: the guide quotes it, and a
  * message and the document teaching it must be built from one place.
  */
-export function legibilityReading(l: Omit<PoseLegibility, 'reading'>, verdict: 'refused' | 'ambiguous'): string {
+export function legibilityReading(
+  l: Omit<PoseLegibility, 'reading'>,
+  verdict: 'refused' | 'ambiguous',
+  repeat: PoseRepeat | null = null,
+): string {
   const figures =
     `part is ${l.width}x${l.height} px (span ${l.span} frame px, opaque ${l.opaqueShare}) with texture ${l.texture}, ` +
     `detail ${l.detail}; ` +
@@ -425,12 +507,27 @@ export function legibilityReading(l: Omit<PoseLegibility, 'reading'>, verdict: '
   // blurred goggles and gun from 128 px and rear shin at 48 px — five of them
   // 2.1–2.7 px off, the rear shin 19 px. So the sentence names that reading
   // too, with the one remedy that separates it: a window.
+  //
+  // 🔀 Except when the placements are one size in different places (issue
+  // #1519). Measured on a picture holding a left/right pair cut from one
+  // drawing: no --scale window separated them, narrower or wider, because they
+  // ARE one scale, and every --rotation window that "resolved" them did so by
+  // excluding one place — after which both files placed on the other, one of
+  // them 69 px off its truth and printed clean. There the window does not tell
+  // the two readings apart, it picks one, so the sentence names the route that
+  // does work instead.
+  const ambiguity =
+    repeat === null
+      ? 'either the frame holds more than one place this part fits, or every candidate missed the true one — ' +
+        'a narrower --scale or --rotation window around what you know of the part tells the two apart'
+      : `every placement in the margin is at the best's scale (within ${(repeat.scaleRatio * 100).toFixed(2)}%, ` +
+        `bar ${REPEAT_SCALE_RATIO * 100}%) and in another place (the nearest ${repeat.spans.toFixed(2)} span(s) away, ` +
+        `bar ${REPEAT_DISTANCE_SPANS}), which is the part — or a near-copy, such as a left/right pair cut from one ` +
+        'drawing — drawn more than once: read the placements as an unordered set and order it across frames ' +
+        '(MOTION.md §2.2 🔀); a --rotation window that excludes one place chooses the answer rather than measuring it';
   return (
     `${figures} — above the measured floor (AUTHORING §11.5: ${floorClause()}), so size and texture do not explain this; ` +
-    (verdict === 'refused'
-      ? 'the cut (or the search window) is the suspect'
-      : 'either the frame holds more than one place this part fits, or every candidate missed the true one — ' +
-        'a narrower --scale or --rotation window around what you know of the part tells the two apart')
+    (verdict === 'refused' ? 'the cut (or the search window) is the suspect' : ambiguity)
   );
 }
 
@@ -664,6 +761,19 @@ export interface PoseOptions {
    * level of every part's refinement is appended to it. See `PoseTrace`.
    */
   trace?: PoseTrace;
+  /**
+   * The coarse grid to search on — default `COARSE_GRID`, which is what the CLI
+   * always uses and has no flag to change.
+   *
+   * ⚠️ A plant, not a tuning knob. It exists so the selftest can run the search
+   * on the quarter-span grid releases before 1.4.0 used and watch a control go
+   * red there: two near-identical parts 0.6 of a span apart came back as ONE
+   * placement on that grid, printed `PLACE` with no alternate (issue #1519). A
+   * control nobody has seen fail holds nothing, and the only honest way to see
+   * this one fail is to search on the grid that failed. The report states the
+   * stride fraction in force in `search.coarse.strideFraction`.
+   */
+  coarseGrid?: PoseCoarseGrid;
 }
 
 /** A search candidate as the trace states it: where the part image's centre would land, frame pixels. */
@@ -1742,7 +1852,7 @@ export function estimatePose(options: PoseOptions): PoseReport {
       coarse: {
         frameLongSide: COARSE_LONG_SIDE,
         partSpan: COARSE_PART_SPAN,
-        strideFraction: COARSE_STRIDE_FRACTION,
+        strideFraction: (options.coarseGrid ?? COARSE_GRID).strideFraction,
         framePyramid: framePyramid.length,
       },
       maxResidual,
@@ -1787,6 +1897,7 @@ export function estimatePose(options: PoseOptions): PoseReport {
         maxResidual,
         { min: scaleMin, max: scaleMax },
         rotationBounds,
+        options.coarseGrid ?? COARSE_GRID,
         options.trace,
       ),
     );
@@ -1804,6 +1915,7 @@ function placePart(
   maxResidual: number,
   scaleBounds: { min: number; max: number },
   rotationBounds: { min: number; max: number; wraps: boolean },
+  coarseGrid: PoseCoarseGrid,
   trace?: PoseTrace,
 ): PosePart {
   const scaleMin = scaleBounds.min;
@@ -1938,14 +2050,14 @@ function placePart(
   }
   const coarse = levels[coarseIndex];
   const spanAtCoarse = (span * scaleReference) / coarse.reduction;
-  const stride = Math.max(1, Math.round(spanAtCoarse * COARSE_STRIDE_FRACTION));
+  const stride = Math.max(1, Math.round(spanAtCoarse * coarseGrid.strideFraction));
   const coarseSamples = samplesFor(coarse.reduction, COARSE_SAMPLES);
   let candidates: Candidate[] = [];
   let grid = { reduction: coarse.reduction, cols: 0, rows: 0, stride };
   for (const scale of scales) {
     const field = coarseScan(coarse, coarseSamples, scale, searchRotations, stride);
     grid = { reduction: coarse.reduction, cols: field.cols, rows: field.rows, stride };
-    candidates.push(...localMinima(field, COARSE_SUPPRESSION_CELLS, MINIMA_PER_SCALE));
+    candidates.push(...localMinima(field, coarseGrid.suppressionCells, coarseGrid.minimaPerScale));
   }
   base.coarse = grid;
   candidates.sort((a, b) => a.residual - b.residual);
@@ -1976,7 +2088,7 @@ function placePart(
     const plate = plates[li];
     const smooth = li !== coarseIndex;
     const branch = li === branchLevel;
-    const keep = li === coarseIndex ? scales.length * MINIMA_PER_SCALE : REFINE_CANDIDATES;
+    const keep = li === coarseIndex ? scales.length * coarseGrid.minimaPerScale : REFINE_CANDIDATES;
     const s = samplesFor(level.reduction, li === 0 ? POLISH_SAMPLES : REFINE_SAMPLES);
     // The coarse pass only sampled every `stride` pixels, so entering the
     // refinement the anchor can be half a stride out; the first polish gets a
@@ -2235,7 +2347,17 @@ function placePart(
   // move, and this sentence is about what moving it cannot change.
   if (base.refusal !== null || base.ambiguous) {
     const verdict = base.refusal !== null ? 'refused' : 'ambiguous';
-    const reading = legibilityReading(base.legibility, verdict);
+    // The whole margin rather than the alternates kept, so a repeat is not
+    // read off a list `MAX_ALTERNATES` truncated.
+    const repeat =
+      verdict === 'ambiguous'
+        ? repeatedPlaces(
+            best,
+            close.map((d) => d.placement),
+            span * best.scale,
+          )
+        : null;
+    const reading = legibilityReading(base.legibility, verdict, repeat);
     base.legibility.reading = reading;
     if (base.refusal !== null) base.refusal.detail += `; ${reading}`;
     base.notes.push(`${name}: ${reading}.`);

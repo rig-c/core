@@ -507,12 +507,14 @@ import {
 import { isContent } from './src/framing.ts';
 import {
   AMBIGUITY_ABSOLUTE,
+  COARSE_GRID,
   COARSE_ROTATION_STEP,
   DEFAULT_MAX_RESIDUAL,
   DEFAULT_SCALE_MAX,
   DEFAULT_SCALE_MIN,
   errBilinear,
   estimatePose,
+  legibilityReading,
   levelOf,
   normaliseDegrees,
   placementWalls,
@@ -523,7 +525,10 @@ import {
   SCALE_STEPS_PER_OCTAVE,
   searchRotationClause,
   POSE_FLOOR,
+  repeatedPlaces,
+  REPEAT_SCALE_RATIO,
   windowEdgeNote,
+  type PoseCoarseGrid,
   type PosePlacement,
   type PoseTrace,
   type PoseWall,
@@ -90055,6 +90060,113 @@ function buildPoseFixture(headScale?: number): {
   return { dir, parts, framePath, clearPath, truth };
 }
 
+/**
+ * Two copies of one plate side by side — the shape PO02's fixture does not have
+ * (issue #1519).
+ *
+ * ⭐ PO02's arms are one span apart and 70° apart in rotation, and that shape was
+ * caught by the coarse grid releases before 1.4.0 used: a quarter-span stride
+ * with two cells of suppression. This one is a pair of legs: centres
+ * `distanceSpans` of the plate's span apart, `apartDeg` apart in rotation, and
+ * the same scale — which that grid collapsed onto ONE placement, printed
+ * `PLACE` with no alternate and the other leg tens of pixels off its truth,
+ * because the second basin fell between two anchors and the suppression radius
+ * swallowed it. So PO02 passed on those releases while a picture of this shape
+ * was being read wrong, and only a fixture of this shape can hold the grid.
+ *
+ * The geometry is the selftest's own, not a copy of the picture it was found
+ * on: an 18x34 plate at 1.1 frame px per unit, 0.6 span and 6° apart. It was
+ * picked because its NEIGHBOURS behave the same — at 1.1, every distance from
+ * 0.55 to 0.65 span and every angle from 3° to 8° gave both legs on the current
+ * grid and one on the planted one — so a later change to the search moves this
+ * control only by moving the shape's whole neighbourhood.
+ *
+ * `secondScale`, when given, draws the second copy at that scale: two far
+ * places at DIFFERENT sizes, the other reading of an ambiguity (PO35).
+ */
+function buildTwinPoseFixture(o: { distanceSpans: number; apartDeg: number; secondScale?: number }): {
+  dir: string;
+  parts: string;
+  framePath: string;
+  truth: [PosePlacementTruth, PosePlacementTruth];
+} {
+  const dir = mkdtempSync(join(harnessTemp(), 'rigc-pose-twins-'));
+  const parts = join(dir, 'parts');
+  mkdirSync(parts, { recursive: true });
+  const leg = poseChecker(18, 34, [70, 120, 60, 255], [120, 170, 90, 255], 6);
+  leg.rect(0, leg.height - 5, leg.width, 5, [60, 40, 30, 255]);
+  leg.writePng(join(parts, 'leg.png'));
+  const apart = o.distanceSpans * Math.max(leg.width, leg.height);
+  const second = o.secondScale === undefined ? { image: 'leg.png' } : { image: 'leg.png', scaleX: o.secondScale, scaleY: o.secondScale };
+  const rigPath = join(dir, 'twins.rig.json');
+  writeFileSync(
+    rigPath,
+    `${JSON.stringify(
+      {
+        spec: 'rigc-rig/1',
+        name: 'twin_probe',
+        skeleton: { width: 200, height: 200 },
+        bones: [
+          { name: 'root' },
+          { name: 'leg_a', parent: 'root', x: -apart / 2, y: 0, rotation: o.apartDeg / 2 },
+          { name: 'leg_b', parent: 'root', x: apart / 2, y: 0, rotation: -o.apartDeg / 2 },
+        ],
+        slots: [
+          { name: 'leg_a', bone: 'leg_a', attachment: 'leg' },
+          { name: 'leg_b', bone: 'leg_b', attachment: 'leg' },
+        ],
+        skins: { default: { leg_a: { leg: { image: 'leg.png' } }, leg_b: { leg: second } } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const motionPath = join(dir, 'twins.motion.json');
+  writeFileSync(
+    motionPath,
+    `${JSON.stringify({ spec: 'rigc-motion/1', archetype: 'twin_probe', cut: 'twin_probe', easings: {}, animations: {} }, null, 2)}\n`,
+  );
+  const outDir = join(dir, 'spine');
+  const built = compile({ rigPath, motionPath, outDir, imagesDir: parts });
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'skeleton.json'), built.skeletonText);
+  writeFileSync(join(outDir, 'skeleton.atlas'), built.atlasText);
+  const posable = loadPosable(join(outDir, 'skeleton.json'), join(outDir, 'skeleton.atlas'), outDir);
+  const frames = sampleSetupPose(posable.data);
+  const bounds = unionBounds([frames]);
+  // Off the coarse ladder's rungs for the reason `buildPoseFixture` gives.
+  const scale = 1.1;
+  const pad = 12;
+  const worldW = bounds.maxX - bounds.minX + pad * 2;
+  const worldH = bounds.maxY - bounds.minY + pad * 2;
+  const viewport = viewportOfSize(bounds.minX - pad, bounds.minY - pad, worldW, worldH, scale, Math.round(worldW * scale), Math.round(worldH * scale));
+  const framePath = join(dir, 'twins.png');
+  renderFrame(frames[0], posable.pages, viewport, BACKGROUND).writePng(framePath);
+  const project = projector(viewport);
+  const truthOf = (slot: string): PosePlacementTruth => {
+    const piece = frames[0].pieces.find((p) => p.slot === slot);
+    const page = piece === undefined ? undefined : posable.pages.get(piece.page);
+    if (piece === undefined || page === undefined || piece.kind !== 'region') throw new Error(`internal: the twin fixture posed no region "${slot}"`);
+    return poseTruthOf(piece, page, project);
+  };
+  return { dir, parts, framePath, truth: [truthOf('leg_a'), truthOf('leg_b')] };
+}
+
+/** Each truth's nearest reported placement, by centre, as the three tolerances measure it. */
+function poseNearestEach(
+  found: readonly PosePlacement[],
+  truths: readonly PosePlacementTruth[],
+): ({ translate: number; rotateDeg: number; scaleRatio: number } | null)[] {
+  return truths.map((t) => {
+    let best: { translate: number; rotateDeg: number; scaleRatio: number } | null = null;
+    for (const p of found) {
+      const d = poseDelta(p, t);
+      if (best === null || d.translate < best.translate) best = d;
+    }
+    return best;
+  });
+}
+
 function runPoseSuite(): number {
   console.log('\n── reading a pose frame: pose (issue #241) ──');
   let bad = 0;
@@ -90123,6 +90235,97 @@ function runPoseSuite(): number {
           `arm_l ${left ? poseSay(left) : 'unmatched'}; arm_r ${right ? poseSay(right) : 'unmatched'}`,
       'picking one of two equally good optima silently is the failure this instrument was specified to refuse',
     );
+  }
+
+  // --- PO34–PO35: twins a fraction of a span apart (issue #1519) -------------
+  {
+    const twins = buildTwinPoseFixture({ distanceSpans: 0.6, apartDeg: 6 });
+    // 🌱 The plant is the grid releases before 1.4.0 searched on — a quarter-span
+    // stride and two cells of suppression, the pair of numbers that, put back
+    // alone, made a pair of legs come back as one placement (issue #1517).
+    const planted: PoseCoarseGrid = { ...COARSE_GRID, strideFraction: COARSE_GRID.strideFraction * 2, suppressionCells: COARSE_GRID.suppressionCells / 2 };
+    const read = (grid: PoseCoarseGrid) => {
+      const part = estimatePose({ imagesDir: twins.parts, framePath: twins.framePath, coarseGrid: grid }).parts[0];
+      const found = part?.placement ? [part.placement, ...part.alternates] : [];
+      const [a, b] = poseNearestEach(found, twins.truth);
+      const held = part !== undefined && part.ambiguous && a !== null && b !== null && poseWithin(a) && poseWithin(b);
+      const says =
+        part === undefined
+          ? 'leg.png is not in the report'
+          : `ambiguous=${part.ambiguous}, ${found.length} placement(s); leg_a ${a ? poseSay(a) : 'unmatched'}; ` +
+            `leg_b ${b ? poseSay(b) : 'unmatched'}`;
+      return { part, held, says };
+    };
+    const tree = read(COARSE_GRID);
+    const plant = read(planted);
+    say(
+      'PO34_TWINS_SIX_TENTHS_OF_A_SPAN_APART_COME_BACK_AS_TWO_PLACEMENTS',
+      tree.held && !plant.held,
+      `two copies of leg.png 0.6 span and 6° apart at one scale: ${tree.says}. With the coarse grid planted at ` +
+        `stride ${planted.strideFraction} of the span and suppression ${planted.suppressionCells} cell(s) — the grid ` +
+        `releases before 1.4.0 searched on: ${plant.says}${plant.held ? ' — the plant did NOT fire' : ''}`,
+      'PO02\'s twins are a span and 70° apart, a shape the old grid already caught, so it passed while a pair of ' +
+        'legs 0.6 span apart was printed as one confident placement with the other leg tens of pixels off (issue #1519)',
+    );
+
+    // ⭐ The reading has two branches for an ambiguity above the floor, and each
+    // is held on a picture of its own shape AND on a forged alternate that must
+    // move it to the other one — so neither branch passes by never being taken.
+    const eyes = buildTwinPoseFixture({ distanceSpans: 1.6, apartDeg: 6, secondScale: 0.92 });
+    const eyesPart = estimatePose({ imagesDir: eyes.parts, framePath: eyes.framePath }).parts[0];
+    const ROUTE = 'MOTION.md §2.2 🔀';
+    const WINDOW = 'tells the two apart';
+    const branch = (reading: string): 'route' | 'window' | 'neither' =>
+      reading.includes(ROUTE) && !reading.includes(WINDOW) ? 'route' : reading.includes(WINDOW) && !reading.includes(ROUTE) ? 'window' : 'neither';
+    const replant = (part: typeof eyesPart | undefined, forge: (best: PosePlacement, alt: PosePlacement) => PosePlacement): string => {
+      if (part?.placement == null || part.legibility === null) return '';
+      const best = part.placement;
+      const span = Math.max(part.legibility.width, part.legibility.height) * best.scale;
+      const forged = part.alternates.map((alt) => forge(best, alt));
+      return legibilityReading(part.legibility, 'ambiguous', repeatedPlaces(best, forged, span));
+    };
+    const twinPart = tree.part;
+    const twinReading = twinPart?.legibility?.reading ?? '';
+    const eyesReading = eyesPart?.legibility?.reading ?? '';
+    const cli = runCli(['pose', '--images', twins.parts, '--frame', twins.framePath, '--out', join(twins.dir, 'pose.json')]);
+    const guide = readFileSync(resolve(import.meta.dir, 'docs/AUTHORING.md'), 'utf8');
+    const plants: [string, string, 'route' | 'window'][] = [
+      [
+        `the twins' alternate moved off the best's scale by twice the ${REPEAT_SCALE_RATIO} bar`,
+        replant(twinPart, (best, alt) => ({ ...alt, scale: best.scale * (1 + 2 * REPEAT_SCALE_RATIO) })),
+        'window',
+      ],
+      ["the twins' alternate moved onto the best's centre", replant(twinPart, (best, alt) => ({ ...alt, x: best.x, y: best.y })), 'window'],
+      ["the far pair's alternate put at the best's scale", replant(eyesPart, (best, alt) => ({ ...alt, scale: best.scale })), 'route'],
+    ];
+    const probes: string[] = [];
+    if (!(twinPart?.ambiguous ?? false) || twinPart?.legibility?.floor !== 'above') probes.push('the twins are not an ambiguity above the floor');
+    if (branch(twinReading) !== 'route') probes.push(`the twins read ${branch(twinReading)}: ${JSON.stringify(twinReading)}`);
+    if (!(cli.stdout.includes(twinReading) && twinReading !== '')) probes.push("the twins' reading is not on the console");
+    if (!(guide.includes(twinReading) && twinReading !== '')) probes.push("the twins' reading is not quoted in AUTHORING §11.5");
+    if (!(eyesPart?.ambiguous ?? false) || eyesPart?.legibility?.floor !== 'above') probes.push('the far pair at two scales is not an ambiguity above the floor');
+    if (branch(eyesReading) !== 'window') probes.push(`the far pair reads ${branch(eyesReading)}: ${JSON.stringify(eyesReading)}`);
+    for (const [what, reading, want] of plants) {
+      if (branch(reading) !== want) probes.push(`${what}: read ${branch(reading)}, wanted ${want}`);
+    }
+    const eyesFound = eyesPart?.placement ? [eyesPart.placement, ...eyesPart.alternates] : [];
+    const eyesScales = eyesFound.map((p) => p.scale.toFixed(3)).join(' and ');
+    const held = probes.length === 0;
+    say(
+      'PO35_AN_AMBIGUITY_OF_ONE_SIZE_IN_TWO_PLACES_NAMES_THE_UNORDERED_SET_AND_NOT_A_WINDOW',
+      held,
+      probeDetail(
+        held,
+        probes,
+        `the twins read the 🔀 route, on the console and quoted in §11.5; the far pair at scales ${eyesScales} reads ` +
+          `the window; planted — ${plants.map(([what, reading]) => `${what}: ${branch(reading)}`).join('; ')}`,
+      ),
+      'a left/right pair cut from one drawing sits at one scale, so no --scale window separates it, and a --rotation ' +
+        'window that "resolves" it does so by excluding one place — the sentence offering a window there sends the ' +
+        'reader to the one remedy that picks the answer instead of reading it (issue #1519)',
+    );
+    rmSync(twins.dir, { recursive: true, force: true });
+    rmSync(eyes.dir, { recursive: true, force: true });
   }
 
   // --- rotation as a degree of freedom -------------------------------------

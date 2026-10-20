@@ -18,6 +18,23 @@
       }
     },
     {
+      "platform": "darwin",
+      "bunLine": "1.4",
+      "highWater": 2100,
+      "suites": 88,
+      "bun": "1.4.2",
+      "children": {
+        "jobs": 10,
+        "suites": {
+          "core": 773,
+          "mesh-compare": 584,
+          "packer": 510,
+          "render-hashes": 234,
+          "run-tally": 10
+        }
+      }
+    },
+    {
       "platform": "linux",
       "bunLine": "1.2",
       "highWater": 1996,

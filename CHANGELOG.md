@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.65.0](https://github.com/rig-c/core/compare/v2.64.3...v2.65.0) (2026-10-20)
+
+
+### Features
+
+* **films:** the three films re-cut on rig-c 2.64.3 with the band reading rig-c, each at 1× and a 1200×810 2× ([#1518](https://github.com/rig-c/core/issues/1518)) ([b2d8bf9](https://github.com/rig-c/core/commit/b2d8bf9358b1219207ca7c166a7ce6d865f813d0))
+
+
+### Bug Fixes
+
+* **ci:** every run that may publish shares one concurrency group, and a confirmation has its own ([#1516](https://github.com/rig-c/core/issues/1516)) ([3bb567f](https://github.com/rig-c/core/commit/3bb567f74b42635ff6ac9964b8445e6fe4330207))
+* **ci:** the tag dispatch refuses a prerelease tag by name — this workflow publishes under latest only ([#1515](https://github.com/rig-c/core/issues/1515)) ([8301cba](https://github.com/rig-c/core/commit/8301cbac3886d12df054a2d8fb7b99a1f8e8c28d))
+* **compile:** the key-order refusal names both keys and, when the keys repeat, that a cycle's closing key is the next cycle's first ([#1513](https://github.com/rig-c/core/issues/1513)) ([b12ae46](https://github.com/rig-c/core/commit/b12ae46a61b729bd7899b9ba3311869edc1a8f69))
+
 ## [2.64.3](https://github.com/rig-c/core/compare/v2.64.2...v2.64.3) (2026-10-20)
 
 

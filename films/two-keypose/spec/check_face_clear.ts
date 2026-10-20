@@ -22,7 +22,7 @@
  * comparison by insetting each quad to the part's own ink box.
  */
 import { fileURLToPath } from 'node:url';
-import { loadPosable, sampleAnimation } from 'spine-rigc/src/render';
+import { loadPosable, sampleAnimation } from 'rig-c/render';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BUILDS = ['poses', 'cheer-a', 'cheer-b'];

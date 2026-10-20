@@ -19,7 +19,7 @@
  * rendered PNGs for stray ink finds nothing and proves nothing.
  */
 import { fileURLToPath } from 'node:url';
-import { loadPosable, sampleAnimation, unionBounds, FRAMING_FPS } from 'spine-rigc/src/render';
+import { loadPosable, sampleAnimation, unionBounds, FRAMING_FPS } from 'rig-c/render';
 import { PLATE_W, PLATE_H } from '../art/layout';
 
 const build = fileURLToPath(new URL('../build/', import.meta.url));

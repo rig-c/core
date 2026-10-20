@@ -16,7 +16,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # 0. the compiler, as shipped
-bun add spine-rigc@0.14.0
+bun add rig-c@2.64.3
 
 # 0b. ADAPTED for the repository (issue #342). In the scratchpad `portrait-src/`
 #     was a copy somebody had already made; here it is made from the example it
@@ -58,9 +58,14 @@ bun gif/measure_ink.ts 2>&1 | tee probe/inkbbox.log
 #    the type column, name the command under each beat, encode, verify  -> the GIF
 bun gif/assemble_gif.ts 2>&1 | tee run.log
 
+# 6b. the same film at twice the size, for high-DPI pages  ->  rigc-scene@2x.gif
+#     (the same window, downsampled less; type and rules drawn at 2x)
+bun gif/assemble_gif.ts --scale 2 2>&1 | tee run@2x.log
+
 # 7. the film's own claims, measured off the ENCODED file: the pose hand-offs
 #    (why it needs no dissolves), the half speed, the parallax, the loop.
 bun gif/verify_gif.ts 2>&1 | tee verify.log
+bun gif/verify_gif.ts --scale 2 2>&1 | tee verify@2x.log
 
 # 8. optional — the same build in the official Spine Web Player, the interop proof
 bunx rigc preview --candidate build --animation turn --out preview.html

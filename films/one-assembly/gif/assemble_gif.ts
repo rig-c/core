@@ -7,6 +7,12 @@
  * the arithmetic, (2) downsample the 2x supersample once, (3) draw the two
  * things that are captions rather than art — the loose-PNG filenames and the
  * bottom band — and (4) splice the sets into one loop.
+ *
+ * `--scale N` writes the same film at N times the size (issue #1503): the
+ * layout below is solved once in the 600 px picture's own pixels, and only the
+ * drawing — the resize, every type size, every position — is multiplied, so
+ * the larger file is the same picture with more pixels in it rather than a
+ * second layout. `bun gif/assemble_gif.ts` is scale 1, the shipped size.
  */
 import { mkdirSync, rmSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -16,11 +22,31 @@ import { PLATE_W, PLATE_H } from '../art/layout';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const RENDER = `${ROOT}render/`;
 const WORK = `${ROOT}gif/frames/`;
-const OUT = `${ROOT}rigc-demo.gif`;
+
+/**
+ * The output scale, read off `--scale` (default 1).
+ *
+ * It multiplies the drawing and nothing else. The ceiling is not a number typed
+ * here: a scale that would make the resize ENLARGE the crop is refused below,
+ * once the crop is known, because pixels the render did not sample would be
+ * invented by the filter rather than drawn by rigc.
+ */
+const SCALE = (() => {
+  const at = process.argv.indexOf('--scale');
+  if (at < 0) return 1;
+  const raw = process.argv[at + 1];
+  const v = Number(raw);
+  if (!Number.isInteger(v) || v < 1) throw new Error(`--scale takes a whole number of at least 1, got "${raw}"`);
+  return v;
+})();
+const OUT = `${ROOT}${SCALE === 1 ? 'rigc-demo.gif' : `rigc-demo@${SCALE}x.gif`}`;
 
 /** GIF frame delay in centiseconds. 5 cs is exactly 20 fps — the render rate. */
 const DELAY = 5;
-/** The final long side. The 2x supersample halves to exactly this. */
+/**
+ * The long side at scale 1, which is the unit every layout number below is in.
+ * The 2x supersample halves to exactly this; at `--scale 2` it is not resized.
+ */
 const GIF_W = 600;
 
 // ---------------------------------------------------------------------------
@@ -44,10 +70,21 @@ const cropW = Math.round(px(PLATE_W)) - cropX;
 const cropH = Math.round(py(0)) - cropY;
 const shrink = GIF_W / cropW;
 const GIF_H = Math.round(cropH * shrink);
+/** The written file's size: the scale-1 picture, times the scale. */
+const OUT_W = GIF_W * SCALE;
+const OUT_H = GIF_H * SCALE;
+/** Scale-1 pixels → written pixels. Every coordinate and type size goes through it. */
+const S = (v: number) => v * SCALE;
 
-console.log(`stage in frame: ${cropW}x${cropH}+${cropX}+${cropY} -> ${GIF_W}x${GIF_H}`);
+console.log(`stage in frame: ${cropW}x${cropH}+${cropX}+${cropY} -> ${OUT_W}x${OUT_H}`);
 if (Math.abs(shrink - 0.5) > 1e-9) {
   console.log(`⚠️  downsample is ${shrink.toFixed(4)}, not the intended 0.5`);
+}
+if (OUT_W > cropW || OUT_H > cropH) {
+  throw new Error(
+    `--scale ${SCALE} writes ${OUT_W}x${OUT_H} from a ${cropW}x${cropH} crop — that enlarges the render, ` +
+      'so the extra pixels would be the filter\'s, not rigc\'s; render with a larger --max instead',
+  );
 }
 
 /** World → final GIF pixel. */
@@ -198,8 +235,8 @@ function labelArgs(alpha: number): string[] {
   const hex = Math.round(Math.min(1, alpha) * 255)
     .toString(16)
     .padStart(2, '0');
-  const args = ['-font', MONO, '-pointsize', '11', '-fill', `${LABEL_FILL}${hex}`];
-  for (const l of labelPlan) args.push('-annotate', `+${l.x}+${l.y}`, l.image);
+  const args = ['-font', MONO, '-pointsize', String(S(11)), '-fill', `${LABEL_FILL}${hex}`];
+  for (const l of labelPlan) args.push('-annotate', `+${S(l.x)}+${S(l.y)}`, l.image);
   return args;
 }
 
@@ -211,8 +248,8 @@ function labelArgs(alpha: number): string[] {
  * name's own advance ran `spine-rigc` into the em-dash; over-drawing the same
  * glyphs in a second colour cannot misalign.
  */
-const CAP_NAME = 'spine-rigc';
-const CAP_LINE = 'spine-rigc  —  loose PNGs → a living Spine rig';
+const CAP_NAME = 'rig-c';
+const CAP_LINE = 'rig-c  —  loose PNGs → a living Spine rig';
 const CAP_CMD = 'rigc build --rig rigby.rig.json --motion rigby.motion.json --images parts --out build';
 const CAP_CMD2 = 'rigc render --candidate build --fps 20';
 
@@ -220,26 +257,26 @@ const bandArgs: string[] = [
   '-font',
   MONO,
   '-pointsize',
-  '15',
+  String(S(15)),
   '-fill',
   BODY_FILL,
   '-annotate',
-  `+24+${GIF_H - 46}`,
+  `+${S(24)}+${S(GIF_H - 46)}`,
   CAP_LINE,
   '-fill',
   HEAD_FILL,
   '-annotate',
-  `+24+${GIF_H - 46}`,
+  `+${S(24)}+${S(GIF_H - 46)}`,
   CAP_NAME,
   '-pointsize',
-  '10',
+  String(S(10)),
   '-fill',
   CMD_FILL,
   '-annotate',
-  `+24+${GIF_H - 26}`,
+  `+${S(24)}+${S(GIF_H - 26)}`,
   CAP_CMD,
   '-annotate',
-  `+24+${GIF_H - 12}`,
+  `+${S(24)}+${S(GIF_H - 12)}`,
   CAP_CMD2,
 ];
 void ADV_HEAD;
@@ -302,7 +339,7 @@ const pad = (i: number) => String(i).padStart(4, '0');
 
 for (let i = 0; i < shots.length; i += 1) {
   const shot = shots[i];
-  await $`magick ${shot.file} -crop ${`${cropW}x${cropH}+${cropX}+${cropY}`} +repage -filter Lanczos -resize ${`${GIF_W}x${GIF_H}!`} -alpha remove -alpha off ${bandArgs} ${labelArgs(shot.labels)} ${WORK}s${pad(i)}.png`.quiet();
+  await $`magick ${shot.file} -crop ${`${cropW}x${cropH}+${cropX}+${cropY}`} +repage -filter Lanczos -resize ${`${OUT_W}x${OUT_H}!`} -alpha remove -alpha off ${bandArgs} ${labelArgs(shot.labels)} ${WORK}s${pad(i)}.png`.quiet();
 }
 
 /**

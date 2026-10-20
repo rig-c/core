@@ -26,7 +26,7 @@ published beside it with the same files at every version.
 
 <p align="center"><em>Fourteen part PNGs drawn from scratch for this repo, one rig spec, one motion spec — the assembly,
 the breathing and the wave are all rigc-compiled Spine animations, rendered with
-<code>rigc render</code>.</em></p>
+<code>rigc render</code>. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-demo@2x.gif">2x version</a> (1200x810) sits beside it.</em></p>
 
 Loose part PNGs and two small JSON files in; **Spine 4.3 skeleton data out** — a
 `skeleton.json` and a `skeleton.atlas` that load in any Spine runtime and **import
@@ -526,7 +526,7 @@ a rig compiles green, because green says nothing at all about the picture.
 conditions, <code>rigc pose</code> reads where every part sits in each picture, two
 candidate in-betweenings are compiled from the same pair — and a real
 <code>rigc vote</code> ballot picks the winner, because the movement between the poses
-is the one thing no instrument here will grade.</em></p>
+is the one thing no instrument here will grade. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-keypose@2x.gif">2x version</a> (1200x810) sits beside it.</em></p>
 
 Three properties of `vote` are worth stating, because they are what make its ledger
 usable by the next agent rather than by a reader: **a tie is a recorded outcome, not a
@@ -580,7 +580,7 @@ while <code>gaze</code> and <code>turn</code> return to rest, so the hand-offs m
 differing pixels — and the composing is the consumer's. Authorable on plain Spine 4.3, no
 plugin, no runtime patch; what the turn costs is authoring rather than runtime capability,
 and that cost is one stated expression per key. Compiled and rendered entirely by the
-published package.</em></p>
+published package. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-scene@2x.gif">2x version</a> (1200x810) sits beside it.</em></p>
 
 🎞️ **How the three films on this page were made** is kept with them, one directory per
 film in [`films/`](https://github.com/rig-c/core/tree/main/films) — a `run.sh` that

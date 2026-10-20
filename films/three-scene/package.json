@@ -10,6 +10,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "spine-rigc": "0.14.0"
+    "rig-c": "2.64.3"
   }
 }

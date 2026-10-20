@@ -20,6 +20,12 @@
  * durations are `explain`'s `declared=` values, the part/bone/slot counts are
  * `build`'s summary line, and the turn's five parallax numbers are the bytes of
  * `explain`'s own MEMBER rows.
+ *
+ * `--scale N` writes the same film at N times the size (issue #1503). Every
+ * layout number — `layout.ts`'s and this file's — stays in the 600 px picture's
+ * own pixels; only the drawing is multiplied where it is handed to ImageMagick,
+ * so the larger file is the same picture with more pixels in it. The one place
+ * that is not a plain multiplication is the type size, and `DRAWN_PT` says why.
  */
 import { mkdirSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -33,7 +39,25 @@ import {
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const WORK = `${ROOT}gif/frames/`;
 const BITS = `${ROOT}gif/bits/`;
-const OUT = `${ROOT}rigc-scene.gif`;
+
+/**
+ * The output scale, read off `--scale` (default 1). The ceiling is not typed
+ * here: a scale whose pane would ENLARGE the bust window is refused once the
+ * window is known, because those pixels would be the filter's, not rigc's.
+ */
+const SCALE = (() => {
+  const at = process.argv.indexOf('--scale');
+  if (at < 0) return 1;
+  const raw = process.argv[at + 1];
+  const v = Number(raw);
+  if (!Number.isInteger(v) || v < 1) throw new Error(`--scale takes a whole number of at least 1, got "${raw}"`);
+  return v;
+})();
+/** Scale-1 pixels → written pixels. */
+const S = (v: number) => v * SCALE;
+const OUT_W = S(GIF_W);
+const OUT_H = S(GIF_H);
+const OUT = `${ROOT}${SCALE === 1 ? 'rigc-scene.gif' : `rigc-scene@${SCALE}x.gif`}`;
 
 /** GIF frame delay in centiseconds. 4 cs is exactly 25 fps — the render rate. */
 const DELAY = 4;
@@ -90,7 +114,13 @@ const shrink = PANE_W / cropW;
 const plateScale = PANE_W / (cropW / vp.scale);
 const aspectError = Math.abs((cropW / cropH) / (PANE_W / STAGE_H) - 1);
 
-console.log(`bust window in frame: ${WINDOW}  ->  ${PANE_W}x${STAGE_H}`);
+console.log(`bust window in frame: ${WINDOW}  ->  ${S(PANE_W)}x${S(STAGE_H)}`);
+if (S(PANE_W) > cropW || S(STAGE_H) > cropH) {
+  throw new Error(
+    `--scale ${SCALE} draws the pane at ${S(PANE_W)}x${S(STAGE_H)} from a ${cropW}x${cropH} window — that enlarges ` +
+      "the render, so the extra pixels would be the filter's, not rigc's; render with a larger --max instead",
+  );
+}
 console.log(
   `  plate units  x ${((cropX - ox) / vp.scale).toFixed(1)}..${((cropX + cropW - ox) / vp.scale).toFixed(1)}` +
     `   y ${((cropY - oy) / vp.scale).toFixed(1)}..${((cropY + cropH - oy) / vp.scale).toFixed(1)}`,
@@ -129,6 +159,35 @@ for (const pt of [9, 9.5, 14]) ADV[pt] = await advance(pt);
 console.log(`  advances     ${Object.entries(ADV).map(([pt, a]) => `${pt}pt=${a}px`).join('  ')}`);
 
 /**
+ * The point size each of those is DRAWN at, and its advance there.
+ *
+ * 📐 Doubling the point size does not double the advance, because the advance
+ * comes back an integer (above): 9pt is 5px, but 18pt is 11, not 10. A column
+ * whose 44-character lines were sized to 5px each would run 44px wider at 2x
+ * than twice itself, and off the canvas. So at `--scale N` each size is drawn at
+ * the largest half-point size up to N times it whose measured advance is no
+ * wider than N times the scale-1 advance — the same rule that chose 9pt over 8
+ * above, applied at the written size. At scale 1 it is the size itself.
+ */
+const DRAWN_PT: Record<number, number> = {};
+const DRAWN_ADV: Record<number, number> = {};
+for (const pt of [9, 9.5, 14]) {
+  const base = ADV[pt];
+  if (base === undefined) throw new Error(`no advance was measured for ${pt}pt`);
+  for (let q = S(pt); q > 0; q -= 0.5) {
+    const a = SCALE === 1 ? base : await advance(q);
+    if (a <= S(base)) {
+      DRAWN_PT[pt] = q;
+      DRAWN_ADV[pt] = a;
+      break;
+    }
+  }
+}
+if (SCALE !== 1) {
+  console.log(`  drawn at     ${Object.entries(DRAWN_PT).map(([pt, q]) => `${pt}pt as ${q}pt=${DRAWN_ADV[Number(pt)]}px`).join('  ')}`);
+}
+
+/**
  * One `-annotate` group.
  *
  * 🚨 An `#RRGGBBAA` fill whose alpha byte is `00` does NOT draw nothing.
@@ -145,7 +204,9 @@ const type = (pt: number, fill: string, x: number, y: number, text: string): str
   if (text === '') return [];
   const alpha = /^#[0-9a-f]{6}([0-9a-f]{2})$/i.exec(fill);
   if (alpha !== null && parseInt(alpha[1], 16) <= 2) return [];
-  return ['-font', MONO, '-pointsize', String(pt), '-fill', fill, '-annotate', `+${Math.round(x)}+${Math.round(y)}`, text];
+  const drawn = DRAWN_PT[pt];
+  if (drawn === undefined) throw new Error(`no drawn size was measured for ${pt}pt`);
+  return ['-font', MONO, '-pointsize', String(drawn), '-fill', fill, '-annotate', `+${Math.round(S(x))}+${Math.round(S(y))}`, text];
 };
 
 /** A hex colour with an alpha byte appended, for fades. `type` drops a zero. */
@@ -157,6 +218,11 @@ const fits = (lines: string[], pt: number, width: number, where: string) => {
   const longest = Math.max(0, ...lines.map((l) => l.length));
   if (longest * ADV[pt] > width) {
     throw new Error(`${where}: longest line is ${longest} chars = ${longest * ADV[pt]}px in a ${width}px slot`);
+  }
+  const drawnAdv = DRAWN_ADV[pt];
+  if (drawnAdv === undefined) throw new Error(`${where}: no drawn size was measured for ${pt}pt`);
+  if (longest * drawnAdv > S(width)) {
+    throw new Error(`${where}: at --scale ${SCALE} the longest line is ${longest * drawnAdv}px in a ${S(width)}px slot`);
   }
   return longest;
 };
@@ -277,8 +343,8 @@ const NOTES: Record<string, string[]> = {
 };
 for (const [k, v] of Object.entries(NOTES)) fits(v, 9, TEXT_W, `the ${k} note`);
 
-const TAGLINE = 'spine-rigc  —  a 2.5D head turn on plain Spine data';
-const TAGLINE_NAME = 'spine-rigc';
+const TAGLINE = 'rig-c  —  a 2.5D head turn on plain Spine data';
+const TAGLINE_NAME = 'rig-c';
 fits([TAGLINE], 14, GIF_W - 40, 'the tagline');
 
 const CMD_BUILD = 'rigc build --rig rig.json --motion motion.json --images parts --out build';
@@ -306,9 +372,9 @@ mkdirSync(WORK, { recursive: true });
 const BACKDROP = `${BITS}backdrop.png`;
 {
   const rule = (x0: number, y0: number, x1: number, y1: number) => [
-    '-stroke', PANEL_EDGE, '-strokewidth', '1', '-draw', `line ${x0},${y0} ${x1},${y1}`, '-stroke', 'none',
+    '-stroke', PANEL_EDGE, '-strokewidth', String(S(1)), '-draw', `line ${S(x0)},${S(y0)} ${S(x1)},${S(y1)}`, '-stroke', 'none',
   ];
-  await $`magick -size ${`${GIF_W}x${GIF_H}`} xc:${PANEL} -alpha remove -alpha off ${[
+  await $`magick -size ${`${OUT_W}x${OUT_H}`} xc:${PANEL} -alpha remove -alpha off ${[
     ...rule(COL_X, 0, COL_X, GIF_H - 1),
     ...rule(0, STAGE_H, GIF_W - 1, STAGE_H),
     ...rule(TEXT_X, Y_RULE1, COL_X + COL_W - 16, Y_RULE1),
@@ -333,7 +399,8 @@ const furniture: string[] = [
 const cursor = (y: number, alpha: number): string[] => {
   if (alpha <= 0.01) return [];
   const x = TEXT_X - 11;
-  const p = [[0, -7], [0, 0], [5, -3.5]].map(([dx, dy]) => `${x + dx},${(y + dy).toFixed(1)}`).join(' ');
+  const tri: [number, number][] = [[0, -7], [0, 0], [5, -3.5]];
+  const p = tri.map(([dx, dy]) => `${S(x + dx)},${S(y + dy).toFixed(1)}`).join(' ');
   return ['-fill', fade(HEAD, alpha), '-stroke', 'none', '-draw', `polygon ${p}`];
 };
 
@@ -498,8 +565,8 @@ const AXIS_PX = Math.round((YAW_AXIS_X - (cropX - ox) / vp.scale) * plateScale);
 const axis = (alpha: number): string[] => {
   if (!AXIS_LINE || alpha <= 0.02) return [];
   return [
-    '-stroke', fade(TEAL, alpha * 0.34), '-strokewidth', '1',
-    '-draw', `line ${AXIS_PX},6 ${AXIS_PX},${STAGE_H - 7}`,
+    '-stroke', fade(TEAL, alpha * 0.34), '-strokewidth', String(S(1)),
+    '-draw', `line ${S(AXIS_PX)},${S(6)} ${S(AXIS_PX)},${S(STAGE_H - 7)}`,
     '-stroke', 'none',
   ];
 };
@@ -533,7 +600,7 @@ console.log('\ncompositing…');
 for (const [i, f] of frames.entries()) {
   const args = [
     BACKDROP,
-    '(', f.src, '-crop', WINDOW, '+repage', '-filter', 'Lanczos', '-resize', `${PANE_W}x${STAGE_H}!`, '-alpha', 'remove', '-alpha', 'off', ')',
+    '(', f.src, '-crop', WINDOW, '+repage', '-filter', 'Lanczos', '-resize', `${S(PANE_W)}x${S(STAGE_H)}!`, '-alpha', 'remove', '-alpha', 'off', ')',
     '-geometry', '+0+0', '-composite',
     ...ink(f),
     `${WORK}r${pad(i)}.png`,

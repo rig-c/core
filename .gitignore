@@ -126,3 +126,6 @@ examples
 # real directories here today, but a worktree is exactly where somebody points a
 # name at another disk, so this entry is under the rule at the top like the rest.
 /.claude/worktrees
+/films/one-assembly/rigc-demo@2x.gif
+/films/two-keypose/rigc-keypose@2x.gif
+/films/three-scene/rigc-scene@2x.gif

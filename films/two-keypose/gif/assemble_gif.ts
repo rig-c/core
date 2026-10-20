@@ -14,6 +14,12 @@
  * builds come out with the same viewport as each other, and it is the same
  * viewport film one had (x −51.2, 1382.4 wide, scale 0.9375) — so the plate is
  * 1200x810 in the frame and the downsample to 600 is exactly 0.5.
+ *
+ * `--scale N` writes the same film at N times the size (issue #1503). Every
+ * layout number below stays in the 600 px picture's own pixels; only the
+ * drawing — each resize, type size, position, stroke and border — is multiplied
+ * at the point it is handed to ImageMagick, so the larger file is the same
+ * picture with more pixels in it rather than a second layout.
  */
 import { mkdirSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -23,11 +29,30 @@ import { PLATE_W, PLATE_H, BAND_H, TEAL } from '../art/layout';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const WORK = `${ROOT}gif/frames/`;
 const BITS = `${ROOT}gif/bits/`;
-const OUT = `${ROOT}rigc-keypose.gif`;
+
+/**
+ * The output scale, read off `--scale` (default 1). The ceiling is not typed
+ * here: a scale whose plate resize would ENLARGE the crop is refused once the
+ * crop is known, because those pixels would be the filter's, not rigc's.
+ */
+const SCALE = (() => {
+  const at = process.argv.indexOf('--scale');
+  if (at < 0) return 1;
+  const raw = process.argv[at + 1];
+  const v = Number(raw);
+  if (!Number.isInteger(v) || v < 1) throw new Error(`--scale takes a whole number of at least 1, got "${raw}"`);
+  return v;
+})();
+/** Scale-1 pixels → written pixels. */
+const S = (v: number) => v * SCALE;
+const OUT = `${ROOT}${SCALE === 1 ? 'rigc-keypose.gif' : `rigc-keypose@${SCALE}x.gif`}`;
 
 /** GIF frame delay in centiseconds. 5 cs is exactly 20 fps — the render rate. */
 const DELAY = 5;
-/** The final long side. The 2x supersample halves to exactly this. */
+/**
+ * The long side at scale 1, the unit every layout number below is in. The 2x
+ * supersample halves to exactly this; at `--scale 2` the plate is not resized.
+ */
 const GIF_W = 600;
 
 // ---------------------------------------------------------------------------
@@ -61,9 +86,18 @@ const cropH = Math.round(py(0)) - cropY;
 const shrink = GIF_W / cropW;
 const GIF_H = Math.round(cropH * shrink);
 const PLATE_CROP = `${cropW}x${cropH}+${cropX}+${cropY}`;
+/** The written file's size: the scale-1 picture, times the scale. */
+const OUT_W = S(GIF_W);
+const OUT_H = S(GIF_H);
 
-console.log(`stage in frame: ${PLATE_CROP} -> ${GIF_W}x${GIF_H}`);
+console.log(`stage in frame: ${PLATE_CROP} -> ${OUT_W}x${OUT_H}`);
 if (Math.abs(shrink - 0.5) > 1e-9) console.log(`⚠️  downsample is ${shrink.toFixed(4)}, not the intended 0.5`);
+if (OUT_W > cropW || OUT_H > cropH) {
+  throw new Error(
+    `--scale ${SCALE} writes ${OUT_W}x${OUT_H} from a ${cropW}x${cropH} crop — that enlarges the render, ` +
+      "so the extra pixels would be the filter's, not rigc's; render with a larger --max instead",
+  );
+}
 
 /** The caption band, in final pixels, out of the one place the stage is written. */
 const BAND_TOP = GIF_H - Math.round(BAND_H * vp.scale * shrink);
@@ -116,7 +150,7 @@ const type = (pt: number, fill: string, x: number, y: number, text: string): str
   if (text === '') return [];
   const alpha = /^#[0-9a-f]{6}([0-9a-f]{2})$/i.exec(fill);
   if (alpha !== null && parseInt(alpha[1], 16) <= 2) return [];
-  return ['-font', MONO, '-pointsize', String(pt), '-fill', fill, '-annotate', `+${Math.round(x)}+${Math.round(y)}`, text];
+  return ['-font', MONO, '-pointsize', String(S(pt)), '-fill', fill, '-annotate', `+${Math.round(S(x))}+${Math.round(S(y))}`, text];
 };
 
 /** A hex colour with an alpha byte appended, for fades. `type` drops a zero. */
@@ -127,8 +161,8 @@ const fade = (hex: string, a: number) =>
 // the persistent caption band
 // ---------------------------------------------------------------------------
 
-const TAGLINE_NAME = 'spine-rigc';
-const TAGLINE = 'spine-rigc  —  two pictures in → the motion between them → you choose';
+const TAGLINE_NAME = 'rig-c';
+const TAGLINE = 'rig-c  —  two pictures in → the motion between them → you choose';
 
 /**
  * The band's second line names the command that made the shot above it, which
@@ -162,7 +196,7 @@ mkdirSync(WORK, { recursive: true });
  * halves that, so 0.46875 of the plate's own PNG *is* the film's ground.
  */
 const BACKDROP = `${BITS}backdrop.png`;
-await $`magick ${ROOT}art/parts/plate.png -filter Lanczos -resize ${`${GIF_W}x${GIF_H}!`} -alpha remove -alpha off ${BACKDROP}`.quiet();
+await $`magick ${ROOT}art/parts/plate.png -filter Lanczos -resize ${`${OUT_W}x${OUT_H}!`} -alpha remove -alpha off ${BACKDROP}`.quiet();
 
 /** The figure crop shared by the picture cards and the A/B panes. */
 const FIG_CROP = '640x720+391+0';
@@ -171,13 +205,13 @@ const FIG_H = 270;
 
 /** One figure-sized view of a rigc frame, cropped to the plate then to the figure. */
 async function figView(src: string, out: string) {
-  await $`magick ${src} -crop ${PLATE_CROP} +repage -crop ${FIG_CROP} +repage -filter Lanczos -resize ${`${FIG_W}x${FIG_H}!`} -alpha remove -alpha off ${out}`.quiet();
+  await $`magick ${src} -crop ${PLATE_CROP} +repage -crop ${FIG_CROP} +repage -filter Lanczos -resize ${`${S(FIG_W)}x${S(FIG_H)}!`} -alpha remove -alpha off ${out}`.quiet();
 }
 
 /** The same, framed in a hairline so it reads as a separate view. */
 async function framed(src: string, out: string) {
   await figView(src, `${out}.raw.png`);
-  await $`magick ${out}.raw.png -bordercolor ${'#38414f'} -border 1 ${out}`.quiet();
+  await $`magick ${out}.raw.png -bordercolor ${'#38414f'} -border ${S(1)} ${out}`.quiet();
 }
 
 const frameFile = (build: string, anim: string, i: number) =>
@@ -216,7 +250,7 @@ const SHOT_H = Math.round(shotSize[1] * SHOT_SCALE);
  * already dark.
  */
 for (const [k, src] of [['pre', 'ballot-winner-row-pre.png'], ['post', 'ballot-winner-row.png']] as const) {
-  await $`magick ${ROOT}vote/${src} -filter Lanczos -resize ${`${SHOT_W}x${SHOT_H}!`} -bordercolor ${'#8c96a4'} -border 1 ${BITS}ballot-${k}.png`.quiet();
+  await $`magick ${ROOT}vote/${src} -filter Lanczos -resize ${`${S(SHOT_W)}x${S(SHOT_H)}!`} -bordercolor ${'#8c96a4'} -border ${S(1)} ${BITS}ballot-${k}.png`.quiet();
 }
 const SHOT_X = Math.round((GIF_W - SHOT_W) / 2);
 const SHOT_Y = 100;
@@ -232,7 +266,8 @@ const BBOX = {
 
 /** The terminal panel shot 2 and shot 4 both write into. */
 async function panel(out: string, x0: number, y0: number, x1: number, y1: number) {
-  await $`magick ${BACKDROP} -fill ${PANEL} -stroke none -draw ${`roundrectangle ${x0},${y0} ${x1},${y1} 5,5`} -fill none -stroke ${PANEL_EDGE} -strokewidth 1 -draw ${`roundrectangle ${x0},${y0} ${x1},${y1} 5,5`} ${out}`.quiet();
+  const box = `roundrectangle ${S(x0)},${S(y0)} ${S(x1)},${S(y1)} ${S(5)},${S(5)}`;
+  await $`magick ${BACKDROP} -fill ${PANEL} -stroke none -draw ${box} -fill none -stroke ${PANEL_EDGE} -strokewidth ${S(1)} -draw ${box} ${out}`.quiet();
 }
 
 const P2 = { x0: 26, y0: 40, x1: 574, y1: 300 };
@@ -295,10 +330,34 @@ const POSE_LINES: { text: string; fill: string }[] = [
   { text: reportLine('scarf_tail.png'), fill: BODY },
   { text: summary, fill: OK },
 ];
-const longest = Math.max(...POSE_LINES.map((l) => l.text.length));
-if (longest * ADV[11] > P2.x1 - P2.x0 - 32) {
-  console.log(`⚠️  shot 2's longest line is ${Math.round(longest * ADV[11])}px in a ${P2.x1 - P2.x0 - 32}px panel`);
+/**
+ * The size each line is set at: 11pt, or — for a line that does not fit the
+ * panel at 11 — the smaller of the two sizes this film already uses for type.
+ *
+ * ⚠️ The comment above says a line that does not fit is a layout problem, not a
+ * reason to edit the numbers, and that is what this is. It became one when the
+ * film moved to the current `rig-c` (issue #1503): `rigc pose` reworded its
+ * `search` line since the version the film was cut on, and at 11pt it ran 58px
+ * past the panel and off the frame's right edge. The line is still the log's own
+ * bytes; only its point size gives way, and only for a line that needs it.
+ */
+const PANEL_TEXT_W = P2.x1 - P2.x0 - 32;
+const adv = (pt: number) => {
+  const a = ADV[pt];
+  if (a === undefined) throw new Error(`no advance was measured for ${pt}pt`);
+  return a;
+};
+const fitPt = (text: string) => [11, 9.5].find((pt) => text.length * adv(pt) <= PANEL_TEXT_W);
+for (const l of POSE_LINES) {
+  const pt = fitPt(l.text);
+  if (pt === undefined) {
+    console.log(`⚠️  shot 2's line is ${Math.round(l.text.length * adv(9.5))}px at 9.5pt in a ${PANEL_TEXT_W}px panel: ${l.text}`);
+  } else if (pt !== 11) {
+    console.log(`   shot2 | set at ${pt}pt — ${Math.round(l.text.length * adv(11))}px at 11pt, ${Math.round(l.text.length * adv(pt))}px at ${pt}pt, in a ${PANEL_TEXT_W}px panel`);
+  }
 }
+/** Each line's size, in `POSE_LINES` order. */
+const POSE_PT = POSE_LINES.map((l) => fitPt(l.text) ?? 9.5);
 for (const l of POSE_LINES) console.log(`   shot2 | ${l.text}`);
 
 // ---------------------------------------------------------------------------
@@ -353,9 +412,9 @@ const pointer = (x: number, y: number): string[] => {
     [7.6, 12.3],
     [12.6, 12.0],
   ]
-    .map(([dx, dy]) => `${(x + dx).toFixed(1)},${(y + dy).toFixed(1)}`)
+    .map(([dx, dy]) => `${S(x + dx).toFixed(1)},${S(y + dy).toFixed(1)}`)
     .join(' ');
-  return ['-fill', '#f4f6fa', '-stroke', '#20242c', '-strokewidth', '1.2', '-draw', `polygon ${p}`, '-stroke', 'none'];
+  return ['-fill', '#f4f6fa', '-stroke', '#20242c', '-strokewidth', String(S(1.2)), '-draw', `polygon ${p}`, '-stroke', 'none'];
 };
 
 /** A ring around a box, inset/outset by `pad`. */
@@ -365,9 +424,9 @@ const ring = (b: typeof BBOX, pad: number, w: number, colour: string): string[] 
   '-stroke',
   colour,
   '-strokewidth',
-  String(w),
+  String(S(w)),
   '-draw',
-  `roundrectangle ${(b.x0 - pad).toFixed(0)},${(b.y0 - pad).toFixed(0)} ${(b.x1 + pad).toFixed(0)},${(b.y1 + pad).toFixed(0)} 5,5`,
+  `roundrectangle ${S(b.x0 - pad).toFixed(0)},${S(b.y0 - pad).toFixed(0)} ${S(b.x1 + pad).toFixed(0)},${S(b.y1 + pad).toFixed(0)} ${S(5)},${S(5)}`,
   '-stroke',
   'none',
 ];
@@ -414,7 +473,7 @@ for (let i = 0; i < S2; i += 1) {
     const l = POSE_LINES[k];
     // the newest line arrives at 60 % and comes up to full on the next frame
     const fresh = k === shown - 1 && i % 3 === 0 ? 0.6 : 1;
-    ink.push(...type(11, fade(l.fill, fresh), P2.x0 + 16, LINE_Y + k * LINE_H, l.text));
+    ink.push(...type(POSE_PT[k] ?? 9.5, fade(l.fill, fresh), P2.x0 + 16, LINE_Y + k * LINE_H, l.text));
   }
   ink.push(
     ...type(9.5, DIM, 24, 324, 'these are the run\'s own lines — pose/poseB.log, kept verbatim'),
@@ -523,11 +582,11 @@ for (const [i, shot] of shots.entries()) {
   // A rigc frame needs cropping to the plate first; a bit built above is
   // already at final size.
   if (shot.base.startsWith(`${ROOT}render-`)) {
-    args.push('-crop', PLATE_CROP, '+repage', '-filter', 'Lanczos', '-resize', `${GIF_W}x${GIF_H}!`);
+    args.push('-crop', PLATE_CROP, '+repage', '-filter', 'Lanczos', '-resize', `${OUT_W}x${OUT_H}!`);
   }
   args.push('-alpha', 'remove', '-alpha', 'off');
   for (const [file, x, y] of shot.put) {
-    args.push(file, '-geometry', `+${Math.round(x)}+${Math.round(y)}`, '-composite');
+    args.push(file, '-geometry', `+${Math.round(S(x))}+${Math.round(S(y))}`, '-composite');
   }
   args.push(...shot.ink, ...bandArgs(shot.command), `${WORK}r${pad(i)}.png`);
   await $`magick ${args}`.quiet();
@@ -688,5 +747,5 @@ console.log(
   `  seam        ${pc(seam)} last->first, against a ${pc(typical)} median moving step and a ${pc(biggest)} biggest in-shot step`,
 );
 console.log(`  joins       ${joinHops.length} dissolve hops, worst ${pc(worstJoin)}`);
-console.log(`  band top    y=${BAND_TOP} of ${GIF_H}`);
+console.log(`  band top    y=${S(BAND_TOP)} of ${OUT_H}`);
 if (!existsSync(OUT)) throw new Error('no GIF was written');

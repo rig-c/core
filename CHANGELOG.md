@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.65.1](https://github.com/rig-c/core/compare/v2.65.0...v2.65.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **pose:** a control holds twins six tenths of a span apart as two placements, and an ambiguity of one size in two places names the unordered set instead of a window ([#1521](https://github.com/rig-c/core/issues/1521)) ([ded712f](https://github.com/rig-c/core/commit/ded712fcc471b1f2be01f30b5030d6f8c41bc110))
+
 ## [2.65.0](https://github.com/rig-c/core/compare/v2.64.3...v2.65.0) (2026-10-20)
 
 

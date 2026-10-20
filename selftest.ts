@@ -140465,6 +140465,40 @@ function fpsNamingFaults(places: ReadonlyArray<readonly [string, string]>, name:
   return faults;
 }
 
+/**
+ * `render --help`'s `--out` row (issue #1505): the line from `  --out <dir>` to
+ * the next flag's, so the rule stated under `--fps` cannot stand in for it — a
+ * reader of `--out` reads that row and no other. A row that is gone is the fault.
+ */
+function renderOutRow(help: string): { row: string | null; fault: string | null } {
+  const row = help.split('\n').find((line) => line.startsWith('  --out <dir>')) ?? null;
+  return row === null ? { row, fault: 'render --help has no "  --out <dir>" row' } : { row, fault: null };
+}
+
+/**
+ * The per-set lines a render printed (`  ..    <name> N frame(s), … -> <dir>`)
+ * against the root it wrote (issue #1505): every path a line ends in must be a
+ * directory on disk and one of frames.json's `sets[].dir` under that root, and
+ * every set frames.json names must have a line. The path is what the reader
+ * copies, so it is held to the disk and the sidecar, never to the naming function.
+ */
+function setLineFaults(label: string, stdout: string, root: string, sheet: FramesSidecar): string[] {
+  const faults: string[] = [];
+  const printed = stdout
+    .split('\n')
+    .map((line) => /^ {2}\.\. {4}\S.* \d+ frame\(s\), .* -> (.+)$/.exec(line))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => resolve(m[1]));
+  const sets = sheet.sets.map((set) => resolve(root, set.dir));
+  if (printed.length === 0) faults.push(`${label}: printed no per-set line ending in "-> <dir>"`);
+  for (const path of printed) {
+    if (!existsSync(path)) faults.push(`${label}: a set line ends in "<out>/${relative(root, path)}", which is not on disk`);
+    if (!sets.includes(path)) faults.push(`${label}: a set line ends in "<out>/${relative(root, path)}", which is none of ${FRAMES_SIDECAR}'s sets[].dir [${sheet.sets.map((set) => set.dir).join(', ')}]`);
+  }
+  for (const path of sets) if (!printed.includes(path)) faults.push(`${label}: ${FRAMES_SIDECAR} names set "${relative(root, path)}" and no set line ends in it`);
+  return faults;
+}
+
 /** The key lists §8.2 states, read off its sentence: top level (with `?` for a key written only when set), a frame, `setup`, a bone, an attachment. */
 function geometryKeysStated(guide: string): { top: Array<{ key: string; optional: boolean }>; frame: string[]; setup: string[]; bone: string[]; attachment: string[] } | string {
   const folded = guide.replace(/\s+/g, ' ');
@@ -140536,7 +140570,19 @@ function runRenderNamingSuite(): number {
   const readme = readFileSync(join(import.meta.dir, 'README.md'), 'utf8');
   const readmeRender = readmeRenderPlaces(readme);
   pre.push(...readmeRender.faults);
-  const places: ReadonlyArray<readonly [string, string]> = [['render --help', help.stdout], ['docs/AUTHORING.md', guide], ...readmeRender.places];
+  const outRow = renderOutRow(help.stdout);
+  if (outRow.fault !== null) pre.push(outRow.fault);
+  const guideOutLead = 'Three commands take `--out`';
+  const guideOutAt = guide.indexOf(guideOutLead);
+  const guideOutEnd = guideOutAt < 0 ? -1 : guide.indexOf('`guide` reads this page', guideOutAt);
+  if (guideOutAt < 0 || guideOutEnd < 0) pre.push(`docs/AUTHORING.md has no paragraph from ${JSON.stringify(guideOutLead)} to "\`guide\` reads this page"`);
+  const places: ReadonlyArray<readonly [string, string]> = [
+    ['render --help', help.stdout],
+    ['render --help --out row', outRow.row ?? ''],
+    ['docs/AUTHORING.md', guide],
+    ['docs/AUTHORING.md --out sentence', guideOutAt < 0 || guideOutEnd < 0 ? '' : guide.slice(guideOutAt, guideOutEnd)],
+    ...readmeRender.places,
+  ];
   const planted = (animation: string, fps: number): string => (fps === PROTOCOL_FPS ? animation : `${animation}_${fps}fps`);
 
   // RN01 — item 4: the sentence is in both places, held to the naming function, and the directories on disk are its.
@@ -140638,6 +140684,49 @@ function runRenderNamingSuite(): number {
           ? misses[0]
           : `${fragment} removed from each of ${readmeRender.places.map(([label]) => label).join(' and ')} is named by that place, and a paragraph whose lead is gone is a fault rather than an empty place`,
       'issue #1468: a doc check nobody has seen fail is not a check — the sentence gone is the plausible regression, and a place that silently stopped being found would pass on nothing',
+    );
+  }
+
+  // RN06 — issue #1505: the `--out` row with the 24-fps directory spelled another way is red, by the row's name.
+  {
+    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults([['render --help --out row', outRow.row ?? '']], frameSetDir);
+    const at = frameSetDir('<anim>', 24);
+    const alteredRow = (outRow.row ?? '').split(at).join(`<anim>_24fps`);
+    const named = pre.length > 0 ? [] : fpsNamingFaults([['render --help --out row', alteredRow]], frameSetDir);
+    const fired = named.filter((f) => f.startsWith('render --help --out row'));
+    say(
+      'RN06_AN_OUT_ROW_THAT_MISNAMES_THE_SET_DIRECTORY_IS_RED',
+      cleanFaults.length === 0 && alteredRow !== outRow.row && fired.length > 0,
+      cleanFaults.length > 0
+        ? `the unplanted --out row is already red: ${cleanFaults[0]}`
+        : alteredRow === outRow.row
+          ? `the --out row carries no ${JSON.stringify(at)} for the plant to alter`
+          : fired.length === 0
+            ? `the --out row with ${JSON.stringify(at)} spelled \`<anim>_24fps\` read clean`
+            : `the --out row with ${JSON.stringify(at)} spelled \`<anim>_24fps\`: ${fired[0]}`,
+      'issue #1505: an examinee read `--out` and not `--fps`, so the row it read is held on its own — and a hold nobody has seen fail is not a hold',
+    );
+  }
+
+  // RN07 — issue #1505: the path each per-set line ends in is the directory on disk and frames.json's sets[].dir, at 24 fps and at the default.
+  {
+    const probes = [...pre];
+    let plantedFaults: string[] = [];
+    if (pre.length === 0) {
+      for (const [root, run] of [['r_24', at24], ['r_default', atDefault]] as const) {
+        const rootDir = join(probe.work, root);
+        const sheet = JSON.parse(readFileSync(join(rootDir, FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
+        probes.push(...setLineFaults(`render --out ${root}`, run?.stdout ?? '', rootDir, sheet));
+        if (root === 'r_24') plantedFaults = setLineFaults(`render --out ${root} (planted)`, (run?.stdout ?? '').split('@24fps').join(''), rootDir, sheet);
+      }
+      if (plantedFaults.length === 0) probes.push('the 24-fps render\'s stdout with "@24fps" cut from every line read clean');
+    }
+    const ok = probes.length === 0;
+    say(
+      'RN07_EACH_SET_LINE_ENDS_IN_THE_DIRECTORY_IT_WROTE',
+      ok,
+      probeDetail(ok, probes, `every per-set line of a render at 24 fps and at the default ends in a directory on disk that ${FRAMES_SIDECAR} names under sets[].dir, every set has its line, and the 24-fps lines with "@24fps" cut are red: ${plantedFaults[0] ?? ''}`),
+      'issue #1505: an examinee kept reading `dance/` after `--fps 24` wrote `dance@24fps/`; the path a line prints is what a reader copies, so it is held to the disk and the sidecar',
     );
   }
 

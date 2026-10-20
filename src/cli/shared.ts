@@ -55,6 +55,8 @@ import {
   GeometryError,
   POSER_NAMES,
   PoserChoiceError,
+  frameSetDir,
+  FRAMES_SIDECAR,
   type PoserName,
   PROTOCOL_FPS,
   UnframeablePoseError,
@@ -1753,7 +1755,14 @@ export const COMMANDS: CommandDoc[] = [
     ],
     flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range', 'environment', 'poser', 'out'],
     overrides: {
-      out: { value: '<dir>', meaning: 'directory to write the frame series into (default `render/`)' },
+      out: {
+        value: '<dir>',
+        meaning:
+          'directory to write the frame series into (default `render/`). Each animation is a set directory under it, named by the rate (see --fps): ' +
+          `\`${frameSetDir('<anim>', PROTOCOL_FPS)}/\` at the default, \`${frameSetDir('<anim>', 24).split('24').join('<fps>')}/\` at any other — ` +
+          `\`--fps 24\` writes \`${frameSetDir('<anim>', 24)}/\`, and the default ${PROTOCOL_FPS} writes \`${frameSetDir('<anim>', PROTOCOL_FPS)}/\`. ` +
+          `The line printed for each set ends in the directory it wrote, and ${FRAMES_SIDECAR} beside the sets names each under \`sets[].dir\``,
+      },
       fps: {
         meaning:
           `frames per second to sample the animation at (default ${PROTOCOL_FPS}). A set drawn at any rate but the default is written to ` +

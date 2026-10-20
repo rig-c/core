@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.64.3](https://github.com/rig-c/core/compare/v2.64.2...v2.64.3) (2026-10-20)
+
+
+### Bug Fixes
+
+* **ci:** a tag release-please cut whose npm publish did not land is republished by workflow_dispatch(tag), through the same gate and publish ([#1508](https://github.com/rig-c/core/issues/1508)) ([c8bb346](https://github.com/rig-c/core/commit/c8bb346d2e8bb18aff2d0335711da87c9d5d2b7d))
+* **cli:** render --help's --out row names the set directory each rate writes, and two controls hold the row and the printed paths to the folders on disk ([#1511](https://github.com/rig-c/core/issues/1511)) ([dd6619e](https://github.com/rig-c/core/commit/dd6619ec9004af0a27b30176e1ebb1966fc71fc3))
+
 ## [2.64.2](https://github.com/rig-c/core/compare/v2.64.1...v2.64.2) (2026-10-20)
 
 

@@ -1148,6 +1148,51 @@ function checkKeyTime(where: string, time: number, authored: number, duration: n
   );
 }
 
+/**
+ * The one refusal for a key that does not come after the key before it, for
+ * every timeline kind (issue #1506) — six call sites used to spell it six times.
+ *
+ * It names both keys by index and authored time, because the time alone does
+ * not say which pair to look at: a generated phrase of four one-second cycles,
+ * each written t = 0…1, collides at every cycle boundary, and `(at t=1)` read
+ * the same as an ordinary slip. When the two keys share a time AND the keys
+ * after the pair repeat the spacing of the keys before it, the period is read
+ * off the keys themselves — the second key's time less the first key's — and
+ * the message says that the closing key of one cycle is the opening key of the
+ * next. Nothing else is inferred: a duplicate with no keys after it, or with
+ * keys that do not repeat, carries the pair alone, and the declared `loop` is
+ * not consulted because it is a player hint (§4.1) and the boundary is the same
+ * either way. The fix is phrased from the runtime rather than from taste:
+ * `Animation.apply` wraps a looping time as `time % duration` and the last
+ * frame of every curve timeline is stepped, so a track that stops short of its
+ * period holds its last key until the wrap rather than easing into t = 0.
+ *
+ * ⚠️ The repetition is compared in authored seconds within one float32 step of
+ * the later key (`float32Step`) — `lag`/`stagger` shift every key of a track by
+ * the same amount, so the spacing is the same before and after them.
+ */
+function refuseKeyOrder(where: string, keys: ReadonlyArray<{ t: number }>, i: number, duplicate: boolean): never {
+  const at = keys[i].t;
+  const before = keys[i - 1].t;
+  const period = at - keys[0].t;
+  const following = Math.min(i - 1, keys.length - 1 - i);
+  let repeats = duplicate && period > 0 && following >= 1;
+  for (let j = 1; repeats && j <= following; j++) {
+    if (Math.abs(keys[i + j].t - keys[j].t - period) > float32Step(keys[i + j].t)) repeats = false;
+  }
+  const boundary = repeats
+    ? `. The keys from t=${keys[0].t} repeat every ${period}s, so key ${i - 1} closes one cycle and key ${i} opens ` +
+      `the next at the same time: a phrase that repeats every ${period}s ends one key before its period. Generate ` +
+      'each cycle without its closing key and keep that key on the last cycle only — a looping player wraps from ' +
+      'it to t=0, and a track that stops short holds its last key until the wrap'
+    : '';
+  throw new CompileError(
+    `${where}: key times must strictly increase — key ${i} at t=${at} does not come after key ${i - 1} at ` +
+      `t=${before} (keys counted from 0)${boundary}`,
+    'CE_COMPILE_KEY_TIMES_NOT_INCREASING',
+  );
+}
+
 function channelHex(v: number): string {
   const clamped = Math.max(0, Math.min(1, v));
   return Math.round(clamped * 255)
@@ -8106,9 +8151,7 @@ function compileValueTrack(
     const key = track.keys[i];
     const next = track.keys[i + 1];
     const time = keyTime(key.t + shift);
-    if (i > 0 && time <= (out[i - 1].time as number)) {
-      throw new CompileError(`${where}: key times must strictly increase (at t=${key.t})`, 'CE_COMPILE_KEY_TIMES_NOT_INCREASING');
-    }
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time === out[i - 1].time);
     checkKeyTime(where, time, key.t, duration);
     // A named-value timeline (`inherit`): the key's `v` is one name, stepped by
     // the format. The name is resolved rather than copied, and what is WRITTEN
@@ -8237,9 +8280,7 @@ function compileDrawOrder(
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) {
-      throw new CompileError(`${where}: key times must strictly increase (at t=${key.t})`, 'CE_COMPILE_KEY_TIMES_NOT_INCREASING');
-    }
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time === out[i - 1].time);
     checkKeyTime(where, time, key.t, duration);
     // No offsets = "back to the setup draw order", which is the parser's own
     // encoding for it. An empty array means the same thing and is written the
@@ -8478,9 +8519,7 @@ function compileConstraintTrack(
     const key = keys[i];
     const next = keys[i + 1];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) {
-      throw new CompileError(`${where}: key times must strictly increase (at t=${key.t})`, 'CE_COMPILE_KEY_TIMES_NOT_INCREASING');
-    }
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time === out[i - 1].time);
     checkKeyTime(where, time, key.t, duration);
 
     const entry: ModelKey = { time };
@@ -8906,9 +8945,7 @@ function compileSequenceTrack(
   for (let i = 0; i < track.keys.length; i++) {
     const key = track.keys[i];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) {
-      throw new CompileError(`${where}: key times must strictly increase (at t=${key.t})`, 'CE_COMPILE_KEY_TIMES_NOT_INCREASING');
-    }
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time === out[i - 1].time);
     checkKeyTime(where, time, key.t, duration);
     if (key.index !== undefined && key.index >= series.count) {
       throw new CompileError(
@@ -8946,9 +8983,7 @@ function compileDeformTrack(
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) {
-      throw new CompileError(`${where}: key times must strictly increase (at t=${key.t})`, 'CE_COMPILE_KEY_TIMES_NOT_INCREASING');
-    }
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time === out[i - 1].time);
     checkKeyTime(where, time, key.t, duration);
     // -- a key that states a MODEL rather than a run (issue #294) ------------
     //
@@ -9660,9 +9695,7 @@ function compileTrack(
     const key = track.keys[i];
     const next = track.keys[i + 1];
     const time = keyTime(key.t + shift);
-    if (i > 0 && time <= (out[i - 1].time as number)) {
-      throw new CompileError(`${where}: key times must strictly increase (at t=${key.t})`, 'CE_COMPILE_KEY_TIMES_NOT_INCREASING');
-    }
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time === out[i - 1].time);
     checkKeyTime(where, time, key.t, duration);
 
     if (shape === 'attachment') {

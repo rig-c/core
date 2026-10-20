@@ -11365,10 +11365,23 @@ ambiguous one ends with a sentence saying which reading its figures support:
 
   > loud.png: the best placement found has residual 0.5000, above --max-residual 0.25; part is 200x150 px (span 200 frame px, opaque 1) with texture 0.2473, detail 49.455; 2 candidate(s), best 0.5000, next 0.5000, spread 0.0000 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; the cut (or the search window) is the suspect
 
+- **above the floor, one size in two places** — two copies of an 18x34 checker 0.6 of its span and 6° apart, the shape a left/right pair cut from one drawing reads as:
+
+  > part is 18x34 px (span 36.2 frame px, opaque 1) with texture 0.0221, detail 0.752; 14 candidate(s), best 0.0160, next 0.0162, spread 0.0002 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; every placement in the margin is at the best's scale (within 0.30%, bar 2%) and in another place (the nearest 0.62 span(s) away, bar 0.45), which is the part — or a near-copy, such as a left/right pair cut from one drawing — drawn more than once: read the placements as an unordered set and order it across frames (MOTION.md §2.2 🔀); a --rotation window that excludes one place chooses the answer rather than measuring it
+
 Read the figures, not only the verdict. *Below* says plainness alone explains the
 failure: the cut may be right, and `pose` cannot tell. *Above* says it does not,
 so look at the cut, the `--scale`/`--rotation` window, or — for an ambiguity — at
-whether the frame really holds the part twice. ⚠️ Above the floor is **not** a
+whether the frame really holds the part twice. 🔀 When **every** placement inside
+the margin is at the best's scale and in another place — the two bars the sentence
+prints beside the figures it measured — the reading says the frame does hold it more than once and
+names MOTION.md §2.2's unordered set instead of a window: no `--scale` window
+separates two copies of one size, and a `--rotation` window that excludes one place
+*chooses* the answer — both files then place on the other copy, one of them off its
+truth and printed clean. Both bars sit at the geometric middle of the gap measured
+between such repeats and every other ambiguity on the floor's grid (the constants
+`REPEAT_SCALE_RATIO` and `REPEAT_DISTANCE_SPANS` in `src/pose.ts` carry the figures);
+any other ambiguity above the floor keeps the window sentence. ⚠️ Above the floor is **not** a
 promise that `pose` will place the part (see the rates below).
 
 **The texture figure.** `legibility.texture` is the mean colour step between
@@ -11513,7 +11526,10 @@ cutoff, and `PO26` holds every polish to strictly descending residuals, read thr
 the same trace. `PO31` places §6's post at the old placement from the page's own
 input bytes, and `PO32` holds it to taking the quarter-rung escape and reading the same twice.
 `PO33` holds the coarse row the tool reads rotations from to the field each seed was
-picked from.
+picked from. `PO34` holds two copies of one part 0.6 span apart to both coming back — and is
+seen red on the quarter-span grid releases before 1.4.0 searched on, which put them on
+one placement — and `PO35` holds the two readings of an ambiguity above the floor to
+their own shapes, each with a forged alternate that moves it to the other.
 
 ## 12. Reading the half of that picture `pose` refuses — `rigc chainfit`
 

@@ -890,9 +890,9 @@ coordinates into a rig and a motion **by construction** and spend its effort on 
 part no instrument can measure, the movement between two poses.
 
 ```
-  AMBIG  arm.png      x=   62.9  y=   56.2  rot=   35.3°  scale=1.114  residual=0.0227  unexplained=  1%
-                      alt 2: x=   28.4  y=   56.2  rot=  -35.0°  scale=1.118  residual=0.0227  unexplained=  1%
-                      ambiguous: part is 10x30 px (span 33.4 frame px, opaque 1) with texture 0.0291, detail 0.873; 32 candidate(s), best 0.0227, next 0.0227, spread 0.0000 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; either the frame holds more than one place this part fits, or every candidate missed the true one — a narrower --scale or --rotation window around what you know of the part tells the two apart
+  AMBIG  arm.png      x=   28.4  y=   56.2  rot=  -35.0°  scale=1.117  residual=0.0227  unexplained=  1%
+                      alt 2: x=   63.0  y=   56.2  rot=   35.2°  scale=1.111  residual=0.0229  unexplained=  1%
+                      ambiguous: part is 10x30 px (span 33.5 frame px, opaque 1) with texture 0.0291, detail 0.873; 31 candidate(s), best 0.0227, next 0.0229, spread 0.0002 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; every placement in the margin is at the best's scale (within 0.55%, bar 2%) and in another place (the nearest 1.03 span(s) away, bar 0.45), which is the part — or a near-copy, such as a left/right pair cut from one drawing — drawn more than once: read the placements as an unordered set and order it across frames (MOTION.md §2.2 🔀); a --rotation window that excludes one place chooses the answer rather than measuring it
   PLACE  ball.png     x=   45.7  y=  104.6  rot=    0.0°  scale=1.141  residual=0.0226  unexplained=  4%
                       rotation is a FREE degree of freedom — the 0° above is a placeholder
   REFUSE foreign.png  x=   48.7  y=   76.4  rot= -139.9°  scale=0.679  residual=0.4254  unexplained=100%

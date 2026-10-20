@@ -234,7 +234,11 @@ frames is your job.** `alternates` non-empty means the answer was not unique;
 `ambiguous` means at least one alternate is inside the margin. Two identical limbs
 look exactly like that, and so does a shape whose silhouette fits itself at more than
 one angle. The instrument has run out — it sees one frame and has no notion of which
-limb is which. A method that works:
+limb is which. A left/right pair cut from one drawing is two files that each fit both
+places, so each comes back with both, and narrowing `--scale` or `--rotation` until one
+place is left picks the answer — it does not read it; the `ambiguous:` reading names
+this route instead of a window when every placement in the margin is one size in
+another place (AUTHORING §11.5). A method that works:
 
 1. **Enumerate the assignments, not the placements.** With k interchangeable
    placements of one part in frame A and k in frame B, there are k! ways to pair them.

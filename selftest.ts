@@ -79996,11 +79996,13 @@ function runCurrencySuite(): number {
     // through env alone, every reader of the tag reading the resolved one, the
     // confirmation on a `version` alone, and RELEASING.md saying all of it.
     // Ported from the sibling repository's control for the same repair, onto
-    // this repository's three-job graph.
+    // this repository's three-job graph. Issue #1509 added the prerelease
+    // refusal: the publish steps pass no `--tag`, so a prerelease dispatched
+    // above the registry's latest would otherwise go out under latest.
     if (BUN_YAML === null) {
       reportYamlHole('CUR131_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_GATE_AND_PUBLISH_AND_EACH_REFUSAL_IS_NAMED');
     } else {
-      const REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'] as const;
+      const REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_TAG_PRERELEASE', 'RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'] as const;
       const UNPUBLISHED_CUT_LINE = 'a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch';
       const DISPATCH = 'gh workflow run release.yml -f tag=';
       const PLAN_TERMS = ["github.event_name == 'push'", "inputs.tag != ''", "inputs.version == ''"];
@@ -80058,7 +80060,7 @@ function runCurrencySuite(): number {
           });
           const found = REFUSALS.filter((_, k) => at[k] !== -1);
           const order = [...found].sort((a, b) => at[REFUSALS.indexOf(a)] - at[REFUSALS.indexOf(b)]);
-          if (order.join() !== found.join()) faults.push(`release.yml: the resolve step refuses in the order ${order.join(', ')}, out of order against ${REFUSALS.join(', ')} — below-latest after already-published, so a version already served is not named as below latest`);
+          if (order.join() !== found.join()) faults.push(`release.yml: the resolve step refuses in the order ${order.join(', ')}, out of order against ${REFUSALS.join(', ')} — prerelease after the form check, which admits the spelling so the tag can be named, and before the GitHub-release read; below-latest after already-published, so a version already served is not named as below latest`);
           if (!run.includes(`npm view "${packageName}" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}" version\`, so a tag below the registry's latest is not refused`);
           if (!run.includes(`npm view "${packageName}@$version" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}@$version" version\`, so a version the registry serves is not refused under the package's name`);
           for (const [variable, source] of [['INPUT_TAG', '${{ inputs.tag }}'], ['INPUT_VERSION', '${{ inputs.version }}']] as const) {
@@ -80104,13 +80106,14 @@ function runCurrencySuite(): number {
       const standing = republishFaults(releaseText, releasingText);
       /** `from` → `to` where `from` occurs exactly once, or null: an ambiguous anchor plants nothing it can name. */
       const one = (text: string, from: string, to: string): string | null => (text.split(from).length === 2 ? text.replace(from, to) : null);
-      const swapped = ((): string | null => {
-        const a = '::error::RELEASE_TAG_UNRELEASED:';
-        const b = '::error::RELEASE_ALREADY_PUBLISHED:';
+      /** The two refusal codes' `::error::` lines exchanged in place, or null when either is not there exactly once. */
+      const swapped = (first: string, second: string): string | null => {
+        const a = `::error::${first}:`;
+        const b = `::error::${second}:`;
         const marked = one(releaseText, a, '\u0000');
         const moved = marked === null ? null : one(marked, b, a);
         return moved === null ? null : moved.replace('\u0000', b);
-      })();
+      };
       const condition = "    if: ${{ needs.plan.outputs.publish == 'true' }}\n";
       const plants: Array<{ what: string; yml: string | null; doc?: string | null; want: string; quiet?: boolean }> = [
         { what: 'the tag input dropped', yml: one(releaseText, '      tag:\n        description:', '      tagged:\n        description:'), want: 'no `tag` input' },
@@ -80126,7 +80129,9 @@ function runCurrencySuite(): number {
         { what: 'plan exports the cut tag', yml: one(releaseText, '      tag: ${{ steps.target.outputs.tag }}\n', '      tag: ${{ steps.release.outputs.tag_name }}\n'), want: 'exports `tag`' },
         { what: 'the dispatch-input refusal unnamed', yml: releaseText.includes('::error::RELEASE_DISPATCH_INPUT:') ? releaseText.split('::error::RELEASE_DISPATCH_INPUT:').join('::error::') : null, want: 'RELEASE_DISPATCH_INPUT' },
         { what: 'the form refusal unnamed', yml: one(releaseText, '::error::RELEASE_TAG_FORM:', '::error::'), want: 'RELEASE_TAG_FORM' },
-        { what: 'the unreleased and already-published refusals swapped', yml: swapped, want: 'out of order' },
+        { what: 'the prerelease refusal unnamed', yml: one(releaseText, '::error::RELEASE_TAG_PRERELEASE:', '::error::'), want: 'RELEASE_TAG_PRERELEASE' },
+        { what: 'the form and prerelease refusals swapped', yml: swapped('RELEASE_TAG_FORM', 'RELEASE_TAG_PRERELEASE'), want: 'out of order' },
+        { what: 'the unreleased and already-published refusals swapped', yml: swapped('RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED'), want: 'out of order' },
         { what: 'the latest read dropped', yml: one(releaseText, `npm view "${packageName}" version`, `npm view "${packageName}" dist-tags`), want: "below the registry's latest is not refused" },
         { what: 'the served read under another name', yml: one(releaseText, `npm view "${packageName}@$version" version`, 'npm view "other@$version" version'), want: "under the package's name" },
         { what: 'the tag input fed from the version', yml: one(releaseText, 'INPUT_TAG: ${{ inputs.tag }}', 'INPUT_TAG: ${{ inputs.version }}'), want: 'does not set INPUT_TAG' },

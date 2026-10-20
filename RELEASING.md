@@ -492,6 +492,7 @@ fails `plan`, so nothing after it starts:
 | --- | --- |
 | `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
 | `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
+| `RELEASE_TAG_PRERELEASE` | the tag carries a prerelease (`vX.Y.Z-<prerelease>`): this workflow publishes under `latest` only (*Below latest*) |
 | `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
 | `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `rig-c` |
 | `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `rig-c` (a prerelease is below its release) |
@@ -522,10 +523,21 @@ the "latest" tag*, read in the publish command of npm 12.2.0, the version
 `--tag`. So once a later version is cut, the dispatch refuses the older tag by
 name, `RELEASE_TAG_BELOW_LATEST`, naming the tag and the `latest` served,
 before anything is checked out or published; it is never attempted silently.
-Such a version goes out, if at all, under a dist-tag, which is a follow-up and
-not in this workflow. The comparison is semver order computed in `node` (a
-prerelease below its release), not `sort -V`, which sorts `1.0.0-rc.1` after
-`1.0.0`.
+Such a version goes out, if at all, under a dist-tag, which this workflow has
+no path for. The comparison is semver order computed in `node` (a prerelease
+below its release), not `sort -V`, which sorts `1.0.0-rc.1` after `1.0.0`.
+
+A prerelease tag is refused outright, `RELEASE_TAG_PRERELEASE`, right after the
+form check, rather than published under a dist-tag. The form check still admits
+the `vX.Y.Z-<prerelease>` spelling so that this refusal can name the tag. Without
+it, a prerelease above the registry's `latest` would pass every other refusal
+and be published under `latest`, because the publish steps pass no `--tag`. The
+push path has never needed one: release-please here runs `release-type: node`
+with no prerelease configuration, none of this repository's tags is a
+prerelease, and the registry carries the one dist-tag `latest`. So there is no
+dist-tag variant of this dispatch. If release-please is ever configured to cut
+prereleases, the card that does so adds the `--tag` path to the publish steps
+and removes this refusal, together.
 
 ### The registry side (owner, npmjs.com)
 

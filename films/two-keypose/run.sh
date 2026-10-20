@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # 0. install the compiler
-bun add spine-rigc@0.9.0
+bun add rig-c@2.64.3
 
 # 0b. ADAPTED for the repository (issue #342). In the scratchpad film one's four
 #     shared inputs had simply been copied in beside this film's own; here they
@@ -82,6 +82,11 @@ rm -f vote/votes.jsonl   # the ledger refuses a repeat by design (V06); start cl
 # 9. crop back to the plate, downsample the 2x supersample, lay out the five
 #    shots, draw the type, dissolve the joins, encode, verify  ->  the GIF
 bun gif/assemble_gif.ts
+
+# 9b. the same film at twice the size, for high-DPI pages  ->  rigc-keypose@2x.gif
+#     (the supersample is not downsampled at all; type, panels and pointer are
+#     drawn at 2x from the same layout)
+bun gif/assemble_gif.ts --scale 2
 
 # optional: the same winner in the official Spine Web Player — the interop proof
 bunx rigc preview --candidate build-cheer-b --animation cheer --out preview.html

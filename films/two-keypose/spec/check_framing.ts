@@ -20,7 +20,7 @@
  * outside both of them, at times no pose contains.
  */
 import { fileURLToPath } from 'node:url';
-import { loadPosable, sampleAnimation, unionBounds, FRAMING_FPS } from 'spine-rigc/src/render';
+import { loadPosable, sampleAnimation, unionBounds, FRAMING_FPS } from 'rig-c/render';
 import { PLATE_W, PLATE_H } from '../art/layout';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));

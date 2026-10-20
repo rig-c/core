@@ -1,8 +1,10 @@
 # Film two — the key-pose loop
 
 The film: [`assets/rigc-keypose.gif`](../../assets/rigc-keypose.gif), 234 frames,
-600x405, 5 cs per frame (= 20 fps, 11.70 s), 3.14 MiB. It is the one in the README's
-*See what you built, and let someone choose* section.
+600x405, 5 cs per frame (= 20 fps, 11.70 s), 3.62 MiB. It is the one in the README's
+*See what you built, and let someone choose* section. Beside it,
+[`assets/rigc-keypose@2x.gif`](../../assets/rigc-keypose@2x.gif) is the same film at twice
+the size for high-DPI pages: 234 frames, 1200x810, 5 cs per frame, 8.98 MiB.
 
 **The whole authoring loop on one character.** Two key poses are the given conditions;
 `rigc pose` reads back where every part sits in each picture; two candidate
@@ -34,6 +36,14 @@ shots: pictures 30 + instrument 32 + candidates 72 + choice 32 + winner 49 = 215
 + 4x3 shot dissolves + 7 loop dissolve = 234 frames (11.70s)
 ```
 
+The 2x file is the same shot list cut a second time, by `bun gif/assemble_gif.ts --scale 2`
+(step 9b): every layout number stays in the 600 px picture's pixels and only the drawing
+— resizes, type sizes, positions, strokes, borders, the pointer — is multiplied, so the
+plate is cropped from the supersample and not resized at all. The one part of the 2x
+picture that is enlarged rather than sampled is shot 4's ballot strip: the page is
+photographed at a device scale of 2 and the film sets it at 0.7 of that, so at 2x it is
+that photograph at 1.4.
+
 ## The honesty stance
 
 - **Everything on screen is compiled output or a photograph of a real page.** The figure
@@ -42,9 +52,13 @@ shots: pictures 30 + instrument 32 + candidates 72 + choice 32 + winner 49 = 215
 - **Every number on screen was printed first by a tool.** Shot 2's report is read out of
   `pose/poseB.log`; shot 4's winner line is read out of the `rigc vote --record` run in
   `vote/record.log`. Nothing is retyped from either.
-  Shot 2 was made with `spine-rigc@0.9.0`, the version `run.sh` and `package.json` pin, and
-  its pose log is that version's output — so it prints 0.9.0's report, not what `rigc pose`
-  prints today (whose `search` line, for one, has since been reworded).
+  Shot 2 was made with `spine-rigc@0.9.0`, and its pose log was that version's output.
+  The re-cut ([#1503](https://github.com/rig-c/core/issues/1503)) runs `rig-c@2.64.3`, the
+  version `run.sh` and `package.json` now pin, so shot 2 quotes 2.64.3's report — including
+  its reworded `search` line, which at 11pt ran past the panel and off the frame. That
+  line alone is set at 9.5pt, the film's other type size; its bytes are the log's. The
+  tally under it is the run's own count and it moved with the version: `8 placed · 6
+  ambiguous` on 2.64.3, where the 0.9.0 film read `12 placed · 2 ambiguous`.
 - **The vote is a real vote.** `vote/drive.mjs` clicks the page's own controls and takes
   the JSON the page hands a person afterwards; `rigc vote --record` then checks that JSON
   against the ballot's embedded manifest, so a forged result is refused by name. `V00`
@@ -75,8 +89,14 @@ playwright-core reachable, a network for the ballot's Spine Web Player, and the
 Andale-Mono font. Step 0b takes film one's four shared inputs from `../one-assembly`, so
 that directory has to be present — it is, in this repository. Everything a run produces
 is covered by the repository `.gitignore` (see its `films/two-keypose` block). The
-finished GIF lands here as `rigc-keypose.gif`; the one that ships is
-`assets/rigc-keypose.gif`, and this README's numbers are that file's.
+finished GIFs land here as `rigc-keypose.gif` and `rigc-keypose@2x.gif`; the ones that
+ship are `assets/rigc-keypose.gif` and `assets/rigc-keypose@2x.gif`, and this README's
+numbers are those files'.
+
+Step 3's `spec/check_framing.ts` and `spec/check_face_clear.ts` import `rig-c/render`,
+which links `@esotericsoftware/spine-core`. The published package does not depend on it,
+so the import resolves it from this repository's own install: run `bun install` at the
+repository root before `./run.sh`.
 
 **playwright-core** is not a dependency of this repository. Either
 `bun add playwright-core` in this directory, or point `PLAYWRIGHT_CORE` at an existing
@@ -87,7 +107,8 @@ ballot step needs a local copy of the official Spine Web Player named by
 
 ## Preserved verbatim, and adapted
 
-Preserved byte for byte: `spec/poses.ts`, `package.json`, `tsconfig.json`. Every script
+Preserved byte for byte: `spec/poses.ts`, `tsconfig.json` — and `package.json` was too,
+until the re-cut in the last row below. Every script
 in this film already addressed its files *relatively*, through
 `new URL('…', import.meta.url)`, so **no path inside any of them was ever re-aimed.**
 
@@ -98,6 +119,7 @@ Adapted:
 | `run.sh` | gained a step `0b` that copies film one's `art/layout.ts` and `art/parts/`, and its `spec/skeleton.ts` and `spec/rigby.rig.json`, from `../one-assembly` | In the scratchpad those four had simply been copied in beside this film's own files. Taking them from film one keeps the art referenced rather than duplicated into `films/`. Two of the four are film one's steps 1–2 *output*, so `0b` runs those two steps to make them; neither needs film one's `bun add`. Nothing else in `run.sh` changed — the version pin, the nine step comments and their arguments are as run. |
 | `vote/drive.mjs` | its two absolute paths are now resolved | As run it imported playwright-core by absolute path out of another project's `node_modules`, and named a Spine Web Player copy by absolute path in the session scratchpad. Neither survives being moved. Both now come from an environment variable if one is set, else node's own resolution; the file's own header note about the offline fallback was updated to point at the variable instead of the old location. Everything else in it — every measurement, every screenshot, every assertion — is unchanged. |
 | `spec/make_specs.ts`, `spec/tune_poseb.ts`, `spec/check_framing.ts`, `spec/check_face_clear.ts`, `spec/check_pose_reading.ts`, `spec/check_candidates_differ.ts`, `gif/assemble_gif.ts`, and `vote/drive.mjs` a second time | each resolves its own directory with `fileURLToPath(new URL('…', import.meta.url))` where it used to read `new URL('…', import.meta.url).pathname` | `URL.pathname` is percent-encoded. Under a checkout whose path holds a space or a non-ASCII character these scripts created a sibling directory literally named `My%20Rigs`, wrote into it, and then failed with `ENOENT` on a directory that exists — so the film could not be re-run from such a checkout at all ([#558](https://github.com/rig-c/core/issues/558)). The URL each script builds is untouched; only its conversion to a path is. On an ASCII path the two spellings return the same string, trailing slash included, so no value any script computes moves and no output changes. `vote/drive.mjs` is the one file here `run.sh` runs under **node** rather than bun, which is why the portable spelling and not bun's `import.meta.dir` is the one used throughout. |
+| `run.sh`, `package.json`, `gif/assemble_gif.ts`, `spec/check_framing.ts`, `spec/check_face_clear.ts` | step 0 installs `rig-c@2.64.3` where it installed `spine-rigc@0.9.0`, and step 9b cuts the 2x file; `TAGLINE_NAME`/`TAGLINE` read `rig-c`; the assembler takes `--scale` and fits an over-long shot 2 line; the two checks import `rig-c/render` where they imported `spine-rigc/src/render` | the band named the package by the name it first shipped under ([#1503](https://github.com/rig-c/core/issues/1503)). `bunx rigc` is unchanged: `rig-c` ships the same `rigc` bin |
 
 ## What re-ran, and what did not
 
@@ -134,3 +156,17 @@ a label*), not a defect, but it does mean this shot cannot be reproduced byte fo
 
 **Not re-verified.** Nothing. Every step ran, including the optional `rigc preview` at
 the end.
+
+**The re-cut on `rig-c@2.64.3`.** All nine steps and step 9b ran again from this
+directory, with `PLAYWRIGHT_CORE` pointed at an existing install. All four checks came
+back green: every quad inside the plate in all three builds and one framing box shared
+by them; the paw never reaches the eyes; given pose A 0 of 1,174,176 pixels apart
+between the candidates and pose B 1; the candidates diverge 23.45 % at the peak against
+a 12.39 % mean frame step. The ballot ran for real (`PRESSED A=false B=true tie=false`,
+no errors) and `rigc vote --record` passed `V00`–`V06`. Against the `0.9.0` film, none of
+the 234 frames is pixel-identical above the band — the figure renders slightly
+differently on the current package, worst frame 176 at 21,865 of 208,800 pixels — and
+shot 2's text changed as described above. The assembler's own verify: fidelity mean
+0.43 %, worst 0.53 % (1x) and mean 0.40 %, worst 0.50 % (2x); seam 1.82 % (1x) and
+1.81 % (2x) last→first against a 4.06 % / 4.07 % median moving step; worst join hop
+8.18 % / 8.22 %.

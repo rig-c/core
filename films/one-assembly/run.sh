@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # 0. install the compiler
-bun add spine-rigc@0.8.0
+bun add rig-c@2.64.3
 
 # 1. draw the twelve loose part PNGs + the stage plate  ->  art/parts/
 bun art/make_parts.ts
@@ -33,6 +33,10 @@ bunx rigc render --candidate build --fps 20 --max 1296 --out render
 # 5. crop back to the plate, downsample the 2x supersample, draw the type,
 #    splice the shots, encode  ->  rigc-demo.gif
 bun gif/assemble_gif.ts
+
+# 5b. the same frames at twice the size, for high-DPI pages  ->  rigc-demo@2x.gif
+#     (the supersample is not downsampled at all; the type is drawn at 2x)
+bun gif/assemble_gif.ts --scale 2
 
 # optional: the same build in the official Spine Web Player
 bunx rigc preview --candidate build --animation idle --out preview.html

@@ -18,17 +18,34 @@
  * move the whole silhouette sideways and keep its width; a yaw with parallax
  * moves the far lock one way and the back hair the other, so the outline gets
  * WIDER at the peak. That is measurable in the delivered file.
+ *
+ * `--scale N` measures the file `assemble_gif.ts --scale N` wrote, on its own
+ * pixel grid: the pane is N times `layout.ts`'s, and every figure below that is
+ * "in final pixels" is in that file's pixels.
  */
 import { mkdirSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { $ } from 'bun';
-import { PANE_W, STAGE_H } from './layout';
+import { PANE_W as PANE_W_1, STAGE_H as STAGE_H_1 } from './layout';
+
+const SCALE = (() => {
+  const at = process.argv.indexOf('--scale');
+  if (at < 0) return 1;
+  const raw = process.argv[at + 1];
+  const v = Number(raw);
+  if (!Number.isInteger(v) || v < 1) throw new Error(`--scale takes a whole number of at least 1, got "${raw}"`);
+  return v;
+})();
+/** The pane, on the measured file's own grid. */
+const PANE_W = PANE_W_1 * SCALE;
+const STAGE_H = STAGE_H_1 * SCALE;
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const GIF = `${ROOT}rigc-scene.gif`;
+const GIF = `${ROOT}${SCALE === 1 ? 'rigc-scene.gif' : `rigc-scene@${SCALE}x.gif`}`;
 const WORK = `${ROOT}gif/verify/`;
 
-if (!existsSync(GIF)) throw new Error(`no ${GIF} — run gif/assemble_gif.ts first`);
+if (!existsSync(GIF)) throw new Error(`no ${GIF} — run gif/assemble_gif.ts${SCALE === 1 ? '' : ` --scale ${SCALE}`} first`);
+console.log(`measuring ${GIF.split('/').pop()}, pane ${PANE_W}x${STAGE_H}\n`);
 rmSync(WORK, { recursive: true, force: true });
 mkdirSync(WORK, { recursive: true });
 

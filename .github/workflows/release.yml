@@ -88,10 +88,17 @@ on:
 permissions: {}
 
 concurrency:
-  # The event name is in the group so a dispatched confirmation does not queue
-  # behind a release run for the same ref, and two pushes still serialise the
-  # way they always have.
-  group: release-${{ github.ref }}-${{ github.event_name }}
+  # One group for every run that may publish, and one for a confirmation
+  # (issue #1510). A push cut and a `tag` dispatch both reach `publish`, so they
+  # share `release-publish`: a `tag` dispatch queues behind a cut in flight and
+  # a cut behind a republish, and two pushes still serialise. A `version`
+  # dispatch publishes nothing and runs in `release-confirm`, so it never waits
+  # behind a release. The ref is not in the group, because the registry is one
+  # per package rather than per ref and a dispatch may name any ref. Keyed on
+  # the event name alone, as it was, a republish and a cut never queued behind
+  # each other while a confirmation queued behind a republish. `CUR132`
+  # evaluates this expression over a push, a `tag` and a `version` dispatch.
+  group: release-${{ (github.event_name == 'workflow_dispatch' && inputs.tag == '') && 'confirm' || 'publish' }}
   cancel-in-progress: false
 
 jobs:

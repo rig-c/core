@@ -440,9 +440,12 @@ workflow `ci.yml` calls on every change, so the two cannot drift; `CUR120`) →
 `publish` (check out the tag, fetch the corpus, download the
 `selftest-merged-tally` artifact, `npm publish` with `RIGC_PREPUBLISH_TALLY` set
 on that step alone, then the alias's publish from the tarball
-`scripts/alias_tarball.ts` packs) → the confirmation of both names. `CUR119` holds that order, the release
-condition on `gate` and `publish`, the OIDC token on `publish` alone, and a
-`workflow_dispatch` reaching only `confirm`. The publish job fetches the corpus
+`scripts/alias_tarball.ts` packs) → the confirmation of both names. `CUR119` holds that order, the one
+condition `gate` and `publish` run under — `plan`'s resolved `publish` output,
+whichever event resolved it — the OIDC token on `publish` alone, release-please
+held to a push, and what each dispatch reaches: a `version` dispatch reaches
+`confirm` only, and a `tag` dispatch runs `plan`'s resolve step, then `gate`,
+then `publish` (*Republishing a cut whose publish failed*, below). The publish job fetches the corpus
 even when the tally is accepted, because the fallback has to read the tree the
 gate read. Without `examples/` the core suite's corpus controls are red rather
 than HOLEs — a construct no row reaches is never a pass — so a publish gate with
@@ -451,9 +454,78 @@ commit in, and v1.6.0 was tagged and then refused by it on exactly those
 controls (issue #1003). `CUR112` holds the two workflows to that order. ⚠️ The
 tag and the GitHub release exist before `gate` runs, as they did before the
 publish's own selftest: a red gate leaves a tagged, released, unpublished
-version — the shape v1.6.0 was left in.
+version — the shape v1.6.0 was left in, and the one a dispatch now repairs.
 There is no build step to guard: the package ships its TypeScript sources and
 bun runs them.
+
+### Republishing a cut whose publish failed
+
+a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
+
+It happens when the run that merged the release pull request gets as far as
+the tag and the GitHub release and then stops before the publish lands: a red
+`gate` (v1.6.0, above), or — on another package of the toolchain — a transient
+signing-service `502` from `npm publish --provenance` (issue
+[#1504](https://github.com/rig-c/core/issues/1504)). Re-running that run cannot
+recover it: release-please no longer reports `release_created` for a tag it has
+already cut, so `gate` and `publish` are skipped and the registry keeps serving
+the previous version. A publish by hand would lose provenance, and the trusted
+publisher of every name is pinned to `release.yml`.
+
+The tag is published by a dispatch of the same workflow:
+
+```sh
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+`plan` then skips release-please — it is a step held to a push, so a dispatch
+never cuts a tag or a release — and its *Resolve the tag to publish* step checks
+the tag. Everything after it is the push path's own: `gate` (the six shards and
+their merge over the tag), then `publish` (checkout of the tag, the corpus, the
+merged tally, the publish under all three names, the registry confirmation),
+under the same condition — `plan`'s `publish` output — from the same file. There
+is no path from the dispatch to `publish` that does not pass `gate`. The resolve
+step refuses, each as one `::error::` line naming its rule, and the refusal
+fails `plan`, so nothing after it starts:
+
+| refusal | when |
+| --- | --- |
+| `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
+| `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
+| `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
+| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `rig-c` |
+| `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `rig-c` (a prerelease is below its release) |
+
+**Two inputs, one per dispatch.** `tag` publishes a cut tag; `version` re-runs
+a confirmation (*Whether the tarball runs*). Both are optional, because GitHub
+refuses a dispatch that omits a required input; an omitted string input reads
+as empty. The `confirm` job runs only on a dispatch with `version` and no `tag`,
+and `plan` does not run on one; any other dispatch runs `plan`, where the
+resolve step resolves a `tag` alone and refuses the rest. `CUR131` holds that
+shape, each refusal's name and order, and this section.
+
+**Half-published.** The aliases `spine-rigc` and `@rig-c/core` are published
+after `rig-c`, in the same job, so a failure between those steps leaves the
+version up under the package name and missing under one alias or both.
+`RELEASE_ALREADY_PUBLISHED` reads the package name only, so such a version is
+refused rather than published again: a second `npm publish` of the package's
+version is refused by the registry anyway (*You cannot publish over the
+previously published versions*), and the alias steps run only after it. The
+missing alias version is published by hand from the tag with the tarball
+commands in *If the automation is unavailable* (without provenance), or left
+for the next cut, which publishes every name.
+
+**Below latest.** `npm publish` refuses to put `latest` on a version lower than
+the highest one published unless a `--tag` is given — *Cannot implicitly apply
+the "latest" tag*, read in the publish command of npm 12.2.0, the version
+`npm@latest` installs at this writing — and the publish steps here pass no
+`--tag`. So once a later version is cut, the dispatch refuses the older tag by
+name, `RELEASE_TAG_BELOW_LATEST`, naming the tag and the `latest` served,
+before anything is checked out or published; it is never attempted silently.
+Such a version goes out, if at all, under a dist-tag, which is a follow-up and
+not in this workflow. The comparison is semver order computed in `node` (a
+prerelease below its release), not `sort -V`, which sorts `1.0.0-rc.1` after
+`1.0.0`.
 
 ### The registry side (owner, npmjs.com)
 
@@ -1317,11 +1389,14 @@ exit 3 now, and the line says it was the tarball that never came.
 | `3` | **the registry did not serve the version inside `--wait`** — either its packument never answered, or it answered and the tarball behind it never did (v1.1.0's case; the line says which). The confirmation was NOT taken, and nothing about the package is known | re-run the confirmation |
 
 **Re-running a confirmation costs nothing and publishes nothing.** Actions →
-**release** → **Run workflow**, with the version (no leading `v`). That dispatch
-runs the `confirm` job only: the `plan`, `gate` and `publish` jobs carrying
-release-please, the tag, the GitHub release, the sharded gate and `npm publish`
-are each held to `github.event_name == 'push'` in their `if:`, so a dispatch
-skips all three (`CUR119`). By hand, from a checkout of the tag:
+**release** → **Run workflow**, with the version (no leading `v`) and the tag
+left empty, or `gh workflow run release.yml -f version=X.Y.Z`. A `version`
+dispatch runs the `confirm` job only: `plan`'s `if:` does not admit a dispatch
+with a version and no tag, and `gate` and `publish` need `plan`, so all three
+are skipped; release-please, which makes the tag and the release, is a step
+held to `github.event_name == 'push'` besides (`CUR119`). A `tag` dispatch is
+the other input and the other path (*Republishing a cut whose publish
+failed*). By hand, from a checkout of the tag:
 
 ```sh
 bun run smoke -- --source registry --version <version> --case clean

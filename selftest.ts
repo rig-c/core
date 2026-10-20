@@ -79112,7 +79112,7 @@ function runCurrencySuite(): number {
 
     // --- CUR31: the workflow and the document, against those two runs --------
     if (BUN_YAML === null) {
-      reportYamlHole('CUR31_THE_RELEASE_WORKFLOW_CALLS_THE_CONFIRMATION_AS_ITS_DOCUMENT_STATES_AND_A_DISPATCH_REACHES_NOTHING_ELSE');
+      reportYamlHole('CUR31_THE_RELEASE_WORKFLOW_CALLS_THE_CONFIRMATION_AS_ITS_DOCUMENT_STATES_AND_A_DISPATCH_CUTS_NOTHING');
     } else {
       const help = smokeWith(null, ['--help']);
       const confirmationFaults = (yml: string, doc: string, helpText: string): string[] => {
@@ -79126,7 +79126,6 @@ function runCurrencySuite(): number {
         const jobs = Object.entries(parsed.jobs ?? {});
         if (jobs.length === 0) return ['release.yml declares no jobs at all, so every clause below would be reading nothing'];
         const bodyOf = (job: WfJob): string => (job.steps ?? []).map((step) => step.run ?? '').join('\n');
-        const usesOf = (job: WfJob): string => (job.steps ?? []).map((step) => step.uses ?? '').join('\n');
 
         // 1. A dispatch exists, and it takes the version it is asked to confirm.
         const dispatch = parsed.on?.workflow_dispatch;
@@ -79135,25 +79134,41 @@ function runCurrencySuite(): number {
           faults.push('release.yml declares no `workflow_dispatch`, so a confirmation whose wait ran out can only be re-taken by publishing again');
         } else if (input === undefined) {
           faults.push('`workflow_dispatch` declares no `version` input, so a re-run has nothing to say which cut it is confirming');
-        } else if (input.required !== true) {
-          faults.push('the `version` input is not required, so a dispatch with that field left empty would confirm whatever the checked-out package.json last said');
+        } else if (input.required !== true && !jobs.some(([, job]) => /\binputs\.version\s*!=\s*''/.test(job.if ?? '') && /bun run smoke/.test(bodyOf(job)))) {
+          // Optional since issue #1504 (a dispatch gives `tag` or `version`, and GitHub refuses one that omits a required
+          // input), so the job that confirms is what has to refuse an empty version instead.
+          faults.push('the `version` input is not required and no confirming job runs under `inputs.version != \'\'`, so a dispatch with that field left empty would confirm whatever the checked-out package.json last said');
         }
 
-        // 2. What a dispatch can reach. The guard is structural — a job that
-        //    publishes has to be held to the push event — rather than a list of
-        //    step names, because a step added tomorrow is exactly what a name
-        //    list cannot see.
+        // 2. What a dispatch can reach. The guard is structural — release-please
+        //    has to be held to the push event, and the job that publishes to
+        //    the push or to the tag `plan` resolved (issue #1504: a `tag`
+        //    dispatch publishes through the same job, CUR131) — rather than a
+        //    list of step names, because a step added tomorrow is exactly what
+        //    a name list cannot see. "Held" is a top-level `&&` term: a push
+        //    term joined by `||` holds nothing.
+        const heldBy = (condition: string | undefined, term: RegExp): boolean => {
+          const bare = (condition ?? '').replace(/^\s*\$\{\{\s*|\s*\}\}\s*$/g, '');
+          return !bare.includes('||') && bare.split('&&').some((one) => term.test(one.trim()));
+        };
+        const push = /^github\.event_name\s*==\s*'push'$/;
+        const resolvedTag = /^needs\.[A-Za-z_][\w-]*\.outputs\.publish\s*==\s*'true'$/;
         const publishers = jobs.filter(([, job]) => /npm publish/.test(bodyOf(job)));
         if (publishers.length !== 1) {
           faults.push(`${publishers.length} job(s) run \`npm publish\` where exactly one does today — this clause is reading something other than the publish`);
         }
         for (const [name, job] of jobs) {
-          const cuts = /npm publish/.test(bodyOf(job)) || /release-please/.test(usesOf(job));
-          const heldToAPush = job.if !== undefined && /github\.event_name\s*==\s*'push'/.test(job.if);
-          if (cuts && !heldToAPush) {
+          if (/npm publish/.test(bodyOf(job)) && !heldBy(job.if, push) && !heldBy(job.if, resolvedTag)) {
             faults.push(
-              `job "${name}" publishes or cuts a release and its \`if\` is ${JSON.stringify(job.if ?? null)}, which does not hold it to a push — a workflow_dispatch would reach it`,
+              `job "${name}" publishes and its \`if\` is ${JSON.stringify(job.if ?? null)}, which holds it neither to a push nor to the tag a plan job resolved — a workflow_dispatch would reach it`,
             );
+          }
+          for (const step of job.steps ?? []) {
+            if (/release-please/.test(step.uses ?? '') && !heldBy(step.if, push) && !heldBy(job.if, push)) {
+              faults.push(
+                `job "${name}" cuts a release under the step's \`if\` ${JSON.stringify(step.if ?? null)} and the job's ${JSON.stringify(job.if ?? null)}, neither of which holds it to a push — a workflow_dispatch would reach it`,
+              );
+            }
           }
         }
 
@@ -79227,7 +79242,9 @@ function runCurrencySuite(): number {
       /** An edit that has to change the text it is given — a plant that planted nothing is a fault of its own. */
       const plantInto = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
       const plants: Array<{ what: string; yml: [string, string] | null; doc: [string, string] | null; quiet?: boolean }> = [
-        { what: 'the publishing job stops being held to a push', yml: ["    if: ${{ github.event_name == 'push' }}\n", ''], doc: null },
+        { what: 'release-please stops being held to a push', yml: ["        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'], doc: null },
+        { what: 'the publishing job stops being held to the resolved tag', yml: ["    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' }}\n", '    needs: [plan, gate]\n'], doc: null },
+        { what: 'the confirmation stops refusing an empty version', yml: [" && inputs.version != '' && inputs.tag == '' }}", " && inputs.tag == '' }}"], doc: null },
         { what: 'the workflow stops taking a dispatch', yml: ['  workflow_dispatch:\n', '  workflow_call:\n'], doc: null },
         { what: 'the re-run path waits three times as long as the cut did', yml: ['--version "$VERSION" --wait 15', '--version "$VERSION" --wait 45'], doc: null },
         { what: 'the cut stops passing a wait at all', yml: ['--version "$version" --wait 15 --case clean', '--version "$version" --case clean'], doc: null },
@@ -79257,13 +79274,13 @@ function runCurrencySuite(): number {
       }
       const confirmationHeld = standing.length === 0 && plantProbes.length === 0;
       say(
-        'CUR31_THE_RELEASE_WORKFLOW_CALLS_THE_CONFIRMATION_AS_ITS_DOCUMENT_STATES_AND_A_DISPATCH_REACHES_NOTHING_ELSE',
+        'CUR31_THE_RELEASE_WORKFLOW_CALLS_THE_CONFIRMATION_AS_ITS_DOCUMENT_STATES_AND_A_DISPATCH_CUTS_NOTHING',
         confirmationHeld,
         probeDetail(
           confirmationHeld,
           [...standing, ...plantProbes],
-          `release.yml's ${jobCount} job(s) read as a workflow whose publish is held to a push and whose dispatch ` +
-            'takes a required `version`, with every `bun run smoke` call passing the same wait under a timeout that ' +
+          `release.yml's ${jobCount} job(s) read as a workflow whose release-please is held to a push, whose publish is held to the tag ` +
+            'a plan job resolved, and whose confirming job refuses an empty `version`, with every `bun run smoke` call passing the same wait under a timeout that ' +
             'covers it, and RELEASING.md carrying that wait, a row for each exit code `--help` lists, and the ' +
             `by-hand command the run above printed — over ${plants.length} plant(s): ${plantCases.join('; ')}`,
         ),
@@ -79495,16 +79512,19 @@ function runCurrencySuite(): number {
   // six shards and a merge. So release.yml now calls the same shards and merge
   // over the tag (`gate`) and `prepublishOnly` reads the merged tally they wrote
   // instead of running them again. That trade is only sound in one order, and
-  // CUR119 holds it: release-please first, the gate on its tag under the
-  // release condition, the publish after the gate with the corpus fetched and
-  // the tally downloaded first, `RIGC_PREPUBLISH_TALLY` set on the publish step
-  // and nowhere else, the OIDC token on the publish job alone, and a dispatch
-  // reaching only the confirmation. CUR120 holds the other half of the premise:
+  // CUR119 holds it: release-please first, the gate on the tag `plan` resolved
+  // under the one condition `plan` resolved, the publish after the gate with
+  // the corpus fetched and the tally downloaded first, `RIGC_PREPUBLISH_TALLY`
+  // set on the publish step and nowhere else, the OIDC token on the publish job
+  // alone, and a dispatch reaching the confirmation or — through `plan`'s
+  // resolve step — the same gate and publish, never a job of its own (issue
+  // #1504; CUR131 holds the dispatch's refusals). CUR120 holds the other half of the premise:
   // the gate release.yml reads is the gate ci.yml reads — one reusable workflow,
   // called by both, and no second definition of the shards anywhere in the tree.
   {
     interface GraphStep {
       name?: string;
+      id?: string;
       run?: string;
       uses?: string;
       if?: string;
@@ -79544,7 +79564,14 @@ function runCurrencySuite(): number {
     };
     const needsOf = (job: GraphJob): string[] => (job.needs === undefined ? [] : Array.isArray(job.needs) ? job.needs : [job.needs]);
     const runLines = (step: GraphStep): string[] => (step.run ?? '').split('\n').map((line) => line.trim());
-    const heldToPush = (job: GraphJob): boolean => /github\.event_name\s*==\s*'push'/.test(job.if ?? '');
+    /** The terms of a condition joined by `op` at its top level, `${{ }}` and whitespace normalised; null when it also joins by the other operator. */
+    const termsOf = (condition: string | undefined, op: '&&' | '||'): string[] | null => {
+      const bare = (condition ?? '').trim().replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '').replace(/\s+/g, ' ');
+      if (bare.includes(op === '&&' ? '||' : '&&')) return null;
+      return bare.split(op).map((term) => term.trim());
+    };
+    // Since issue #1504 a push term joined by `||` holds nothing — `plan` runs under one — so "held" means a top-level `&&` term.
+    const heldToPush = (job: { if?: string }): boolean => (termsOf(job.if, '&&') ?? []).includes("github.event_name == 'push'");
 
     // --- CUR119 ----------------------------------------------------------------
     const graphFaults = (releaseYml: string, otherYml: Record<string, string>): string[] => {
@@ -79568,20 +79595,35 @@ function runCurrencySuite(): number {
       const [planName, planJob] = plan;
       const [gateName, gateJob] = gate;
       const [publishName, publishJob] = publish;
-      const created = new RegExp(`needs\\.${planName}\\.outputs\\.release_created\\s*==\\s*'true'`);
+      const resolved = `\${{ needs.${planName}.outputs.publish == 'true' }}`;
+      const resolvedTag = `\${{ needs.${planName}.outputs.tag }}`;
 
-      // The order: plan → gate → publish, each held to the push and to the release.
+      // The order: plan → gate → publish, the last two held to the one condition plan resolved (issue #1504).
       if (!needsOf(gateJob).includes(planName)) faults.push(`release.yml: job "${gateName}" does not need "${planName}", so the gate can start before a tag exists`);
       if (!needsOf(publishJob).includes(gateName)) faults.push(`release.yml: job "${publishName}" does not need "${gateName}", so it can publish over a gate that has not run or went red`);
       if (!needsOf(publishJob).includes(planName)) faults.push(`release.yml: job "${publishName}" does not need "${planName}", so it cannot read the tag it publishes`);
       for (const [name, job] of [gate, publish]) {
-        if (!heldToPush(job) || !created.test(job.if ?? '')) {
-          faults.push(`release.yml: job "${name}" runs under \`if: ${job.if ?? '(none)'}\`, which does not hold it to a push that created a release (${planName}'s release_created)`);
+        if ((job.if ?? '').replace(/\s+/g, ' ').trim() !== resolved) {
+          faults.push(`release.yml: job "${name}" runs under \`if: ${job.if ?? '(none)'}\`, where it runs under ${resolved} alone — the tag ${planName} resolved, on a push or a dispatch`);
         }
       }
-      if (!heldToPush(planJob)) faults.push(`release.yml: job "${planName}" runs release-please under \`if: ${planJob.if ?? '(none)'}\`, which does not hold it to a push`);
-      if (!new RegExp(`needs\\.${planName}\\.outputs\\.tag_name`).test(gateJob.with?.ref ?? '')) {
-        faults.push(`release.yml: job "${gateName}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateJob.with?.ref ?? null)}, not the tag "${planName}" made, so the gate reads another tree than the publish`);
+      const planSteps = planJob.steps ?? [];
+      const please = planSteps.findIndex((step) => /release-please/.test(step.uses ?? ''));
+      if (!heldToPush(planSteps[please]) && !heldToPush(planJob)) {
+        faults.push(`release.yml: the release-please step of job "${planName}" runs under \`if: ${planSteps[please].if ?? '(none)'}\` in a job under \`if: ${planJob.if ?? '(none)'}\`, which does not hold it to a push, so a dispatch could cut a tag or a release`);
+      }
+      const target = planSteps.findIndex((step) => step.id === 'target');
+      if (target === -1) faults.push(`release.yml: job "${planName}" has no step with id \`target\`, so nothing resolves what ${gateName} and ${publishName} read`);
+      else {
+        if (target !== please + 1) faults.push(`release.yml: the resolve step is step ${target + 1} of job "${planName}", where it follows release-please (step ${please + 1}) directly`);
+        if (planSteps[target].if !== undefined) faults.push(`release.yml: the resolve step runs under \`if: ${planSteps[target].if}\`, so a run can skip it and leave ${gateName} and ${publishName} nothing to read`);
+      }
+      for (const output of ['publish', 'tag']) {
+        const want = `\${{ steps.target.outputs.${output} }}`;
+        if (planJob.outputs?.[output] !== want) faults.push(`release.yml: job "${planName}" exports \`${output}\` as ${JSON.stringify(planJob.outputs?.[output] ?? null)}, not ${want}`);
+      }
+      if ((gateJob.with?.ref ?? '') !== resolvedTag) {
+        faults.push(`release.yml: job "${gateName}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateJob.with?.ref ?? null)}, not the tag "${planName}" resolved (${resolvedTag}), so the gate reads another tree than the publish`);
       }
 
       // The publish job's steps: the fetch and the tally before the publish, the variable on the publish alone.
@@ -79619,15 +79661,24 @@ function runCurrencySuite(): number {
       }
       if (!writesToken(publishJob.permissions)) faults.push(`release.yml: job "${publishName}" holds no \`id-token: write\`, so trusted publishing has no token to exchange`);
 
-      // A dispatch reaches the confirmation and nothing else.
+      // What a dispatch reaches (issue #1504): plan, gate and publish — keyed on
+      // the tag plan resolved, held above — and the confirmation, on a
+      // `version` alone. Any other job not held to a push is a path of its own.
       if (wf.on?.workflow_dispatch === undefined) faults.push('release.yml takes no `workflow_dispatch`, so this clause reads nothing');
-      const dispatched = jobs.filter(([, job]) => !heldToPush(job)).map(([name]) => name);
-      for (const name of dispatched) {
-        const job = wf.jobs?.[name] ?? {};
-        const confirms = /github\.event_name\s*==\s*'workflow_dispatch'/.test(job.if ?? '') && job.uses === undefined && (job.steps ?? []).every((step) => !/\bnpm publish\b/.test(step.run ?? '') && !/release-please/.test(step.uses ?? '')) && (job.steps ?? []).some((step) => runLines(step).some((line) => line.startsWith('bun run smoke')));
-        if (!confirms) faults.push(`release.yml: job "${name}" is not held to a push and is not the confirmation, so a workflow_dispatch reaches it`);
+      const versionOnly = ["github.event_name == 'workflow_dispatch'", "inputs.version != ''", "inputs.tag == ''"];
+      const confirmations: string[] = [];
+      for (const [name, job] of jobs) {
+        if (heldToPush(job) || name === planName || name === gateName || name === publishName) continue;
+        const terms = termsOf(job.if, '&&');
+        const confirms =
+          terms !== null && terms.length === versionOnly.length && versionOnly.every((term) => terms.includes(term)) &&
+          job.uses === undefined &&
+          (job.steps ?? []).every((step) => !/\bnpm publish\b/.test(step.run ?? '') && !/release-please/.test(step.uses ?? '')) &&
+          (job.steps ?? []).some((step) => runLines(step).some((line) => line.startsWith('bun run smoke')));
+        if (confirms) confirmations.push(name);
+        else faults.push(`release.yml: job "${name}" runs under \`if: ${job.if ?? '(none)'}\`, is not held to a push and is neither ${planName}, ${gateName}, ${publishName} nor the confirmation on a \`version\` dispatch alone, so a workflow_dispatch reaches it`);
       }
-      if (dispatched.length !== 1) faults.push(`release.yml: ${dispatched.length} job(s) run on a dispatch, where the confirmation alone does`);
+      if (confirmations.length !== 1) faults.push(`release.yml: ${confirmations.length} job(s) confirm on a \`version\` dispatch, where one does`);
       return faults;
     };
 
@@ -79714,12 +79765,15 @@ function runCurrencySuite(): number {
     };
 
     if (BUN_YAML === null) {
-      reportYamlHole('CUR119_RELEASE_YML_RUNS_PLAN_THEN_THE_SHARDED_GATE_ON_THE_TAG_THEN_A_PUBLISH_THAT_READS_ITS_TALLY_AND_A_DISPATCH_REACHES_ONLY_THE_CONFIRMATION');
+      reportYamlHole('CUR119_RELEASE_YML_RUNS_PLAN_THEN_THE_SHARDED_GATE_ON_THE_RESOLVED_TAG_THEN_A_PUBLISH_THAT_READS_ITS_TALLY_AND_A_DISPATCH_REACHES_NO_PATH_OF_ITS_OWN');
     } else {
       const check = (edited: Record<string, string>): string[] =>
         graphFaults(edited['release.yml'] ?? '', Object.fromEntries(Object.entries(edited).filter(([file]) => file !== 'release.yml')));
       const standing = check(texts);
-      const gateIf = "    if: ${{ github.event_name == 'push' && needs.plan.outputs.release_created == 'true' }}\n    permissions:\n      contents: read # check out the tag\n    uses:";
+      const gateIf = "    if: ${{ needs.plan.outputs.publish == 'true' }}\n    permissions:\n      contents: read # check out the tag\n    uses:";
+      const publishIf = "    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' }}\n";
+      /** `from` → `to` where `from` occurs exactly once, or null — a plant whose anchor is ambiguous has planted nothing it can name. */
+      const uniq = (text: string, from: string, to: string): string | null => (text.split(from).length === 2 ? text.replace(from, to) : null);
       const downloadStep = releaseText.slice(releaseText.indexOf('      - name: Download the merged tally the gate wrote\n'), releaseText.indexOf('      # `RIGC_PREPUBLISH_TALLY` is set on this step'));
       const moved = ((): string | null => {
         if (!downloadStep.startsWith('      - name: Download')) return null;
@@ -79732,9 +79786,14 @@ function runCurrencySuite(): number {
         [
           { what: 'the gate stops needing the plan', edit: once(releaseText, '    needs: plan\n', '') },
           { what: 'the publish stops needing the gate', edit: once(releaseText, '    needs: [plan, gate]\n', '    needs: [plan]\n') },
-          { what: 'the gate loses the release condition', edit: once(releaseText, gateIf, gateIf.replace(" && needs.plan.outputs.release_created == 'true'", '')) },
-          { what: 'a dispatch reaches the gate', edit: once(releaseText, gateIf, gateIf.replace("github.event_name == 'push' &&", "github.event_name == 'workflow_dispatch' ||")) },
-          { what: 'the gate is called on the default branch rather than the tag', edit: once(releaseText, '      ref: ${{ needs.plan.outputs.tag_name }}\n\n', "      ref: ''\n\n") },
+          { what: 'the gate loses the resolved condition', edit: once(releaseText, gateIf, gateIf.replace("needs.plan.outputs.publish == 'true'", "github.event_name == 'push'")) },
+          { what: 'a dispatch reaches the gate past the resolve step', edit: once(releaseText, gateIf, gateIf.replace("needs.plan.outputs.publish == 'true'", "needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'")) },
+          { what: 'the publish is keyed on release-please again', edit: uniq(releaseText, publishIf, publishIf.replace("needs.plan.outputs.publish == 'true'", "github.event_name == 'push' && needs.plan.outputs.release_created == 'true'")) },
+          { what: 'the gate is called on the default branch rather than the tag', edit: uniq(releaseText, '\n      ref: ${{ needs.plan.outputs.tag }}\n\n', "\n      ref: ''\n\n") },
+          { what: 'release-please runs on a dispatch', edit: uniq(releaseText, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n') },
+          { what: 'the resolve step is skipped on a dispatch', edit: uniq(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n") },
+          { what: 'plan exports the cut tag rather than the resolved one', edit: uniq(releaseText, '      tag: ${{ steps.target.outputs.tag }}\n', '      tag: ${{ steps.release.outputs.tag_name }}\n') },
+          { what: 'the confirmation runs on a tag dispatch too', edit: uniq(releaseText, " && inputs.version != '' && inputs.tag == '' }}", ' }}') },
           { what: 'the tally is downloaded after the publish', edit: moved },
           { what: 'the publish step stops naming the tally', edit: once(releaseText, '        env:\n          RIGC_PREPUBLISH_TALLY:', '        env:\n          RIGC_UNREAD_TALLY:') },
           { what: 'the variable is set on the whole publish job', edit: once(releaseText, '    timeout-minutes: 40\n', '    timeout-minutes: 40\n    env:\n      RIGC_PREPUBLISH_TALLY: /dev/null\n') },
@@ -79745,18 +79804,19 @@ function runCurrencySuite(): number {
       );
       const held = standing.length === 0 && probes.length === 0;
       say(
-        'CUR119_RELEASE_YML_RUNS_PLAN_THEN_THE_SHARDED_GATE_ON_THE_TAG_THEN_A_PUBLISH_THAT_READS_ITS_TALLY_AND_A_DISPATCH_REACHES_ONLY_THE_CONFIRMATION',
+        'CUR119_RELEASE_YML_RUNS_PLAN_THEN_THE_SHARDED_GATE_ON_THE_RESOLVED_TAG_THEN_A_PUBLISH_THAT_READS_ITS_TALLY_AND_A_DISPATCH_REACHES_NO_PATH_OF_ITS_OWN',
         held,
         probeDetail(
           held,
           [...standing, ...probes],
-          `release.yml's ${Object.keys((readYaml(releaseText) as GraphWorkflow).jobs ?? {}).length} job(s) read as release-please, then ${SHARDS_FILE} on its tag under ` +
-            'the release condition, then a publish that needs the gate, fetches the corpus and downloads the merged tally before ' +
+          `release.yml's ${Object.keys((readYaml(releaseText) as GraphWorkflow).jobs ?? {}).length} job(s) read as release-please held to a push and the resolve step right after it, then ${SHARDS_FILE} on the resolved tag under ` +
+            'the resolved condition, then a publish under that same condition that needs the gate, fetches the corpus and downloads the merged tally before ' +
             '`npm publish`, with RIGC_PREPUBLISH_TALLY on that step alone and `id-token: write` on that job alone, and a dispatch ' +
-            `that reaches the confirmation only — over ${cases.length} plant(s): ${cases.join('; ')}`,
+            `that reaches those three jobs or the confirmation on a \`version\` alone, no job of its own — over ${cases.length} plant(s): ${cases.join('; ')}`,
         ),
         'issue #1249: the publish reads a tally instead of running the selftest, which is sound only if the tally is the gate over ' +
-          'this tag, run before the publish and handed to it alone',
+          'this tag, run before the publish and handed to it alone; issue #1504: a dispatched tag reaches the publish only through the ' +
+          'same resolve step, the same condition and the same gate, so the dispatch path is not a second graph',
       );
     }
 
@@ -79793,6 +79853,201 @@ function runCurrencySuite(): number {
             `runs a shard or a merge of its own, and ci.yml's \`test\` reads the merge's verdict — over ${cases.length} plant(s): ${cases.join('; ')}`,
         ),
         'issue #1249: release.yml reading a gate that is not the one CI reads would be #1003 again — two environments, one name',
+      );
+    }
+
+    // --- CUR131: a cut tag is republished by dispatch through the same gate (issue #1504)
+    //
+    // 🚨 A cut whose publish failed after the tag could not be recovered by a
+    // re-run: release-please no longer reports `release_created` for a tag it
+    // has cut, so `gate` and `publish` were skipped and the registry kept the
+    // previous version, while a publish by hand loses provenance and the
+    // trusted publisher names release.yml. The repair is a `tag` dispatch whose
+    // resolve step in `plan` feeds the same `gate` and the same `publish` —
+    // CUR119 holds that it is the same graph; this holds the dispatch itself:
+    // the two optional inputs, `plan`'s `if`, release-please under a push, the
+    // resolve step right after it naming each refusal in order, the two
+    // registry reads under package.json's name, the inputs reaching the script
+    // through env alone, every reader of the tag reading the resolved one, the
+    // confirmation on a `version` alone, and RELEASING.md saying all of it.
+    // Ported from the sibling repository's control for the same repair, onto
+    // this repository's three-job graph.
+    if (BUN_YAML === null) {
+      reportYamlHole('CUR131_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_GATE_AND_PUBLISH_AND_EACH_REFUSAL_IS_NAMED');
+    } else {
+      const REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'] as const;
+      const UNPUBLISHED_CUT_LINE = 'a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch';
+      const DISPATCH = 'gh workflow run release.yml -f tag=';
+      const PLAN_TERMS = ["github.event_name == 'push'", "inputs.tag != ''", "inputs.version == ''"];
+      const CONFIRM_TERMS = ["github.event_name == 'workflow_dispatch'", "inputs.version != ''", "inputs.tag == ''"];
+      interface DispatchInput {
+        required?: boolean;
+        type?: string;
+      }
+      const sameTerms = (condition: string | undefined, op: '&&' | '||', want: readonly string[]): boolean => {
+        const terms = termsOf(condition, op);
+        return terms !== null && terms.length === want.length && want.every((term) => terms.includes(term));
+      };
+      const republishFaults = (yml: string, doc: string): string[] => {
+        let wf: GraphWorkflow;
+        try {
+          wf = readYaml(yml) as GraphWorkflow;
+        } catch (error) {
+          return [`release.yml does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`];
+        }
+        const faults: string[] = [];
+        const dispatch = wf.on?.workflow_dispatch as { inputs?: Record<string, DispatchInput> } | null | undefined;
+        const inputs = dispatch?.inputs ?? {};
+        for (const name of ['tag', 'version']) {
+          const input = inputs[name];
+          if (input === undefined) faults.push(`release.yml: workflow_dispatch has no \`${name}\` input`);
+          else if (input.required !== false || input.type !== 'string') {
+            faults.push(`release.yml: the dispatch input \`${name}\` is ${JSON.stringify({ required: input.required ?? null, type: input.type ?? null })}, where an optional string is what lets a dispatch give the other input alone`);
+          }
+        }
+        const jobs = Object.entries(wf.jobs ?? {});
+        const planEntry = jobs.find(([, job]) => (job.steps ?? []).some((step) => /release-please/.test(step.uses ?? '')));
+        const gateEntry = jobs.find(([, job]) => job.uses === SHARDS_USES);
+        const publishEntry = jobs.find(([, job]) => (job.steps ?? []).some((step) => /\bnpm publish\b/.test(step.run ?? '')));
+        if (planEntry === undefined || gateEntry === undefined || publishEntry === undefined) {
+          faults.push(`release.yml: no ${planEntry === undefined ? 'release-please job' : gateEntry === undefined ? `job calling ${SHARDS_FILE}` : 'job running `npm publish`'}, so the republish path has nothing to read`);
+          return faults;
+        }
+        const [planName, planJob] = planEntry;
+        if (!sameTerms(planJob.if, '||', PLAN_TERMS)) {
+          faults.push(`release.yml: the plan job "${planName}" runs under ${JSON.stringify(planJob.if ?? null)}, where ${PLAN_TERMS.join(' || ')} admits a push and every dispatch but a confirmation alone`);
+        }
+        const steps = planJob.steps ?? [];
+        const please = steps.findIndex((step) => /release-please/.test(step.uses ?? ''));
+        if (steps[please].if !== "${{ github.event_name == 'push' }}") faults.push(`release.yml: release-please runs under ${JSON.stringify(steps[please].if ?? null)}, so a dispatch could cut a tag or a release`);
+        const target = steps.findIndex((step) => step.id === 'target');
+        if (target === -1) faults.push(`release.yml: the plan job "${planName}" has no step with id \`target\` resolving the tag to publish`);
+        else {
+          const step = steps[target];
+          if (target !== please + 1) faults.push(`release.yml: the resolve step is step ${target + 1} of "${planName}", where it follows release-please directly`);
+          if (step.if !== undefined) faults.push(`release.yml: the resolve step runs under ${JSON.stringify(step.if)}, so a dispatch could skip its refusals`);
+          const run = step.run ?? '';
+          const at = REFUSALS.map((code) => run.indexOf(`::error::${code}:`));
+          REFUSALS.forEach((code, k) => {
+            if (at[k] === -1) faults.push(`release.yml: the resolve step never prints \`::error::${code}:\`, so that refusal is not made by name`);
+          });
+          const found = REFUSALS.filter((_, k) => at[k] !== -1);
+          const order = [...found].sort((a, b) => at[REFUSALS.indexOf(a)] - at[REFUSALS.indexOf(b)]);
+          if (order.join() !== found.join()) faults.push(`release.yml: the resolve step refuses in the order ${order.join(', ')}, out of order against ${REFUSALS.join(', ')} — below-latest after already-published, so a version already served is not named as below latest`);
+          if (!run.includes(`npm view "${packageName}" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}" version\`, so a tag below the registry's latest is not refused`);
+          if (!run.includes(`npm view "${packageName}@$version" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}@$version" version\`, so a version the registry serves is not refused under the package's name`);
+          for (const [variable, source] of [['INPUT_TAG', '${{ inputs.tag }}'], ['INPUT_VERSION', '${{ inputs.version }}']] as const) {
+            if (step.env?.[variable] !== source) faults.push(`release.yml: the resolve step's env does not set ${variable} to ${source}`);
+          }
+        }
+        for (const output of ['publish', 'tag']) {
+          if (planJob.outputs?.[output] !== `\${{ steps.target.outputs.${output} }}`) faults.push(`release.yml: the plan job exports \`${output}\` as ${JSON.stringify(planJob.outputs?.[output] ?? null)}, not the resolve step's`);
+        }
+        const condition = `\${{ needs.${planName}.outputs.publish == 'true' }}`;
+        const tag = `\${{ needs.${planName}.outputs.tag }}`;
+        for (const [name, job] of [gateEntry, publishEntry]) {
+          if (job.if !== condition) faults.push(`release.yml: job "${name}" runs under ${JSON.stringify(job.if ?? null)}, not ${condition}`);
+        }
+        if (gateEntry[1].with?.ref !== tag) faults.push(`release.yml: job "${gateEntry[0]}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateEntry[1].with?.ref ?? null)}, not ${tag}`);
+        const publishSteps = publishEntry[1].steps ?? [];
+        const checkout = publishSteps.find((step) => /^actions\/checkout@/.test(step.uses ?? ''));
+        if (checkout?.with?.ref !== tag) faults.push(`release.yml: job "${publishEntry[0]}" checks out ${JSON.stringify(checkout?.with?.ref ?? null)}, not ${tag}`);
+        const confirmation = publishSteps.find((step) => runLines(step).some((line) => line.startsWith('bun run smoke')));
+        if (confirmation?.env?.TAG_NAME !== tag) faults.push(`release.yml: the confirmation in job "${publishEntry[0]}" reads TAG_NAME ${JSON.stringify(confirmation?.env?.TAG_NAME ?? null)}, not ${tag}`);
+        for (const [name, job] of jobs) {
+          if (name !== planName && /outputs\.(?:release_created|tag_name)\b/.test(JSON.stringify(job).replace(/steps\.release\.outputs/g, ''))) {
+            faults.push(`release.yml: job "${name}" reads ${planName}'s release_created or tag_name, which a dispatch never sets; it reads the resolved \`publish\` and \`tag\``);
+          }
+        }
+        const confirms = jobs.filter(([name, job]) => name !== publishEntry[0] && (job.steps ?? []).some((step) => runLines(step).some((line) => line.startsWith('bun run smoke'))));
+        if (confirms.length !== 1) faults.push(`release.yml: ${confirms.length} job(s) besides "${publishEntry[0]}" confirm, where the confirm job alone does`);
+        for (const [name, job] of confirms) {
+          if (!sameTerms(job.if, '&&', CONFIRM_TERMS)) faults.push(`release.yml: the confirm job "${name}" runs under ${JSON.stringify(job.if ?? null)}, where ${CONFIRM_TERMS.join(' && ')} keeps it to a \`version\` dispatch alone`);
+        }
+        for (const [name, job] of jobs) {
+          for (const step of job.steps ?? []) {
+            if (/\$\{\{[^}]*\binputs\./.test(step.run ?? '')) faults.push(`release.yml: "${step.name ?? step.uses ?? '(unnamed)'}" in job "${name}" interpolates an input into its script; inputs reach a run block through env only`);
+          }
+        }
+        if (!doc.includes(UNPUBLISHED_CUT_LINE)) faults.push(`RELEASING.md does not carry "${UNPUBLISHED_CUT_LINE}"`);
+        if (!doc.includes(DISPATCH)) faults.push(`RELEASING.md does not give the dispatch \`${DISPATCH}\``);
+        for (const code of REFUSALS) if (!doc.includes(code)) faults.push(`RELEASING.md does not name the refusal ${code}`);
+        return faults;
+      };
+
+      const releasingText = readFileSync(join(root, 'RELEASING.md'), 'utf8');
+      const standing = republishFaults(releaseText, releasingText);
+      /** `from` → `to` where `from` occurs exactly once, or null: an ambiguous anchor plants nothing it can name. */
+      const one = (text: string, from: string, to: string): string | null => (text.split(from).length === 2 ? text.replace(from, to) : null);
+      const swapped = ((): string | null => {
+        const a = '::error::RELEASE_TAG_UNRELEASED:';
+        const b = '::error::RELEASE_ALREADY_PUBLISHED:';
+        const marked = one(releaseText, a, '\u0000');
+        const moved = marked === null ? null : one(marked, b, a);
+        return moved === null ? null : moved.replace('\u0000', b);
+      })();
+      const condition = "    if: ${{ needs.plan.outputs.publish == 'true' }}\n";
+      const plants: Array<{ what: string; yml: string | null; doc?: string | null; want: string; quiet?: boolean }> = [
+        { what: 'the tag input dropped', yml: one(releaseText, '      tag:\n        description:', '      tagged:\n        description:'), want: 'no `tag` input' },
+        { what: 'the version input required again', yml: one(releaseText, '(leave tag empty)\n        required: false', '(leave tag empty)\n        required: true'), want: 'the dispatch input `version`' },
+        { what: 'the plan job runs on a push only', yml: one(releaseText, "    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}\n", "    if: ${{ github.event_name == 'push' }}\n"), want: 'the plan job "plan" runs under' },
+        { what: 'release-please runs on a dispatch', yml: one(releaseText, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'), want: 'so a dispatch could cut' },
+        { what: 'the resolve step skipped on a dispatch', yml: one(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n"), want: 'could skip its refusals' },
+        { what: 'the gate keyed on release-please again', yml: one(releaseText, `    needs: plan\n${condition}`, "    needs: plan\n    if: ${{ github.event_name == 'push' && needs.plan.outputs.release_created == 'true' }}\n"), want: 'job "gate" runs under' },
+        { what: 'the publish admits any dispatch', yml: one(releaseText, `    needs: [plan, gate]\n${condition}`, "    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch' }}\n"), want: 'job "publish" runs under' },
+        { what: 'the gate reads the cut tag again', yml: one(releaseText, '    with:\n      ref: ${{ needs.plan.outputs.tag }}\n', '    with:\n      ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'with ref' },
+        { what: 'the publish checks out the cut tag again', yml: one(releaseText, '        with:\n          ref: ${{ needs.plan.outputs.tag }}\n', '        with:\n          ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'checks out' },
+        { what: 'the confirmation reads the cut tag again', yml: one(releaseText, 'TAG_NAME: ${{ needs.plan.outputs.tag }}', 'TAG_NAME: ${{ needs.plan.outputs.tag_name }}'), want: 'reads TAG_NAME' },
+        { what: 'plan exports the cut tag', yml: one(releaseText, '      tag: ${{ steps.target.outputs.tag }}\n', '      tag: ${{ steps.release.outputs.tag_name }}\n'), want: 'exports `tag`' },
+        { what: 'the dispatch-input refusal unnamed', yml: releaseText.includes('::error::RELEASE_DISPATCH_INPUT:') ? releaseText.split('::error::RELEASE_DISPATCH_INPUT:').join('::error::') : null, want: 'RELEASE_DISPATCH_INPUT' },
+        { what: 'the form refusal unnamed', yml: one(releaseText, '::error::RELEASE_TAG_FORM:', '::error::'), want: 'RELEASE_TAG_FORM' },
+        { what: 'the unreleased and already-published refusals swapped', yml: swapped, want: 'out of order' },
+        { what: 'the latest read dropped', yml: one(releaseText, `npm view "${packageName}" version`, `npm view "${packageName}" dist-tags`), want: "below the registry's latest is not refused" },
+        { what: 'the served read under another name', yml: one(releaseText, `npm view "${packageName}@$version" version`, 'npm view "other@$version" version'), want: "under the package's name" },
+        { what: 'the tag input fed from the version', yml: one(releaseText, 'INPUT_TAG: ${{ inputs.tag }}', 'INPUT_TAG: ${{ inputs.version }}'), want: 'does not set INPUT_TAG' },
+        { what: 'an input interpolated into the script', yml: one(releaseText, 'version="${INPUT_TAG#v}"', 'version="${{ inputs.tag }}"'), want: 'interpolates an input' },
+        { what: 'the confirm job runs on a tag dispatch', yml: one(releaseText, " && inputs.version != '' && inputs.tag == '' }}", ' }}'), want: 'the confirm job "confirm" runs under' },
+        { what: "RELEASING.md drops the unpublished-cut line", yml: releaseText, doc: one(releasingText, UNPUBLISHED_CUT_LINE, "a failure after the tag is somebody else's"), want: 'RELEASING.md does not carry' },
+        { what: 'RELEASING.md drops the dispatch command', yml: releaseText, doc: one(releasingText, `${DISPATCH}vX.Y.Z`, 'gh workflow run release.yml'), want: 'does not give the dispatch' },
+        { what: 'RELEASING.md drops a refusal', yml: releaseText, doc: releasingText.includes('RELEASE_TAG_UNRELEASED') ? releasingText.split('RELEASE_TAG_UNRELEASED').join('RELEASE_TAG_UNKNOWN') : null, want: 'does not name the refusal RELEASE_TAG_UNRELEASED' },
+        { what: 'the resolve step renamed', yml: one(releaseText, '      - name: Resolve the tag to publish\n', '      - name: Pick a tag\n'), want: '', quiet: true },
+      ];
+      const probes: string[] = [];
+      const cases: string[] = [];
+      for (const plant of plants) {
+        const doc = plant.doc === undefined ? releasingText : plant.doc;
+        if (plant.yml === null || doc === null) {
+          probes.push(`"${plant.what}": the edit found nothing to change, so this plant was never made`);
+          continue;
+        }
+        const raised = raisedBy(republishFaults(plant.yml, doc), { was: standing });
+        if (plant.quiet === true) {
+          if (raised.length > 0) probes.push(`"${plant.what}" changes nothing this gate is about and ${raised.length} fault(s) fired: ${raised[0].slice(0, 160)}`);
+          cases.push(`${plant.what} -> quiet`);
+          continue;
+        }
+        if (!raised.some((fault) => fault.includes(plant.want))) {
+          probes.push(`"${plant.what}" was planted and this gate did not fire the fault naming "${plant.want}" (raised: ${raised.join(' | ').slice(0, 200) || 'none'})`);
+          continue;
+        }
+        cases.push(`${plant.what} -> named`);
+      }
+      const held = standing.length === 0 && probes.length === 0;
+      say(
+        'CUR131_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_GATE_AND_PUBLISH_AND_EACH_REFUSAL_IS_NAMED',
+        held,
+        probeDetail(
+          held,
+          [...standing, ...probes],
+          'release.yml takes an optional `tag` beside an optional `version`, runs plan on a push or any dispatch but a confirmation alone, ' +
+            `release-please on a push only, and the resolve step right after it naming ${REFUSALS.join(', ')} in that order with both ` +
+            `\`npm view\` reads under ${packageName} and the inputs through env; gate and publish run under the resolved condition and every ` +
+            'reader of the tag reads the resolved one, the confirm job runs on a `version` alone, no script interpolates an input, and ' +
+            `RELEASING.md carries the line, the dispatch and every refusal — over ${plants.length} plant(s): ${cases.join('; ')}`,
+        ),
+        'issue #1504: a cut whose publish failed after the tag could not be recovered by a re-run, because release-please no longer ' +
+          'reports a release for a tag it cut; the tag is published by a dispatch through the same resolve step, the same gate and the ' +
+          'same publish in this file, so the trusted publisher and provenance hold and nothing reaches the publish past the gate',
       );
     }
 

@@ -22006,8 +22006,8 @@ function runKeyTimeSuite(): number {
   ): void => {
     const probes = orderProbes(got, named, cycle);
     // The plant: the same refusal with the sentence moved the other way must fail.
-    const plantRed = orderProbes({ code: got.code, message: planted }, named, cycle).length > 0;
-    if (!plantRed) probes.push(`the plant (${cycle ? 'sentence removed' : 'sentence appended'}) was not caught`);
+    const raised = raisedBy(orderProbes({ code: got.code, message: planted }, named, cycle), { at: `the cycle sentence is ${cycle ? 'missing' : 'present'}` });
+    if (raised.length !== 1) probes.push(`the plant (${cycle ? 'sentence removed' : 'sentence appended'}) was not caught: it raised [${raised.join('; ')}]`);
     const held = probes.length === 0;
     say(name, held, probeDetail(held, probes, `refused with: ${got.message} — plant (${cycle ? 'sentence removed' : 'sentence appended'}) caught`), why);
   };
@@ -22071,7 +22071,8 @@ function runKeyTimeSuite(): number {
   };
   const siteFaults = orderSiteFaults(compileText);
   const sitePlant = `${compileText}\nthrow new CompileError(\`x: key times must strictly increase (at t=1)\`, '${ORDER_CODE}');\n`;
-  if (orderSiteFaults(sitePlant).length === 0) siteFaults.push('the plant (a seventh copy of the old throw) was not caught');
+  const siteRaised = raisedBy(orderSiteFaults(sitePlant), { at: '"key times must strictly increase" appears 2 time(s)', was: siteFaults });
+  if (siteRaised.length !== 1) siteFaults.push(`the plant (a seventh copy of the old throw) was not caught: it raised [${siteRaised.join('; ')}]`);
   const siteHeld = siteFaults.length === 0;
   say(
     'K14_every_key_order_refusal_is_thrown_through_one_helper',
@@ -22079,7 +22080,7 @@ function runKeyTimeSuite(): number {
     probeDetail(
       siteHeld,
       siteFaults,
-      `the phrase and the code appear once each in src/compile.ts, in refuseKeyOrder, which ${compileText.split('refuseKeyOrder(where,').length - 1} call site(s) throw through — plant (a copied throw) caught`,
+      `the phrase and the code appear once each in src/compile.ts, in refuseKeyOrder, which ${compileText.split('refuseKeyOrder(where,').length - 1} call site(s) throw through — plant (a copied throw) raised: ${siteRaised.join('; ')}`,
     ),
     'issue #1506: six sites spelled the text six times, so a change to one would have left five readers on the old wording',
   );

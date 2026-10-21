@@ -225,6 +225,8 @@ import { CoreInputError, type CompiledDocument } from './index.ts';
 import { checkedClock, environmentOf, openRawTrack, rotateOn, setEnvironmentOn, stepRawTrack, translateOn, type RawPose, type RawReset, type TrackState, type WalkMode } from './raw.ts';
 import type { LocalAdjust, TimelinePlant } from './animation.ts';
 import type { PhysicsEnvironment } from './constraints_physics.ts';
+import { LivePhysicsParameters, type PhysicsParameterPatch, type PhysicsParameterRead } from './physics_parameters.ts';
+export type { PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from './physics_parameters.ts';
 export type { AdjustableLocals, BoneLocals, LocalAdjust, LocalAdjustContext } from './animation.ts';
 export type { PhysicsEnvironment } from './constraints_physics.ts';
 
@@ -253,6 +255,12 @@ export interface LiveTrack {
   setEnvironment(environment: Partial<PhysicsEnvironment>): void;
   /** The environment the next pose answers. */
   readonly environment: PhysicsEnvironment;
+  /** Merges a finite six-field patch for one physics constraint, applied from the next pose until clear. */
+  setPhysicsParameters(name: string, patch: PhysicsParameterPatch): void;
+  /** Pending patch and the last evaluated six values; null effective means not yet evaluated (e.g. inactive). */
+  readPhysicsParameters(name: string): PhysicsParameterRead;
+  /** Removes the patch for the next pose without resetting velocities, offsets or the clock. */
+  clearPhysicsParameters(name: string): void;
   /** spine-core's `Skeleton.physicsTranslate`: the consumer moved the whole rig by `(x, y)` in the skeleton's world (y up) since the last pose, and every physics constraint's next update sees it. */
   physicsTranslate(x: number, y: number): void;
   /** spine-core's `Skeleton.physicsRotate`: the consumer turned the whole rig by `degrees` (counter-clockwise) about `(x, y)` in the skeleton's world since the last pose. */
@@ -275,8 +283,9 @@ export function openTrack(doc: CompiledDocument, animation: string, options: Tra
   if (options.clock !== undefined && typeof options.clock !== 'function') throw new CoreInputError(`the live track's options.clock is ${typeof options.clock}, not a function`);
   const mode = options.loop ? LOOPED : HELD;
   const clock = options.clock === undefined ? undefined : checkedClock(options.clock, 'the live track\'s');
-  const { track, first } = openRawTrack(doc, animation, plant, options.reset, clock === undefined ? mode : { ...mode, clock: (dt) => clock(dt) }, options.adjust);
-  return new Track(track, first);
+  const parameters = new LivePhysicsParameters(doc);
+  const { track, first } = openRawTrack(doc, animation, plant, options.reset, clock === undefined ? mode : { ...mode, clock: (dt) => clock(dt) }, options.adjust, (ctx) => { ctx.parameters = parameters; });
+  return new Track(track, first, parameters);
 }
 
 class Track implements LiveTrack {
@@ -286,7 +295,7 @@ class Track implements LiveTrack {
   private latest: number;
   private refused: string | null = null;
 
-  constructor(track: TrackState<RawPose>, first: RawPose) {
+  constructor(track: TrackState<RawPose>, first: RawPose, private readonly parameters: LivePhysicsParameters) {
     this.track = track;
     this.first = first;
     this.latest = first.animationTime;
@@ -311,6 +320,20 @@ class Track implements LiveTrack {
   setEnvironment(environment: Partial<PhysicsEnvironment>): void {
     this.live('setEnvironment');
     setEnvironmentOn(this.track.ctx, environment, 'the live track\'s');
+  }
+
+  setPhysicsParameters(name: string, patch: PhysicsParameterPatch): void {
+    this.live('setPhysicsParameters');
+    this.parameters.set(name, patch);
+  }
+
+  readPhysicsParameters(name: string): PhysicsParameterRead {
+    return this.parameters.read(name);
+  }
+
+  clearPhysicsParameters(name: string): void {
+    this.live('clearPhysicsParameters');
+    this.parameters.clear(name);
   }
 
   physicsTranslate(x: number, y: number): void {

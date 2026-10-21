@@ -1078,6 +1078,23 @@ before (`CO57`), so the row adds one type and no value. It lives in
 `src/core/constraints_physics.ts`, which the entry already reached, so its
 closure gained no module (`CUR123`).
 
+**Live named physics parameters, promised by request**
+([#1541](https://github.com/rig-c/core/issues/1541), `REQUESTED_IN_1541`):
+
+| entry | values promised | types promised |
+| --- | --- | --- |
+| `rig-c/core` | methods on `LiveTrack` and `LiveTracks`: `setPhysicsParameters`, `readPhysicsParameters`, `clearPhysicsParameters` | `PhysicsParameters`, `PhysicsParameterPatch`, `PhysicsParameterRead` |
+
+These methods are additive on the already promised track types. Patches are per
+instance, applied after authored/keyed/slider fields and before integration;
+clear removes a patch without resetting history. Read separates the current
+patch from the last evaluated six values, with `null` effective before any
+evaluation (composed before start or an inactive constraint). AUTHORING states
+the complete timing and refusal contract. The internal parameter-layer module
+is part of the runtime-free core closure, not an additional import promise.
+The installed and browser-bundled probes call all three methods on both track
+types, exercise all six fields, and refuse a partially invalid patch atomically.
+
 **Named setup mesh reads, promised by request**
 ([#1538](https://github.com/rig-c/core/issues/1538), `REQUESTED_IN_1538`):
 

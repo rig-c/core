@@ -583,6 +583,8 @@ export type PhysicsStepper = (r: CorePhysicsRecord, w: CoreWorld, length: number
 /** What a stepped pose carries into every physics constraint it applies. */
 export interface PhysicsStepContext {
   phase: PhysicsPhase;
+  /** Live track's final parameter layer, after authored/keyed/slider values (issue #1541). */
+  parameters?: { apply(record: CorePhysicsRecord): CorePhysicsRecord };
   /** The skeleton's clock: the sum of every step's delta so far. */
   time: number;
   /** Each constraint's state, by name, carried from update to update. */

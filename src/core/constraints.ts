@@ -1548,7 +1548,8 @@ export function applyConstraints(bones: readonly ModelBone[], world: ReadonlyMap
       // Under Physics.none a physics constraint applies nothing; stepped, it moves its bone in world space (`./constraints_physics.ts`).
       if (physics !== undefined) {
         const w = { ...(state.world.get(c.bone) as CoreWorld) };
-        const posed = physicsPose?.records.get(c.name) ?? c;
+        const authored = physicsPose?.records.get(c.name) ?? c;
+        const posed = physics.parameters?.apply(authored) ?? authored;
         if ((physics.step ?? stepPhysics)(posed, w, bone(state, c.bone).length ?? 0, physics)) {
           state.world.set(c.bone, w);
           changed = [c.bone];

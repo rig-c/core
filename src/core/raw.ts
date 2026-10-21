@@ -1025,8 +1025,8 @@ function walkEach<P>(doc: CompiledDocument, animation: string, steps: readonly n
  * `stepRawTrack` steps. Every pose is assembled as the raw entry's
  * (`RAW_SHAPE`).
  */
-export function openRawTrack(doc: CompiledDocument, animation: string, plant: TimelinePlant, reset: RawReset, mode: WalkMode, adjust?: LocalAdjust): { track: TrackState<RawPose>; first: RawPose } {
-  return openWalk(doc, animationOf(doc, animation), plant, reset, mode, RAW_SHAPE, adjust);
+export function openRawTrack(doc: CompiledDocument, animation: string, plant: TimelinePlant, reset: RawReset, mode: WalkMode, adjust?: LocalAdjust, before?: (ctx: PhysicsStepContext) => void): { track: TrackState<RawPose>; first: RawPose } {
+  return openWalk(doc, animationOf(doc, animation), plant, reset, mode, RAW_SHAPE, adjust, before);
 }
 
 /** One step of an opened raw track (`openRawTrack`): `walkIn`'s step, the step itself checked by the caller. */

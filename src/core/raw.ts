@@ -121,7 +121,7 @@ import { attachmentStates } from './deform.ts';
 import { drawOrderAt, type CoreDrawOrderKey } from './draw_order.ts';
 import { eventsFired, type CoreEventRow } from './events.ts';
 import { REGION_TRIANGLES, REGION_UVS, type CoreClippedRow, type ShapeClipper } from './clipping.ts';
-import { poseGeometry, type CoreAttachmentRow, type CoreClipRow, type ShownGeometry } from './vertices.ts';
+import { meshArraysOf, poseGeometry, type CoreAttachmentRow, type CoreClipRow, type ShownGeometry } from './vertices.ts';
 import { RUNTIME_DEG, type CoreWorld } from './world.ts';
 import type { SliderApplication } from './constraints_slider.ts';
 
@@ -148,8 +148,10 @@ export interface RawDrawn {
   attachment: string;
   kind: 'region' | 'mesh';
   vertices: number[];
-  uvs: number[];
-  triangles: number[];
+  /** Frozen, and the same array on every pose of the document view (issue #1530): `REGION_UVS` for a region, `meshArraysOf` for a mesh. */
+  uvs: readonly number[];
+  /** Frozen and identity-stable, as `uvs` is. */
+  triangles: readonly number[];
   hull: number | null;
   sequenceIndex: number;
   colour: [number, number, number, number];
@@ -363,11 +365,11 @@ function drawnGeometry(doc: CompiledDocument, shown: readonly ShownGeometry[], w
  * maps it as before where it does, so A10 reads the same values either way.
  * What makes the row's array safe to keep past the step — A10 collects an
  * animation's 120 frames before it scans one — is that it is the pose's own:
- * `poseGeometry` (`./vertices.ts`) builds every row's vertices with
- * `.map(round)` over the corners or the skinned vertices it just computed, a
- * new array per attachment per pose, held by nothing but the row. The core
- * suite's `CO45` plants a poser that hands every pose the same array and reads
- * the retained frames red.
+ * `poseGeometry` (`./vertices.ts`) hands every row the corners or the skinned
+ * vertices the poser just computed, a new array per attachment per pose, or a
+ * rounded copy of it (`roundedRow`, issue #1530), held by nothing but the row.
+ * The core suite's `CO45` plants a scan that hands every pose the same array
+ * and `CO59` a poser that does, and both read the retained frames red.
  */
 function scanDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world: ReadonlyMap<string, CoreWorld>, order: readonly string[], plant: CorePlant, mode: WalkMode, scanPlant: ScanPlant = {}): ScanDrawn[] {
   const { rows } = drawnGeometry(doc, shown, world, order, plant, mode);
@@ -383,6 +385,23 @@ function scanDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world
     drawn.push({ slot: s.slot, attachment: row[1], vertices: scanPlant.vertices === undefined ? kept : scanPlant.vertices(kept, s.slot) });
   }
   return drawn;
+}
+
+/**
+ * A row's numbers as the pose hands them on (issue #1530): the row's own
+ * array wherever it holds no `null` — `numberOf` is then the identity on
+ * every one of them, under either mode — and mapped through `numberOf` as
+ * before where it does, so a raw walk refuses the same value by the same
+ * name and a kept one turns it into NaN. The row's array is the pose's own:
+ * `poseGeometry` (`./vertices.ts`, `roundedRow`) hands each row the array
+ * the poser just built or a fresh rounded copy of it, and `poseClipped` maps
+ * every clipped row into a new array; nothing else holds one, so a frame a
+ * consumer keeps is not written by the next pose. The core suite's
+ * retained-frame control plants a poser that keeps one buffer per slot and
+ * reads the kept frames red.
+ */
+function numbersOf(values: Array<number | null>, what: string, mode: WalkMode): number[] {
+  return allNumbers(values) ? values : values.map((v) => numberOf(v, what, mode));
 }
 
 /** Whether a row's vertices hold no `null` — what `numberOf` would map — so the row's own array can be handed on as numbers. */
@@ -417,24 +436,23 @@ function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world:
     if (row === undefined || row[0] !== s.slot) throw new CoreInputError(`slot "${s.slot}": the attachment rows are not in the shown records' order`);
     const record = doc.skins.find((x) => x.name === s.skin)?.attachments[s.slot]?.[s.placeholder];
     const colour = record?.color === undefined ? ([1, 1, 1, 1] as [number, number, number, number]) : readColour(record.color);
-    let uvs: number[];
-    let triangles: number[];
+    let uvs: readonly number[];
+    let triangles: readonly number[];
     let hull: number | null = null;
     if (g.kind === 'region') {
-      uvs = [...REGION_UVS];
-      triangles = [...REGION_TRIANGLES];
+      uvs = REGION_UVS;
+      triangles = REGION_TRIANGLES;
     } else {
       const source = g.kind === 'mesh' ? g : doc.skins.find((x) => x.name === g.skin)?.attachments[g.slot]?.[g.source]?.geometry;
       if (source === undefined || source.kind !== 'mesh') throw new CoreInputError(`slot "${s.slot}": the linked mesh's source carries no mesh`);
-      uvs = [...source.uvs];
-      triangles = [...source.triangles];
+      ({ uvs, triangles } = (plant.meshArrays ?? meshArraysOf)(source));
       hull = source.hull ?? null;
     }
     const sequenceIndex = s.frame ?? record?.sequenceSetup ?? 0;
-    drawn.push({ slot: s.slot, attachment: row[1], kind: row[2], vertices: row[3].map((v) => numberOf(v, `vertex of slot "${s.slot}"`, mode)), uvs, triangles, hull, sequenceIndex, colour });
+    drawn.push({ slot: s.slot, attachment: row[1], kind: row[2], vertices: numbersOf(row[3], `vertex of slot "${s.slot}"`, mode), uvs, triangles, hull, sequenceIndex, colour });
   }
-  const clips = geometry.clips.map((c): RawClip => [c[0], c[1], c[2], c[3].map((v) => numberOf(v, `clip vertex of slot "${c[0]}"`, mode))]);
-  const clipped = geometry.drawnClipped.map((c): RawClipped => [c[0], c[1], c[2], c[3].map((v) => numberOf(v, `clipped vertex of slot "${c[0]}"`, mode)), c[4].map((v) => numberOf(v, `clipped uv of slot "${c[0]}"`, mode)), c[5]]);
+  const clips = geometry.clips.map((c): RawClip => [c[0], c[1], c[2], numbersOf(c[3], `clip vertex of slot "${c[0]}"`, mode)]);
+  const clipped = geometry.drawnClipped.map((c): RawClipped => [c[0], c[1], c[2], numbersOf(c[3], `clipped vertex of slot "${c[0]}"`, mode), numbersOf(c[4], `clipped uv of slot "${c[0]}"`, mode), c[5]]);
   return { drawn, clips, clipped };
 }
 

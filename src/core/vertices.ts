@@ -147,6 +147,41 @@ export type CoreGeometry =
   | { kind: 'boundingbox'; vertices: ModelVertices }
   | { kind: 'path'; vertices: ModelVertices; closed: boolean; constantSpeed: boolean; lengths: number[] };
 
+/** A mesh's geometry as the document view files it — what `meshArraysOf` keys on. */
+export type CoreMeshGeometry = Extract<CoreGeometry, { kind: 'mesh' }>;
+
+/** A mesh's UVs and triangles as a pose hands them out: read-only, and the same arrays on every pose. */
+export interface MeshArrays {
+  readonly uvs: readonly number[];
+  readonly triangles: readonly number[];
+}
+
+/** What hands out a mesh's `MeshArrays`: `meshArraysOf` unless a control passes another (the core suite's shared-array control). */
+export type MeshArraysOf = (mesh: CoreMeshGeometry) => MeshArrays;
+
+/** Each mesh geometry's frozen arrays, keyed on the document view's own geometry object, which no reader writes. */
+const meshArraysByGeometry = new WeakMap<CoreMeshGeometry, MeshArrays>();
+
+/**
+ * A mesh's UVs and triangles, copied once per geometry object and frozen
+ * (issue #1530). The raw entry used to spread both into new arrays on every
+ * pose for every drawn mesh, so that a consumer writing into a pose's arrays
+ * could not reach the document's; frozen, a write throws instead, and every
+ * pose of every walk and track over the same document view hands out the
+ * same two arrays — so a consumer keyed on them by identity reuses what it
+ * built from them. The copy is what keeps the document's own arrays out of a
+ * consumer's hands: they are the reader's, and freezing them would write to
+ * a value the caller passed in.
+ */
+export function meshArraysOf(mesh: CoreMeshGeometry): MeshArrays {
+  let kept = meshArraysByGeometry.get(mesh);
+  if (kept === undefined) {
+    kept = Object.freeze({ uvs: Object.freeze([...mesh.uvs]), triangles: Object.freeze([...mesh.triangles]) });
+    meshArraysByGeometry.set(mesh, kept);
+  }
+  return kept;
+}
+
 /** One row of `setup.attachments`: `[slot, attachment, kind, vertices]`, the oracle's row. */
 export type CoreAttachmentRow = [string, string, 'region' | 'mesh', Array<number | null>];
 /** One row of `setup.clips`: `[slot, attachment, end, polygon]`, the oracle's row. */
@@ -211,6 +246,46 @@ export function worldVertices(vertices: ModelVertices, bone: CoreWorld, world: R
       if (t === undefined) throw new Error(`a binding names bone "${binding.bone}", which has no world transform (readModel refuses it first)`);
       const x = coords(binding.x);
       const y = coords(binding.y);
+      const weight = Math.fround(binding.weight);
+      wx += (x * t.a + y * t.b + t.worldX) * weight;
+      wy += (x * t.c + y * t.d + t.worldY) * weight;
+    }
+    out.push(wx, wy);
+  }
+  return out;
+}
+
+/**
+ * `worldVertices(deformedVertices(vertices, deform), bone, world, EXACT_COORDS)`
+ * in one pass (issue #1530): the same operations on the same numbers in the
+ * same order — an unweighted vertex's coordinates are the deform array's,
+ * read as they are; a weighted binding's are its float32 coordinate plus the
+ * deform's pair, its weight through `Math.fround` — without building the
+ * deformed array (and, weighted, one binding record per influence) on every
+ * pose only to map it again. A planted vertex poser still reads the deformed
+ * array (`poseGeometry`). Posed output is held equal by the core gate's
+ * sample attachments and by `tools/posed_frames.ts` across the change.
+ */
+export function deformedWorldVertices(vertices: ModelVertices, deform: readonly number[], bone: CoreWorld, world: ReadonlyMap<string, CoreWorld>): number[] {
+  const out: number[] = [];
+  if (!vertices.weighted) {
+    for (let i = 0; i + 1 < deform.length; i += 2) {
+      const x = deform[i];
+      const y = deform[i + 1];
+      out.push(x * bone.a + y * bone.b + bone.worldX, x * bone.c + y * bone.d + bone.worldY);
+    }
+    return out;
+  }
+  let k = 0;
+  for (const influences of vertices.bindings) {
+    let wx = 0;
+    let wy = 0;
+    for (const binding of influences) {
+      const t = world.get(binding.bone);
+      if (t === undefined) throw new Error(`a binding names bone "${binding.bone}", which has no world transform (readModel refuses it first)`);
+      const x = Math.fround(binding.x) + deform[k];
+      const y = Math.fround(binding.y) + deform[k + 1];
+      k += 2;
       const weight = Math.fround(binding.weight);
       wx += (x * t.a + y * t.b + t.worldX) * weight;
       wy += (x * t.c + y * t.d + t.worldY) * weight;
@@ -397,6 +472,32 @@ export interface ShownGeometry {
   frame?: number;
 }
 
+/**
+ * A row's numbers: `values` through `round`, as `values.map(round)` writes
+ * them — and `values` itself, not a copy, where `round` leaves every one of
+ * them the same number (`Object.is`, so a `-0` the round writes as `0` is a
+ * change). Issue #1530: the raw entry's `rawNumber` is the identity on every
+ * finite double but `-0`, so on every pose that drew a finite attachment the
+ * map was a second array of the same numbers, per attachment per pose. The
+ * array handed in is the poser's own (`regionCorners` and `worldVertices`
+ * build a fresh one per call, and so does the deform path's
+ * `deformedWorldVertices`), held by nothing but this call, so the row may own it; the
+ * draw walk's step reads the same array and writes nothing into it
+ * (`DrawStep`'s arrays are readonly). A planted poser that hands out an array
+ * it keeps is the shape the core suite's retained-frame control plants.
+ */
+export function roundedRow(values: number[], round: (v: number) => number | null): Array<number | null> {
+  for (let i = 0; i < values.length; i++) {
+    const r = round(values[i]);
+    if (Object.is(r, values[i])) continue;
+    const out: Array<number | null> = values.slice(0, i);
+    out.push(r);
+    for (let j = i + 1; j < values.length; j++) out.push(round(values[j]));
+    return out;
+  }
+  return values;
+}
+
 /** Resolves a linked mesh's source to its vertex array, or names why not. */
 export type SourceOf = (skin: string, slot: string, source: string) => ModelVertices | string;
 
@@ -409,7 +510,7 @@ export type SourceOf = (skin: string, slot: string, source: string) => ModelVert
 export interface DrawWalk {
   order: readonly string[];
   active: ReadonlySet<string>;
-  meshOf: (skin: string, slot: string, source: string) => { uvs: number[]; triangles: number[] } | undefined;
+  meshOf: (skin: string, slot: string, source: string) => { uvs: readonly number[]; triangles: readonly number[] } | undefined;
   clip?: TriangleClipper;
   /** What the drawn rows are cut through (`clipThrough`), replaceable by the render suite's plants. */
   through?: ShapeClipper;
@@ -436,38 +537,44 @@ export function poseGeometry(
   const attachments: CoreAttachmentRow[] = [];
   const clips: CoreClipRow[] = [];
   const nulls: string[] = [];
+  // Issue #1530: the draw walk cuts drawn attachments through the clips the pose shows, and with none shown it cuts nothing — `poseClipped`
+  // over a walk with no clip step returns no row and no reason — so the walk's steps are built only where a clip is shown.
+  const walked = draw !== undefined && shown.some((s) => s.geometry.kind === 'clipping');
   const steps = new Map<string, DrawStep>();
   for (const s of shown) {
     const bone = world.get(s.bone);
     if (bone === undefined) throw new Error(`slot "${s.slot}": bone "${s.bone}" has no world transform`);
     const g = s.geometry;
     // A deform array replaces the stored vertices, its coordinates read as they are (`./deform.ts`).
-    const drawn = (v: ModelVertices): number[] => (s.deform === undefined ? vertices(v, bone, world) : vertices(deformedVertices(v, s.deform), bone, world, EXACT_COORDS));
+    // Unplanted, the deformed positions are read in one pass (`deformedWorldVertices`, issue #1530) rather than through a deformed copy of the array.
+    const deform = s.deform;
+    const drawn = (v: ModelVertices): number[] => (deform === undefined ? vertices(v, bone, world) : plant.vertices === undefined ? deformedWorldVertices(v, deform, bone, world) : vertices(deformedVertices(v, deform), bone, world, EXACT_COORDS));
     if (g.kind === 'region') {
       const rect = s.frame === undefined ? g.region.atlas : (g.region.frames?.[s.frame] ?? g.region.atlas);
       if (rect === null) {
         nulls.push(`slot "${s.slot}" shows region "${s.name}" (skin "${s.skin}", placeholder "${s.placeholder}")`);
         continue;
       }
-      const corners = region({ ...g.region, atlas: rect }, bone);
-      attachments.push([s.slot, s.name, 'region', corners.map(round)]);
-      steps.set(s.slot, { slot: s.slot, kind: 'draw', attachment: s.name, vertices: corners, triangles: [...REGION_TRIANGLES], uvs: [...REGION_UVS] });
+      // The record's own geometry wherever the rectangle drawn is its own (no series frame): the same fields, without a copy per pose.
+      const corners = region(rect === g.region.atlas ? (g.region as CoreRegionGeometry & { atlas: ModelAtlasRect }) : { ...g.region, atlas: rect }, bone);
+      attachments.push([s.slot, s.name, 'region', roundedRow(corners, round)]);
+      if (walked) steps.set(s.slot, { slot: s.slot, kind: 'draw', attachment: s.name, vertices: corners, triangles: REGION_TRIANGLES, uvs: REGION_UVS });
     } else if (g.kind === 'mesh') {
       const world = drawn(g.vertices);
-      attachments.push([s.slot, s.name, 'mesh', world.map(round)]);
-      steps.set(s.slot, { slot: s.slot, kind: 'draw', attachment: s.name, vertices: world, triangles: g.triangles, uvs: g.uvs });
+      attachments.push([s.slot, s.name, 'mesh', roundedRow(world, round)]);
+      if (walked) steps.set(s.slot, { slot: s.slot, kind: 'draw', attachment: s.name, vertices: world, triangles: g.triangles, uvs: g.uvs });
     } else if (g.kind === 'linkedmesh') {
       const source = sourceOf(g.skin, g.slot, g.source);
       if (typeof source === 'string') throw new Error(`slot "${s.slot}": ${source} (readModel refuses it first)`);
       const world = drawn(source);
-      attachments.push([s.slot, s.name, 'mesh', world.map(round)]);
+      attachments.push([s.slot, s.name, 'mesh', roundedRow(world, round)]);
       // A linked mesh draws its source's triangles over its source's UVs.
       const mesh = draw?.meshOf(g.skin, g.slot, g.source);
       if (draw !== undefined && mesh === undefined) throw new Error(`slot "${s.slot}": the linked mesh's source "${g.source}" carries no triangles (readModel refuses it first)`);
-      if (mesh !== undefined) steps.set(s.slot, { slot: s.slot, kind: 'draw', attachment: s.name, vertices: world, triangles: mesh.triangles, uvs: mesh.uvs });
+      if (walked && mesh !== undefined) steps.set(s.slot, { slot: s.slot, kind: 'draw', attachment: s.name, vertices: world, triangles: mesh.triangles, uvs: mesh.uvs });
     } else if (g.kind === 'clipping') {
       const polygon = drawn(g.vertices);
-      clips.push([s.slot, s.name, g.end, polygon.map(round)]);
+      clips.push([s.slot, s.name, g.end, roundedRow(polygon, round)]);
       steps.set(s.slot, { slot: s.slot, kind: 'clip', attachment: s.name, active: draw?.active.has(s.bone) ?? false, end: g.end, polygon, inverse: g.inverse, convex: g.convex });
     }
   }
@@ -478,7 +585,12 @@ export function poseGeometry(
   let clippedWhy: string | null = draw === undefined ? 'the draw order was not given' : attachmentsWhy;
   let drawnClipped: CoreClippedRow[] | null = null;
   let drawnClippedWhy: string | null = clippedWhy;
-  if (draw !== undefined && attachmentsWhy === null) {
+  if (draw !== undefined && attachmentsWhy === null && !walked) {
+    clipped = [];
+    clippedWhy = null;
+    drawnClipped = [];
+    drawnClippedWhy = null;
+  } else if (draw !== undefined && attachmentsWhy === null) {
     const walk = draw.order.map((slot): DrawStep => steps.get(slot) ?? { slot, kind: 'none' });
     const posed = poseClipped(walk, round, draw.clip, draw.through);
     clipped = posed.rows;

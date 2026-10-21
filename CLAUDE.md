@@ -275,8 +275,16 @@ session rotated — the reader rule above, measured on ourselves. So it is here.
 - **One issue = one PR.** The issue is the order: decision, bars, what is out of
   scope. A message that changes an order is copied to the issue.
 - **A feature PR is opened and reported, and merged only after HQ's sign.** A
-  `release:` PR from release-please merges on the sub-commander's own call, and
-  so does the cut it makes. AI review runs at most once per PR.
+  `release:` PR from release-please merges and cuts on the command post's
+  explicit "LGTM #NNN" naming it, quoted in the cut report; the sub-commander
+  approves the release PR's awaiting CI run on its current head only. A cut is
+  published and cannot be taken back, so the sign has to name the PR it covers,
+  and an approval given to an older head would be a sign nobody gave. AI review
+  runs at most once per PR.
+- 🔒 **Never push to an armed PR** — one with auto-merge armed. Disable
+  auto-merge first, push, report the new head, and the command post re-arms; a
+  merge of main into the branch counts as a push. An armed PR merges whatever
+  head turns green, so a push to it lands a commit the sign never saw.
 - **The report**, sent when an issue lands or stops: ① the PR and its merge SHA
   ② a verification table — command, exit code, figures ③ every claim in the
   issue that was contradicted, with the measurement ④ what was rejected, with

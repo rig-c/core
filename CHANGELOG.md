@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.65.2](https://github.com/rig-c/core/compare/v2.65.1...v2.65.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **cli:** render --help's --out row names the setup-pose set a rig with no animation writes, and RN08 holds it to the folders on disk ([#1533](https://github.com/rig-c/core/issues/1533)) ([67fcf5e](https://github.com/rig-c/core/commit/67fcf5e506c038c66f097a7dbc724a83a8283c72))
+* **compile:** the key-order cycle sentence requires equal authored times and checks every trailing key; a pair that collapses on one float32 says so ([#1529](https://github.com/rig-c/core/issues/1529)) ([22f4c42](https://github.com/rig-c/core/commit/22f4c42ba1262405e4be86731f6b938d97243e93))
+* **pose:** an ambiguity groups its margin into places before the repeat test, so a twin with a same-centre turned fit still reads as drawn more than once ([#1535](https://github.com/rig-c/core/issues/1535)) ([808e359](https://github.com/rig-c/core/commit/808e359637bb5b2166b43efb38883820774798a8))
+
+
+### Performance Improvements
+
+* **core:** hand the posed vertex arrays on instead of mapping them again, merge deform into the world pass, and share frozen UV and triangle arrays ([#1539](https://github.com/rig-c/core/issues/1539)) ([28cd34e](https://github.com/rig-c/core/commit/28cd34e5d5de6f44f180baa5d0ff55d897939cb9))
+
 ## [2.65.1](https://github.com/rig-c/core/compare/v2.65.0...v2.65.1) (2026-10-20)
 
 

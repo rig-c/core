@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.67.1](https://github.com/rig-c/core/compare/v2.67.0...v2.67.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **release:** refuse dispatch provenance from a different commit ([#1549](https://github.com/rig-c/core/issues/1549)) ([4c47d90](https://github.com/rig-c/core/commit/4c47d90334fbf040142df12a3f987c3f1a80d45c))
+
 ## [2.67.0](https://github.com/rig-c/core/compare/v2.66.0...v2.67.0) (2026-10-21)
 
 

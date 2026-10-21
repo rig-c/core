@@ -11378,16 +11378,20 @@ ambiguous one ends with a sentence saying which reading its figures support:
 Read the figures, not only the verdict. *Below* says plainness alone explains the
 failure: the cut may be right, and `pose` cannot tell. *Above* says it does not,
 so look at the cut, the `--scale`/`--rotation` window, or — for an ambiguity — at
-whether the frame really holds the part twice. 🔀 When **every** placement inside
-the margin is at the best's scale and in another place — the two bars the sentence
-prints beside the figures it measured — the reading says the frame does hold it more than once and
+whether the frame really holds the part twice. 🔀 When **every** other place inside
+the margin holds the part at the best's scale — the two bars the sentence prints
+beside the figures it measured — the reading says the frame does hold it more than once and
 names MOTION.md §2.2's unordered set instead of a window: no `--scale` window
 separates two copies of one size, and a `--rotation` window that excludes one place
 *chooses* the answer — both files then place on the other copy, one of them off its
 truth and printed clean. Both bars sit at the geometric middle of the gap measured
 between such repeats and every other ambiguity on the floor's grid (the constants
 `REPEAT_SCALE_RATIO` and `REPEAT_DISTANCE_SPANS` in `src/pose.ts` carry the figures);
-any other ambiguity above the floor keeps the window sentence. ⚠️ Above the floor is **not** a
+any other ambiguity above the floor keeps the window sentence. A *place* is counted
+once: placements whose centres are closer than the distance bar to a better-scoring
+one — a quarter- or half-turn fit the search keeps at a copy's own centre, or a
+second size read at one spot — are that one's place, and the sentence says how
+many it set aside that way. ⚠️ Above the floor is **not** a
 promise that `pose` will place the part (see the rates below).
 
 **The texture figure.** `legibility.texture` is the mean colour step between
@@ -11535,7 +11539,9 @@ input bytes, and `PO32` holds it to taking the quarter-rung escape and reading t
 picked from. `PO34` holds two copies of one part 0.6 span apart to both coming back — and is
 seen red on the quarter-span grid releases before 1.4.0 searched on, which put them on
 one placement — and `PO35` holds the two readings of an ambiguity above the floor to
-their own shapes, each with a forged alternate that moves it to the other.
+their own shapes, each with a forged alternate that moves it to the other — and twins
+a half-turn maps onto themselves to the route, which the window takes back when the
+grouping into places is planted out.
 
 ## 12. Reading the half of that picture `pose` refuses — `rigc chainfit`
 

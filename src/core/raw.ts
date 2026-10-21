@@ -486,6 +486,19 @@ export interface SetupMesh {
   hull: number | null;
 }
 
+/** Model definitions by value: object key order is irrelevant, array positions and signed zero are not. */
+function sameSetupMeshDefinition(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b) && a.length !== b.length) return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) && sameSetupMeshDefinition(left[key], right[key]));
+}
+
 /**
  * Read a named mesh without changing the setup selection or playing anything
  * (issue #1538). Setup constraints and reset physics use the raw poser's own
@@ -497,8 +510,9 @@ export interface SetupMesh {
  *
  * Skin resolution is the supplied view's unless explicitly overridden. Under
  * `all`, differing definitions of the requested mesh are refused: the model
- * does not carry the file order that would choose one. Identical definitions
- * keep the existing resolver's first supplying skin. All arrays are fresh.
+ * does not carry the file order that would choose one. Object property order
+ * does not distinguish definitions; array positions and Object.is leaf values
+ * do. Identical definitions keep the resolver's first supplying skin. All arrays are fresh.
  */
 export function readSetupMesh(doc: CompiledDocument, target: SetupMeshTarget): SetupMesh {
   const view = target.skin === undefined ? doc : target.skin === null ? underNoSkin(doc) : underSkin(doc, target.skin);
@@ -509,7 +523,7 @@ export function readSetupMesh(doc: CompiledDocument, target: SetupMeshTarget): S
   if (resolved === null) throw new CoreInputError(`${where}: no such attachment`);
   const fills = fillingSkins(view, slot.name, target.attachment);
   const definitions = fills.map((name) => view.skins.find((k) => k.name === name)?.attachments[slot.name]?.[target.attachment]);
-  if ('conflict' in resolved || definitions.some((r) => JSON.stringify(r) !== JSON.stringify(definitions[0]))) {
+  if ('conflict' in resolved || definitions.some((r) => !sameSetupMeshDefinition(r, definitions[0]))) {
     throw new CoreInputError(`${where}: skins [${fills.join(', ')}] fill this attachment differently; choose a named skin`);
   }
   const geometry = resolved.record.geometry;

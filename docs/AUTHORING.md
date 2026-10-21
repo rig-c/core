@@ -12074,6 +12074,13 @@ const mesh: SetupMesh = readSetupMesh(view, target);
 | `mesh.vertices` | fresh mutable `number[]`, flat x,y in world units; stored coordinates and weights use the poser's float32 reading and influence order, without normalization |
 | `mesh.triangles`, `mesh.hull` | fresh mutable triangle indices; hull is the number of leading hull **vertices**, or `null` when absent |
 
+Definition equality ignores object property insertion order at every depth,
+including weighted binding records. Array positions, object key presence and
+leaf values remain significant; leaves use `Object.is`, so positive and negative
+zero are distinct when retained in a model. Reordering object keys alone is not
+a different definition. A genuine value, shape or array-order difference still
+produces the same named all-skin refusal; no merge order is inferred.
+
 The setup matrices come from the raw setup poser's existing constraint path,
 including setup sliders and reset physics. A selected mesh is bit-identical to
 `poseRawSetup(view)`'s geometry, including any setup-slider deform. An unselected

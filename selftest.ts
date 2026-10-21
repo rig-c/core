@@ -16697,6 +16697,46 @@ function runSetupMesh1538Suite(): number {
     for (const difference of differences) console.log(`          SLIDER_NONSELECTED ${difference}`);
     say('S1538_09_OFFICIAL_SETUP_SLIDER_AND_LINKED_INHERITANCE', probes, `${compared} selected/nonselected official reads, ${differences.length} unselected slot-deform differences printed in full; selected setup-slider geometry agrees exactly`);
   }
+  {
+    const probes: string[] = [];
+    const rekeyed = { hull: alternate.hull, triangles: [...alternate.triangles], uvs: [...alternate.uvs], vertices: {
+      bindings: alternate.vertices.bindings.map((row) => row.map(({ bone, x, y, weight }) => ({ weight, y, x, bone }))), weighted: true,
+    }, kind: alternate.kind };
+    const pair = (other: unknown): CompiledDocument => document([skin('default', { s: { alternate } }), skin('named', { s: { alternate: other } })]);
+    const reordered = pair(rekeyed);
+    const kept = JSON.stringify(reordered);
+    try {
+      const got = readSetupMesh(reordered, { slot: 's', attachment: 'alternate' });
+      const named = readSetupMesh(reordered, { slot: 's', attachment: 'alternate', skin: 'default' });
+      if (got.skin !== 'default' || !same(got.vertices, named.vertices) || !same(got.triangles, named.triangles) || got.hull !== named.hull) probes.push('reordered object keys changed geometry or first-supplier resolution');
+    } catch (err) { probes.push(`equivalent weighted bindings with reordered object keys were refused: ${String(err)}`); }
+    if (JSON.stringify(reordered) !== kept) probes.push('the equivalent read mutated the model');
+    const changed = structuredClone(rekeyed); changed.vertices.bindings[0][0].x += 1;
+    const influences = structuredClone(rekeyed); influences.vertices.bindings[0].reverse();
+    const vertices = structuredClone(rekeyed); vertices.vertices.bindings.reverse();
+    const different: Array<[string, unknown]> = [
+      ['binding value', changed], ['triangle order', { ...rekeyed, triangles: [...rekeyed.triangles].reverse() }],
+      ['influence order', influences], ['vertex order', vertices], ['uv order', { ...rekeyed, uvs: [...rekeyed.uvs].reverse() }],
+      ['absent hull', { ...rekeyed, hull: undefined }],
+    ];
+    const refused = (model: CompiledDocument, what: string): void => {
+      try { readSetupMesh(model, { slot: 's', attachment: 'alternate' }); probes.push(`${what} was accepted under all`); }
+      catch (err) {
+        if (!(err instanceof CoreInputError) || !err.message.includes('slot "s" attachment "alternate" under skin "all"') || !err.message.includes('skins [default, named]') || !err.message.includes('choose a named skin')) probes.push(`${what}: ${String(err)}`);
+      }
+    };
+    for (const [what, other] of different) refused(pair(other), what);
+    // Plant after JSON reading: JSON.stringify would erase this signed-zero input difference.
+    const signed = pair(rekeyed);
+    const geometry = signed.skins.find((s) => s.name === 'named')?.attachments.s.alternate.geometry;
+    if (geometry?.kind !== 'mesh' || !geometry.vertices.weighted) probes.push('signed-zero probe reached no weighted mesh');
+    else {
+      const binding = geometry.vertices.bindings.flat().find((b) => Object.is(b.x, 0));
+      if (binding === undefined) probes.push('signed-zero probe reached no positive-zero coordinate');
+      else { binding.x = -0; refused(signed, 'signed zero'); }
+    }
+    say('S1538_10_OBJECT_KEY_ORDER_IS_NOT_A_DIFFERENT_DEFINITION', probes, `reordered object keys at attachment, vertices and weighted-binding levels accepted with identical named geometry; ${different.length + 1} genuine value, shape, array-order and signed-zero differences refused by slot, attachment and skins`);
+  }
   return bad;
 }
 
@@ -96069,7 +96109,7 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
     };
     const model = JSON.stringify({
       spec: 'rigc-compiled/1', referenceScale: UNSTATED_REFERENCE_SCALE,
-      bones: parts.bones.map((bone) => { if (!('inherit' in bone)) return bone; const { inherit, ...rest } = bone; return { ...rest, inheritMode: inherit }; }),
+      bones: parts.bones.map(({ inherit, ...b }) => ({ ...b, ...(inherit === undefined ? {} : { inheritMode: inherit }) })),
       slots: slots.map(({ attachment, ...s }) => ({ ...s, setup: attachment ?? null })),
       skins: [{ name: 'default', bones: [], constraints: {}, attachments: skinTable(true) }],
       // The event the keys fire, declared as the Spine file declares it (issue #955: readModel resolves a key's event by name).
@@ -104439,7 +104479,7 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
         spine: JSON.stringify({ skeleton: { spine: '4.3.13' }, bones, slots: [], constraints, skins: [{ name: 'default', attachments: {} }], animations: spineAnims }),
         model: JSON.stringify({
           spec: 'rigc-compiled/1', referenceScale: UNSTATED_REFERENCE_SCALE,
-          bones: bones.map((bone) => { if (!('inherit' in bone)) return bone; const { inherit, ...rest } = bone; return { ...rest, inheritMode: inherit }; }),
+          bones: bones.map(({ inherit, ...b }) => ({ ...b, ...(inherit === undefined ? {} : { inheritMode: inherit }) })),
           slots: [], skins: [{ name: 'default', bones: [], constraints: {}, attachments: {} }],
           constraints: constraints.map(({ type, name, ...c }) => ({ kind: type, name, declaredIn: 'rig', ...c })),
           events: [], animations: modelAnims,
@@ -107400,7 +107440,7 @@ function dmPair(spec: DmSpec): DmTexts {
     spec: 'rigc-compiled/1',
     // #958: every model document states its reference scale; these probes' Spine headers state none, so the compiler's unstated value.
     referenceScale: UNSTATED_REFERENCE_SCALE,
-    bones: spec.bones.map((bone) => { if (!('inherit' in bone)) return bone; const { inherit, ...rest } = bone; return { ...rest, inheritMode: inherit }; }),
+    bones: spec.bones.map(({ inherit, ...b }) => ({ ...b, ...(inherit === undefined ? {} : { inheritMode: inherit }) })),
     slots: spec.slots.map(({ attachment, ...s }) => ({ ...s, setup: attachment ?? null })),
     skins: skinNames.map((k) => ({ name: k, bones: [], constraints: {}, attachments: table(k, true) })),
     constraints: (spec.constraints ?? []).map(({ type, name, ...c }) => ({ kind: type, name, declaredIn: 'rig', ...c })),

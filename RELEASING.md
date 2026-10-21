@@ -1073,8 +1073,11 @@ closure gained no module (`CUR123`).
 mesh and linked-mesh setup world vertices, detached triangles and hull. Omitted
 skin retains the view; `null`, a name and `all` use the core's no/named/all-skin
 rules. A named skin falls back to the default table without applying its
-activation lists. Differing all-skin definitions are refused rather than chosen
-by an order the model lacks. Selected geometry includes setup-slider deform;
+activation lists. Definition equality ignores object property insertion order
+recursively, including weighted binding records; array positions, key presence
+and leaf values (`Object.is`, including signed zero) remain significant.
+Differing all-skin definitions are refused rather than chosen by an order the
+model lacks. Selected geometry includes setup-slider deform;
 unselected geometry is stored geometry through unchanged setup matrices, with
 no hypothetical selection or deform. AUTHORING §14 states the measured
 nonselected slider distinction (the official method reads the selected slot's

@@ -3,7 +3,9 @@
 #
 # Prereqs: bun, ImageMagick 7 (`magick`), and the Andale-Mono font — macOS ships
 # it, and it is the one mono face checked here that renders "→" AND leaves
-# "--flag" as two dashes rather than an en dash.
+# "--flag" as two dashes rather than an en dash. And `bun install` at the
+# repository root: step 8's `rigc preview` runs through @esotericsoftware/spine-core,
+# which the published package does not depend on, so it resolves from that install.
 #
 # ⭐ Nothing here authors any movement and nothing here draws Vela.
 # `portrait-src/` is a READ-ONLY copy of `gallery/portrait` at v0.14.0 — rig,

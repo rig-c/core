@@ -74,10 +74,14 @@ list). The finished GIFs land here as `rigc-scene.gif` and `rigc-scene@2x.gif`; 
 that ship are `assets/rigc-scene.gif` and `assets/rigc-scene@2x.gif`, and this README's
 numbers are those files'.
 
+Step 8's `bunx rigc preview` runs through `@esotericsoftware/spine-core`. The published
+package does not depend on it, so the command resolves it from this repository's own
+install: run `bun install` at the repository root before `./run.sh`.
+
 ## Preserved verbatim, and adapted
 
 Preserved from the session that made the film, byte for byte: `gif/layout.ts`,
-`tsconfig.json` — and `run.sh` (except the two blocks noted below) and `package.json`
+`tsconfig.json` — and `run.sh` (except where the table below says) and `package.json`
 were too, until the re-cut in the last row of the table. Every script
 already addressed its files *relatively*, through `new URL('../', import.meta.url)`, so
 **no path inside any script was ever re-aimed.**
@@ -92,6 +96,7 @@ scripts:
 | nothing else in `run.sh` | the version pin in step 0 is left at what the run used — see below |
 | `gif/assemble_gif.ts`, `gif/measure_ink.ts` and `gif/verify_gif.ts` each resolve the film's root with `fileURLToPath(new URL('../', import.meta.url))` where they used to read `new URL('../', import.meta.url).pathname` | `URL.pathname` is percent-encoded. Under a checkout whose path holds a space or a non-ASCII character these scripts created a sibling directory literally named `My%20Rigs`, wrote into it, and then failed with `ENOENT` on a directory that exists — so the film could not be re-run from such a checkout at all ([#558](https://github.com/rig-c/core/issues/558)). The URL each script builds is untouched; only its conversion to a path is. On an ASCII path the two spellings return the same string, trailing slash included, so no value any script computes moves and no output changes. |
 | `run.sh` step 0 installs `rig-c@2.64.3` where it installed `spine-rigc@0.14.0`, steps 6b and 7 cut and measure the 2x file; `package.json` pins the same; `gif/assemble_gif.ts`'s `TAGLINE`/`TAGLINE_NAME` read `rig-c`, and it and `gif/verify_gif.ts` take `--scale` | the band named the package by the name it first shipped under ([#1503](https://github.com/rig-c/core/issues/1503)). `bunx rigc` is unchanged: `rig-c` ships the same `rigc` bin |
+| `run.sh`'s header lists the root `bun install` under its prereqs | step 8's `rigc preview` runs through `@esotericsoftware/spine-core`, which the published package does not depend on; without that install the `rigc` bin hands off to the entry that links none of it, which refuses `preview` and stops the run under `set -e` ([#1527](https://github.com/rig-c/core/issues/1527)). Films one and two already said so; this one did not |
 
 ## What re-ran, and what did not
 

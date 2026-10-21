@@ -1219,7 +1219,7 @@ function refuseKeyOrder(
   const quantised =
     at > before
       ? `. The two were written ${at - before}s apart, within two float32 steps of each other (one step at ` +
-        `t=${stored} is ${step}s), and a key's time is stored as a float32 no later than the time written: ` +
+        `t=${stored} is ${step}s), and a key's time is stored as a float32 — the float a written value already names when it is that float's shortest decimal (which can sit above it, as 0.1's does), otherwise the float just below the time written: ` +
         (stored === storedBefore ? `both are stored at t=${stored}` : `key ${i} is stored at t=${stored}, before key ${i - 1} at t=${storedBefore}`) +
         `. Separate them by at least ${2 * step}s`
       : '';

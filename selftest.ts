@@ -22065,7 +22065,7 @@ function runKeyTimeSuite(): number {
   // rather than written down: the later time is placed off the earlier one by a
   // fraction of `float32Step` there, so what is tested is the relation, not a
   // number somebody measured once.
-  const QUANTISED_CLAUSE = "a key's time is stored as a float32 no later than the time written";
+  const QUANTISED_CLAUSE = "a key's time is stored as a float32 — the float a written value already names when it is that float's shortest decimal";
   const quantisedProbes = (got: { code: string | null; message: string }, named: string, stored: string, step: number): string[] => [
     ...orderProbes(got, named, false),
     ...(got.message.includes(QUANTISED_CLAUSE) ? [] : [`the quantisation clause is missing: ${got.message}`]),

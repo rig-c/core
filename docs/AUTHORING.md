@@ -6977,7 +6977,7 @@ release-workflow refusal, not a rig-spec or `build` failure. It names both SHAs:
 the run's `GITHUB_SHA` and the checked-out `HEAD`. Recovery requires a dispatched
 ref at the tag's commit whose `release.yml` contains the guard; an old tag whose
 workflow predates the guard cannot gain it from a newer `main`. See
-[Republishing a cut whose publish failed](../RELEASING.md#republishing-a-cut-whose-publish-failed)
+[Republishing a cut whose publish failed](https://github.com/rig-c/core/blob/main/RELEASING.md#republishing-a-cut-whose-publish-failed)
 for the recovery procedure.
 
 ### 5.1 Compile errors — before the gate

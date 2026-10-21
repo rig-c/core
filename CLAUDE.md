@@ -279,8 +279,11 @@ session rotated — the reader rule above, measured on ourselves. So it is here.
   explicit "LGTM #NNN" naming it, quoted in the cut report; the sub-commander
   approves the release PR's awaiting CI run on its current head only. A cut is
   published and cannot be taken back, so the sign has to name the PR it covers,
-  and an approval given to an older head would be a sign nobody gave. AI review
-  runs at most once per PR.
+  and an approval given to an older head would be a sign nobody gave. A release
+  PR is never armed: release-please rewrites its head on every push to main, so
+  an armed one would merge a head the LGTM never covered — it is merged by hand
+  with `--match-head-commit` naming the head the LGTM names. AI review runs at
+  most once per PR.
 - 🔒 **Never push to an armed PR** — one with auto-merge armed. Disable
   auto-merge first, push, report the new head, and the command post re-arms; a
   merge of main into the branch counts as a push. An armed PR merges whatever

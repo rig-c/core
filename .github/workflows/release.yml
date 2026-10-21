@@ -27,10 +27,15 @@
 # 502 on `npm publish --provenance`, on another package of the toolchain). A
 # publish by hand would lose provenance, and the trusted publisher names this
 # file. Such a tag is published by a dispatch with the `tag` input
-# (`gh workflow run release.yml -f tag=vX.Y.Z`): `plan` skips release-please
+# (`gh workflow run release.yml -f tag=vX.Y.Z --ref vX.Y.Z`, for a tag carrying
+# the guard below): `plan` skips release-please
 # and resolves the tag, then the same `gate` and the same `publish` run over
-# it, from this same file — so the trusted publisher and provenance are
-# unchanged, and there is no path to `publish` that does not pass the gate
+# it, from this same filename. The trusted publisher is unchanged, but npm
+# records the dispatch's GITHUB_REF/GITHUB_SHA, not checkout's HEAD. The publish
+# job refuses a dispatch whose SHA differs from that HEAD before any name is
+# published (PROVENANCE_SHA_MISMATCH, issue #1542). The dispatched ref must
+# itself carry this guard; an older tag's workflow is not retroactively fixed.
+# There is no path to `publish` that does not pass the gate
 # (RELEASING.md, "Republishing a cut whose publish failed"). `CUR131` holds
 # that shape and names each refusal.
 #
@@ -225,6 +230,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.tag }}
+
+      # npm's provenance reads GITHUB_SHA, not the tag checkout's HEAD. Keep
+      # this before every publish, including aliases, and leave pushes alone.
+      # A dispatch runs the workflow on its selected ref: only refs containing
+      # this guard enforce it; --ref on an old tag cannot acquire a newer guard.
+      - name: Refuse dispatched provenance from a different commit
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            checked_out_sha="$(git rev-parse HEAD)"
+            if [ "$GITHUB_SHA" != "$checked_out_sha" ]; then
+              echo "::error::PROVENANCE_SHA_MISMATCH: GITHUB_SHA=$GITHUB_SHA differs from checked-out HEAD=$checked_out_sha; dispatch from a ref at the tag's commit whose release.yml contains this guard"
+              exit 1
+            fi
+          fi
 
       - uses: oven-sh/setup-bun@v2
 

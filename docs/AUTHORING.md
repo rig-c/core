@@ -6972,6 +6972,14 @@ catalogue under it. An input flag that names a **directory** is a compile error
 with a remedy in it: `CE_COMPILE_JSON_READ_FAILED` says what the flag wants and
 names the one file there that reads as it (§5.1.2). It is never read as that file.
 
+**Maintainers — release workflow failures:** `PROVENANCE_SHA_MISMATCH` is a
+release-workflow refusal, not a rig-spec or `build` failure. It names both SHAs:
+the run's `GITHUB_SHA` and the checked-out `HEAD`. Recovery requires a dispatched
+ref at the tag's commit whose `release.yml` contains the guard; an old tag whose
+workflow predates the guard cannot gain it from a newer `main`. See
+[Republishing a cut whose publish failed](https://github.com/rig-c/core/blob/main/RELEASING.md#republishing-a-cut-whose-publish-failed)
+for the recovery procedure.
+
 ### 5.1 Compile errors — before the gate
 
 A `CompileError` names the object and the field, and nothing is written. Its line

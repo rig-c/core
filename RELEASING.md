@@ -472,17 +472,44 @@ already cut, so `gate` and `publish` are skipped and the registry keeps serving
 the previous version. A publish by hand would lose provenance, and the trusted
 publisher of every name is pinned to `release.yml`.
 
-The tag is published by a dispatch of the same workflow:
+**Source provenance has to name the checkout.** npm records `GITHUB_REF` and
+`GITHUB_SHA` from the workflow run in its provenance, not the commit that
+`actions/checkout` later selects. Dispatching on `main` while checking out an
+older tag therefore names `main`'s commit as the source of the tag's files.
+Before any publish — `rig-c` or either alias — the publish job compares
+`GITHUB_SHA` to `git rev-parse HEAD` on a `workflow_dispatch`. If they differ,
+it fails with `PROVENANCE_SHA_MISMATCH`, naming both full SHAs, and no publish
+runs. The push path is unchanged. This refuses a mismatched attestation; it
+does not rewrite the run's provenance variables or re-attest a published version
+(issue [#1542](https://github.com/rig-c/core/issues/1542)). `CUR133` executes
+the guard and publish bodies with closed command mocks: a mismatched dispatch
+publishes nothing, a matching dispatch reaches every name, and a push is not
+subject to the dispatch check.
+
+**Only dispatched refs containing the guard can enforce it.** GitHub runs
+`release.yml` from the dispatch's selected ref. A tag whose workflow predates
+this fix cannot acquire it by checking out newer code or by changing `main`.
+For a tag that contains the fix, dispatch on that tag explicitly so the run's
+SHA and checkout agree:
 
 ```sh
-gh workflow run release.yml -f tag=vX.Y.Z
+gh workflow run release.yml -f tag=vX.Y.Z --ref vX.Y.Z
 ```
+
+Another dispatched ref can pass only when it contains the guard and resolves
+to the same commit as the requested tag. A current `main` carrying the guard
+will refuse an older tag when those SHAs differ; selecting the old tag instead
+would run its old, unguarded workflow. Such a historical cut is not repaired by
+this fix: leave it for the next cut or obtain a separate recovery decision.
+The guard neither changes trusted-publisher settings nor authorizes an old
+workflow to publish.
 
 `plan` then skips release-please — it is a step held to a push, so a dispatch
 never cuts a tag or a release — and its *Resolve the tag to publish* step checks
 the tag. Everything after it is the push path's own: `gate` (the six shards and
-their merge over the tag), then `publish` (checkout of the tag, the corpus, the
-merged tally, the publish under all three names, the registry confirmation),
+their merge over the tag), then `publish` (checkout of the tag, the dispatch
+provenance check, the corpus, the merged tally, the publish under all three
+names, the registry confirmation),
 under the same condition — `plan`'s `publish` output — from the same file. There
 is no path from the dispatch to `publish` that does not pass `gate`. The resolve
 step refuses, each as one `::error::` line naming its rule, and the refusal

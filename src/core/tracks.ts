@@ -166,6 +166,7 @@ import { deformAt, setupArray, type CoreAttachmentTimeline } from './deform.ts';
 import { eventsFired, type CoreEventKey, type CoreEventRow } from './events.ts';
 import { checkedClock, environmentOf, openRawTracksPath, rotateOn, setEnvironmentOn, translateOn, type RawPose, type RawReset, type RawTracksPath } from './raw.ts';
 import type { PhysicsEnvironment } from './constraints_physics.ts';
+import { LivePhysicsParameters, type PhysicsParameterPatch, type PhysicsParameterRead } from './physics_parameters.ts';
 import { slotTimelinesApply } from './skins.ts';
 
 /** How the live tracks are opened: where the physics is reset (`RawReset`, the caller's, no default), the caller's adjustment of every pose's bone locals, and what each step moves the physics clock by (the header's *The physics clock*). */
@@ -233,6 +234,12 @@ export interface LiveTracks {
   setEnvironment(environment: Partial<PhysicsEnvironment>): void;
   /** The environment the next pose answers. */
   readonly environment: PhysicsEnvironment;
+  /** Per-instance final parameter layer, as LiveTrack.setPhysicsParameters. Persists across entry changes. */
+  setPhysicsParameters(name: string, patch: PhysicsParameterPatch): void;
+  /** Detached pending patch and last evaluated six values, or null effective before start / when never active. */
+  readPhysicsParameters(name: string): PhysicsParameterRead;
+  /** Removes the patch without resetting the physics history, as LiveTrack.clearPhysicsParameters. */
+  clearPhysicsParameters(name: string): void;
   /** spine-core's `Skeleton.physicsTranslate`, as `LiveTrack.physicsTranslate`. */
   physicsTranslate(x: number, y: number): void;
   /** spine-core's `Skeleton.physicsRotate`, as `LiveTrack.physicsRotate`. */
@@ -1322,6 +1329,7 @@ export function openTracks(doc: CompiledDocument, options: TracksOptions, plant:
 
 class Tracks implements LiveTracks {
   private readonly mixer: Mixer;
+  private readonly parameters: LivePhysicsParameters;
   private started = false;
   private steps = 0;
   private time = 0;
@@ -1336,6 +1344,8 @@ class Tracks implements LiveTracks {
     private readonly path: RawTracksPath,
   ) {
     this.mixer = new Mixer(doc, plant);
+    this.parameters = new LivePhysicsParameters(doc);
+    this.path.ctx.parameters = this.parameters;
   }
 
   get trackTime(): number {
@@ -1349,6 +1359,20 @@ class Tracks implements LiveTracks {
   setEnvironment(environment: Partial<PhysicsEnvironment>): void {
     this.live('setEnvironment');
     setEnvironmentOn(this.path.ctx, environment, 'the live tracks\'');
+  }
+
+  setPhysicsParameters(name: string, patch: PhysicsParameterPatch): void {
+    this.live('setPhysicsParameters');
+    this.parameters.set(name, patch);
+  }
+
+  readPhysicsParameters(name: string): PhysicsParameterRead {
+    return this.parameters.read(name);
+  }
+
+  clearPhysicsParameters(name: string): void {
+    this.live('clearPhysicsParameters');
+    this.parameters.clear(name);
   }
 
   physicsTranslate(x: number, y: number): void {

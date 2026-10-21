@@ -5420,6 +5420,47 @@ skeleton's units and axes, and its change of rotation as `physicsRotate(0, 0,
 Δ)`, before the `step` that poses the frame. Nothing set, every pose is the
 one the track posed before these existed (`CO57`).
 
+For a live preview of one named constraint (issue #1541), both `LiveTrack` and
+`LiveTracks` on `rig-c/core` expose:
+
+```ts
+track.setPhysicsParameters('spring', { damping: 0.3, wind: 2 });
+const { override, effective } = track.readPhysicsParameters('spring');
+track.clearPhysicsParameters('spring');
+```
+
+`PhysicsParameters` has exactly six numeric fields: `strength`, `damping`,
+`inertia`, `wind`, `gravity`, `mix`. `PhysicsParameterPatch` is a partial set of
+them; setting merges with the instance's existing patch, omitted fields keep
+their overrides, and an empty patch does nothing. Finite numbers are accepted
+without clamping or unit conversion. The patch applies after the authored,
+keyed and slider values, immediately before that active constraint's integrator.
+It persists across poses, loops and composed-entry replacement or mixing out to
+nothing, until `clearPhysicsParameters(name)` removes the whole named patch.
+No document, another instance, or another named constraint is changed.
+
+`PhysicsParameterRead` contains detached snapshots: `override` is the patch
+currently in force, or `null`; `effective` is the exact six values last passed
+to that constraint's step, or `null` when it has never been evaluated. In
+particular composed tracks before `start()` and inactive constraints have no
+evaluated values. Returning resolved setup defaults there would invent a pose:
+the parser has read them, but the integrator has not used them. A single track
+evaluates pose 0 when opened, including under `reset: 'setup'`. Setting or
+clearing changes `override` immediately, while `effective` keeps describing the
+previous evaluation until the next pose. No reset or fake evaluation is done to
+fill a readout. Values omitted by the author come from the existing resolved
+records; this API defines no second default table.
+
+Clear resumes whatever authored, keyed and slider values the next pose supplies,
+and retains the clock, offsets, velocities and remaining integration time. It
+does not undo motion or promise transforms equal to an untouched trajectory.
+An unknown constraint name, a name of another kind, an unknown field (including
+`mass`), or a non-finite/non-number field throws a named `CoreInputError` before
+any part of the patch changes. Set/read/clear name errors list the relevant
+name; field errors also name the field and required finite value or allowed
+field set. The composed tracks' existing refusal of animation constraint
+timelines is unchanged; this API adds no timeline mixing or solver behavior.
+
 `mix` is a player-side `AnimationStateData` config and is **not** emitted into
 skeleton JSON, so the parser is the only check it gets: it is
 `{ "default": <seconds>, "pairs"?: [["<from>", "<to>", <seconds>], …] }`, and a

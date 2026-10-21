@@ -16741,6 +16741,20 @@ function runSetupMesh1538Suite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// live named physics parameter overrides (issue #1541)
+// ---------------------------------------------------------------------------
+import { physicsParameter1541Cases } from './tools/physics_parameters_1541_cases.ts';
+function runPhysicsParameters1541Suite(): number {
+  console.log('\n── live named physics parameters (issue #1541) ──');
+  let bad = 0;
+  physicsParameter1541Cases((name, probes, detail) => {
+    bad += reportCase(name, probes.length === 0, probeDetail(probes.length === 0, probes, detail),
+      'issue #1541: per-instance overrides are the last parameter layer, and clear preserves physics history');
+  });
+  return bad;
+}
+
+// ---------------------------------------------------------------------------
 // the helpers the gates call, gated (issues #499, #506)
 // ---------------------------------------------------------------------------
 //
@@ -144458,6 +144472,7 @@ function main(): void {
   tally.of('partial-run', () => runPartialRunSuite(tally));
   tally.of('gate-helper', runGateHelperSuite);
   tally.of('setup-mesh', runSetupMesh1538Suite);
+  tally.of('physics-parameters', runPhysicsParameters1541Suite);
   const gallery = tally.of('gallery-example', runGallerySuite, {
     ran: (value) => value.examples > 0,
     failures: (value) => value.failures,
@@ -144771,6 +144786,7 @@ function main(): void {
     'where a suite whose value states no count at all is named rather than read as zero)';
   const gateHelpers =
     ', + ' + n('setup-mesh') + ' named setup mesh read controls (issue #1538)' +
+    ', + ' + n('physics-parameters') + ' live named physics parameter override controls (issue #1541)' +
     ', + ' + n('gate-helper') + ' controls over the helpers the gates themselves call (issue #499 — the guard ' +
     'inside the helper a control hands its verdict and its probe list to: a FALSE verdict over an EMPTY list is ' +
     'the signature of a detail derived from something other than the verdict, and the helper prints that by name ' +

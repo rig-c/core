@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.67.0](https://github.com/rig-c/core/compare/v2.66.0...v2.67.0) (2026-10-21)
+
+
+### Features
+
+* **core:** override named physics parameters on live tracks ([#1548](https://github.com/rig-c/core/issues/1548)) ([df1da2d](https://github.com/rig-c/core/commit/df1da2d18a432b84a5d1937ae4fdd8fc20feef02)), closes [#1541](https://github.com/rig-c/core/issues/1541)
+* **core:** pass current-entry context to local adjustments ([#1546](https://github.com/rig-c/core/issues/1546)) ([c78b540](https://github.com/rig-c/core/commit/c78b540d7483e444146c63a67006508bd317f84a)), closes [#1540](https://github.com/rig-c/core/issues/1540)
+
 ## [2.66.0](https://github.com/rig-c/core/compare/v2.65.2...v2.66.0) (2026-10-21)
 
 

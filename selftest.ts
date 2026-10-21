@@ -22060,6 +22060,88 @@ function runKeyTimeSuite(): number {
     'a plain out-of-order key is not a cycle boundary, and the pair is what tells the author which two keys to swap',
   );
 
+  // K15–K17 (issue #1525): the cycle sentence reads AUTHORED times, and every
+  // key after the pair. The collapsing pairs are found on the float32 grid
+  // rather than written down: the later time is placed off the earlier one by a
+  // fraction of `float32Step` there, so what is tested is the relation, not a
+  // number somebody measured once.
+  const QUANTISED_CLAUSE = "a key's time is stored as a float32 — the float a written value already names when it is that float's shortest decimal";
+  const quantisedProbes = (got: { code: string | null; message: string }, named: string, stored: string, step: number): string[] => [
+    ...orderProbes(got, named, false),
+    ...(got.message.includes(QUANTISED_CLAUSE) ? [] : [`the quantisation clause is missing: ${got.message}`]),
+    ...(got.message.includes(stored) ? [] : [`the clause does not say where the keys are stored ("${stored}"): ${got.message}`]),
+    ...(got.message.includes(`is ${step}s`) ? [] : [`the clause does not name the float32 step ${step}s: ${got.message}`]),
+  ];
+  const quantisedCase = (
+    name: string,
+    got: { code: string | null; message: string },
+    named: string,
+    stored: string,
+    step: number,
+    why: string,
+  ): void => {
+    const probes = quantisedProbes(got, named, stored, step);
+    // Two plants, each judged by the fault it must raise: the clause taken out,
+    // and the cycle sentence put back in.
+    const cut = got.message.indexOf(`. The two were written`);
+    const removed = raisedBy(quantisedProbes({ code: got.code, message: cut < 0 ? got.message : got.message.slice(0, cut) }, named, stored, step), {
+      at: 'the quantisation clause is missing',
+    });
+    if (removed.length === 0) probes.push('the plant (quantisation clause removed) was not caught');
+    const appended = raisedBy(quantisedProbes({ code: got.code, message: `${got.message}. ${CYCLE_SENTENCE}` }, named, stored, step), {
+      at: 'the cycle sentence is present',
+    });
+    if (appended.length === 0) probes.push('the plant (cycle sentence appended) was not caught');
+    const held = probes.length === 0;
+    say(name, held, probeDetail(held, probes, `refused with: ${got.message} — plants (clause removed, cycle sentence appended) caught`), why);
+  };
+  const rgbaKeys = (times: number[]): Array<{ t: number; v: number[] }> => times.map((t) => ({ t, v: [1, 1, 1, 1] }));
+  // K15: a time half a float32 step past 1 is stored on 1 itself, and the keys
+  // around it are spaced so that reading the stored pair as a shared time would
+  // see a 1 s cycle repeat — the sentence the pre-#1525 helper printed here.
+  const oneStep = float32Step(1);
+  const halfPast = 1 + oneStep / 2;
+  const collapsed = orderRefusal(orderMotion(2, { slot: 'block', property: 'rgba', keys: rgbaKeys([0, 0.5, 1, halfPast, 1.5, 2]) }));
+  quantisedCase(
+    'K15_two_authored_times_stored_on_one_float_carry_the_quantisation_clause_and_no_cycle_sentence',
+    collapsed,
+    pair(3, halfPast, 1),
+    'both are stored at t=1',
+    oneStep,
+    'Codex review on PR #1513: equality was read after quantisation, so two times the author wrote apart were called a cycle boundary and the advice was to drop a closing key that does not exist',
+  );
+  // K16: the window the pre-#1525 helper read stopped one key short, so the
+  // shape `0, a, a, 2a, 2a + b` — one key on the spacing, the last off it — was
+  // called a cycle. Every key after the pair is held to its place now.
+  const offAtTheEnd = orderRefusal(orderMotion(2, { slot: 'block', property: 'rgba', keys: rgbaKeys([0, 0.5, 0.5, 1, 1.1]) }));
+  orderCase(
+    'K16_a_duplicate_whose_last_key_leaves_the_spacing_carries_the_pair_alone',
+    offAtTheEnd,
+    pair(2, 0.5, 0.5),
+    false,
+    `${offAtTheEnd.message}. ${CYCLE_SENTENCE}`,
+    'Codex review on PR #1513: `min(i − 1, keys.length − 1 − i)` keys were compared, so 1.1 was never read and the message claimed a 0.5 s cycle the keys do not have',
+  );
+
+  // K17: the clause says "within two steps", and this is why it cannot say one.
+  // A time that names its own float is stored at that float, which sits above
+  // it; a later time more than one step after it is still stored there.
+  const namedAbove = [0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9].find((t) => Math.fround(t) > t);
+  if (namedAbove === undefined) say('K17_a_pair_more_than_one_float32_step_apart_can_still_collapse', false, 'no one-decimal time below 1 has its float above it — the search came back empty, so nothing was planted', 'the search is the fixture');
+  else {
+    const aStep = float32Step(namedAbove);
+    const overOne = (namedAbove + aStep + (Math.fround(namedAbove) + aStep)) / 2;
+    const wide = orderRefusal(orderMotion(1, { slot: 'block', property: 'rgba', keys: rgbaKeys([0, namedAbove, overOne]) }));
+    const apart = overOne - namedAbove;
+    quantisedCase(
+      'K17_a_pair_more_than_one_float32_step_apart_can_still_collapse',
+      apart > aStep ? wide : { code: wide.code, message: `the fixture pair is ${apart}s apart, not more than one step (${aStep}s): ${wide.message}` },
+      pair(2, overOne, namedAbove),
+      `both are stored at t=${namedAbove}`,
+      aStep,
+      `issue #1525: the card asked for "closer than one step"; ${namedAbove} names a float above it, and a time ${apart}s later — more than the ${aStep}s step — is stored on the same float, so the clause says two`,
+    );
+  }
   // K14: one text, one place. The six sites throw through `refuseKeyOrder`, so
   // the phrase and the code each appear once in the compiler; a seventh copy
   // spelled at a call site is the drift the helper exists to stop.

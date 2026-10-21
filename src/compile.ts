@@ -1170,15 +1170,44 @@ function checkKeyTime(where: string, time: number, authored: number, duration: n
  * ⚠️ The repetition is compared in authored seconds within one float32 step of
  * the later key (`float32Step`) — `lag`/`stagger` shift every key of a track by
  * the same amount, so the spacing is the same before and after them.
+ *
+ * 🔒 **Every key after the pair is held to its periodic position, not a window
+ * of them** (issue #1525). The cycle is the `i` keys before the opening key —
+ * key 0 through the closing key `i − 1` — and the key `j` places after the
+ * opening one must sit at `keys[j mod i].t + period × (1 + floor(j / i))`. A
+ * window of `min(i − 1, keys.length − 1 − i)` keys read a phrase of two keys,
+ * a duplicate, then one key on the spacing and one off it — the shape
+ * `0, a, a, 2a, 2a + b` with `b` not `a` — as a cycle, because the key off the
+ * spacing sat past the window. The exam's shape — four cycles of five keys,
+ * each written from its start to its end, so the boundary key repeats at keys
+ * 4/5, 9/10 and 14/15 — still reads as one: the duplicates further on are the
+ * same rule at `j mod i = 0`.
+ *
+ * 🔒 **The cycle sentence needs the two keys to share an AUTHORED time** (issue
+ * #1525), not a stored one: `keyTime` puts a key on the largest float32 not
+ * above its time, so two times the author wrote apart can be stored as the
+ * same float, or the later one below the earlier. That pair is not a boundary
+ * the author repeated, so it gets the clause that says what did happen — the
+ * two authored values, the stored ones, and the float32 step there — and never
+ * the cycle sentence. "Within two steps" rather than one is measured, not
+ * rounded: a time that names its own float (`0.2`) is stored at that float,
+ * which can sit up to half a step above it, so a later time up to one and a
+ * half steps after it is stored at the same float.
  */
-function refuseKeyOrder(where: string, keys: ReadonlyArray<{ t: number }>, i: number, duplicate: boolean): never {
+function refuseKeyOrder(
+  where: string,
+  keys: ReadonlyArray<{ t: number }>,
+  i: number,
+  stored: number,
+  storedBefore: number,
+): never {
   const at = keys[i].t;
   const before = keys[i - 1].t;
   const period = at - keys[0].t;
-  const following = Math.min(i - 1, keys.length - 1 - i);
-  let repeats = duplicate && period > 0 && following >= 1;
-  for (let j = 1; repeats && j <= following; j++) {
-    if (Math.abs(keys[i + j].t - keys[j].t - period) > float32Step(keys[i + j].t)) repeats = false;
+  let repeats = at === before && period > 0 && i + 1 < keys.length;
+  for (let j = 1; repeats && i + j < keys.length; j++) {
+    const expected = keys[j % i].t + period * (1 + Math.floor(j / i));
+    if (Math.abs(keys[i + j].t - expected) > float32Step(keys[i + j].t)) repeats = false;
   }
   const boundary = repeats
     ? `. The keys from t=${keys[0].t} repeat every ${period}s, so key ${i - 1} closes one cycle and key ${i} opens ` +
@@ -1186,9 +1215,17 @@ function refuseKeyOrder(where: string, keys: ReadonlyArray<{ t: number }>, i: nu
       'each cycle without its closing key and keep that key on the last cycle only — a looping player wraps from ' +
       'it to t=0, and a track that stops short holds its last key until the wrap'
     : '';
+  const step = float32Step(stored);
+  const quantised =
+    at > before
+      ? `. The two were written ${at - before}s apart, within two float32 steps of each other (one step at ` +
+        `t=${stored} is ${step}s), and a key's time is stored as a float32 — the float a written value already names when it is that float's shortest decimal (which can sit above it, as 0.1's does), otherwise the float just below the time written: ` +
+        (stored === storedBefore ? `both are stored at t=${stored}` : `key ${i} is stored at t=${stored}, before key ${i - 1} at t=${storedBefore}`) +
+        `. Separate them by at least ${2 * step}s`
+      : '';
   throw new CompileError(
     `${where}: key times must strictly increase — key ${i} at t=${at} does not come after key ${i - 1} at ` +
-      `t=${before} (keys counted from 0)${boundary}`,
+      `t=${before} (keys counted from 0)${boundary}${quantised}`,
     'CE_COMPILE_KEY_TIMES_NOT_INCREASING',
   );
 }
@@ -8151,7 +8188,7 @@ function compileValueTrack(
     const key = track.keys[i];
     const next = track.keys[i + 1];
     const time = keyTime(key.t + shift);
-    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time === out[i - 1].time);
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time, out[i - 1].time as number);
     checkKeyTime(where, time, key.t, duration);
     // A named-value timeline (`inherit`): the key's `v` is one name, stepped by
     // the format. The name is resolved rather than copied, and what is WRITTEN
@@ -8280,7 +8317,7 @@ function compileDrawOrder(
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time === out[i - 1].time);
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time, out[i - 1].time as number);
     checkKeyTime(where, time, key.t, duration);
     // No offsets = "back to the setup draw order", which is the parser's own
     // encoding for it. An empty array means the same thing and is written the
@@ -8519,7 +8556,7 @@ function compileConstraintTrack(
     const key = keys[i];
     const next = keys[i + 1];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time === out[i - 1].time);
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time, out[i - 1].time as number);
     checkKeyTime(where, time, key.t, duration);
 
     const entry: ModelKey = { time };
@@ -8945,7 +8982,7 @@ function compileSequenceTrack(
   for (let i = 0; i < track.keys.length; i++) {
     const key = track.keys[i];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time === out[i - 1].time);
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time, out[i - 1].time as number);
     checkKeyTime(where, time, key.t, duration);
     if (key.index !== undefined && key.index >= series.count) {
       throw new CompileError(
@@ -8983,7 +9020,7 @@ function compileDeformTrack(
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const time = keyTime(key.t);
-    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time === out[i - 1].time);
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, keys, i, time, out[i - 1].time as number);
     checkKeyTime(where, time, key.t, duration);
     // -- a key that states a MODEL rather than a run (issue #294) ------------
     //
@@ -9695,7 +9732,7 @@ function compileTrack(
     const key = track.keys[i];
     const next = track.keys[i + 1];
     const time = keyTime(key.t + shift);
-    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time === out[i - 1].time);
+    if (i > 0 && time <= (out[i - 1].time as number)) refuseKeyOrder(where, track.keys, i, time, out[i - 1].time as number);
     checkKeyTime(where, time, key.t, duration);
 
     if (shape === 'attachment') {

@@ -297,13 +297,17 @@ export type TriangleClipper = (polygon: readonly number[], vertices: readonly nu
 /** One step of the draw walk: a slot, what its bone's activity is, and what it shows as the walk reads it. */
 export type DrawStep =
   | { slot: string; kind: 'clip'; attachment: string; active: boolean; end: string | null; polygon: number[]; inverse: boolean; convex: boolean }
-  | { slot: string; kind: 'draw'; attachment: string; vertices: number[]; triangles: number[]; uvs: number[] }
+  | { slot: string; kind: 'draw'; attachment: string; vertices: readonly number[]; triangles: readonly number[]; uvs: readonly number[] }
   | { slot: string; kind: 'none' };
 
-/** The local UVs the oracle hands a region's four corners to the clipper with, in the corner order (bottom-left, upper-left, upper-right, bottom-right). */
-export const REGION_UVS: readonly number[] = [0, 1, 0, 0, 1, 0, 1, 1];
-/** A region's two triangles over its four corners — the runtime's quad triangulation (`src/render.ts`'s `QUAD_TRIANGLES`). */
-export const REGION_TRIANGLES: readonly number[] = [0, 1, 2, 2, 3, 0];
+/**
+ * The local UVs the oracle hands a region's four corners to the clipper with, in the corner order (bottom-left, upper-left, upper-right, bottom-right).
+ * Frozen (issue #1530): every drawn region of every pose hands out this one array (`rawDrawn` in `./raw.ts`), so a write to it would reach every
+ * frame a consumer holds — frozen, the write throws instead.
+ */
+export const REGION_UVS: readonly number[] = Object.freeze([0, 1, 0, 0, 1, 0, 1, 1]);
+/** A region's two triangles over its four corners — the runtime's quad triangulation (`src/render.ts`'s `QUAD_TRIANGLES`). Frozen, as `REGION_UVS` is and for its reason. */
+export const REGION_TRIANGLES: readonly number[] = Object.freeze([0, 1, 2, 2, 3, 0]);
 
 /** `clipThrough`'s shape, replaceable by the render suite's plants (`RC08`'s dropped region). */
 export type ShapeClipper = (shape: ClipShape, vertices: readonly number[], triangles: readonly number[], uvs: readonly number[]) => ClipResult | null;

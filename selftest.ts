@@ -92378,7 +92378,7 @@ function runPoseOracleSuite(): number {
 // Its own statement, so the suite lands as one hunk (the convention the
 // slider-reader suite states at its imports).
 import { activeBones, CORE_CONSTRAINT_KINDS, CORE_DUMPER, CoreInputError, foldBlend, foldInheritMode, gridRound, NOT_ADMITTED, poseSetup, readBlend, readColour, readModel, shownAttachment, type CompiledDocument, type CoreStated, type CoreBlendMode, type CorePlant, type SetupEvaluator, type ShownResolution } from './src/core/index.ts';
-import { regionCorners, worldVertices, type VertexPoser } from './src/core/vertices.ts';
+import { regionCorners, worldVertices, type MeshArrays, type VertexPoser } from './src/core/vertices.ts';
 import { clipShapeOf, clipThrough, clipTriangles, convexPieces, signedArea2, type ClipReading, type ClipShape, type TriangleClipper } from './src/core/clipping.ts';
 import { asOracleDocument, blockOf, coreDump, ORACLE_BLOCKS, OracleInputError, sampleTime as oracleSampleTime, type OracleDocument, type SlotRow } from './tools/pose_oracle.ts';
 import { runRecipe } from './tools/emit_hashes.ts';
@@ -104477,7 +104477,8 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
     //
     // Issue #1179, the second part: the scan no longer copies a drawn row's vertices (`scanDrawn`), so A10 — which collects an
     // animation's frames before it scans any — reads arrays the walk made. That is sound only while every pose's arrays are its own:
-    // `poseGeometry` maps each row's vertices into a new array per attachment per pose. Live: every array of a whole walk is a
+    // `poseGeometry` hands each row the poser's new array per attachment per pose, or a rounded copy of it (`roundedRow`, issue #1530;
+    // `CO59` plants the poser). Live: every array of a whole walk is a
     // distinct object, and the frames, kept to the walk's end, read the public walk's numbers. Planted: a poser handing every pose
     // one buffer per slot (`ScanPlant`) is read red on every walk whose vertices move, by the comparison CO43 runs.
     {
@@ -104532,6 +104533,187 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
         ok,
         probeDetail(ok, probes, `${walks} walk(s) of the clipping probe and the gallery rows, each kept whole before it is read: ${arrays} vertex array(s) handed on, ${liveShared} of them shared with another row, every frame the public walk's numbers; a poser reusing one buffer per slot read red on ${plantedRed} of the ${moving} walk(s) whose vertices move`),
         'issue #1179, the second part: without its copy the scan hands A10 arrays the walk made, which A10 keeps until the animation is walked; that holds only while each pose\'s arrays are its own',
+      );
+    }
+
+    // The subjects of CO59 and CO60: the clipping probe both ways and the gallery rows as built — not `scanPopulation`'s forged
+    // documents, whose non-finite numbers the raw entry refuses by name (CO49 holds that refusal).
+    const drawnSubjects = [
+      ...clipModels.map((model, i) => ({ where: `the clipping probe${i === 0 ? ' with physics' : ''}`, model })),
+      ...built.filter((b) => b.name.startsWith('gallery/') && b.exits.every((e) => e === 0)).map((b) => ({ where: b.name, model: readFileSync(join(b.out, MODEL_DOCUMENT_FILE), 'utf8') })),
+    ];
+
+    // --- CO59: a frame a consumer keeps still reads its own pose after the poses after it (issue #1530) --
+    //
+    // The raw entry no longer maps a drawn row's vertices, a clip polygon or a clipped row into a second array (`numbersOf` in
+    // `src/core/raw.ts`), and `poseGeometry` hands a row the poser's own array wherever rounding moves no number (`roundedRow` in
+    // `src/core/vertices.ts`). A player keeps frame N to draw while N+1 is posed, so that is sound only while no pose writes into an
+    // array an earlier pose handed out. Live: each walk's and each live track's frames are copied as they are posed, kept to the
+    // walk's end, and read against their copies. Planted: a region poser and a vertex poser that keep one buffer per attachment and
+    // write every pose into it — the shape of a reused output buffer — are read red, each walk by `raisedBy` on its own name.
+    {
+      const probes: string[] = [];
+      const steps = new Array<number>(12).fill(0.1);
+      const arraysOf = (p: RawPose): number[][] => [...p.drawn.map((d) => d.vertices), ...p.clips.map((c) => c[3]), ...p.clipped.flatMap((c) => [c[3], c[4]])];
+      const copyOf = (p: RawPose): number[][] => arraysOf(p).map((a) => [...a]);
+      /** Each kept frame against the copy taken when it was posed: the first number that moved, per frame, named. */
+      const keptFaults = (label: string, poses: readonly RawPose[], copies: readonly number[][][]): string[] => {
+        const faults: string[] = [];
+        poses.forEach((pose, i) => {
+          const now = arraysOf(pose);
+          const then = copies[i];
+          for (let k = 0; k < then.length; k++) {
+            const j = then[k].findIndex((v, n) => !Object.is(v, now[k]?.[n]));
+            if (j >= 0 || now[k]?.length !== then[k].length) {
+              faults.push(`${label} frame ${i} array ${k}: number ${j} reads ${now[k]?.[j]} where it was posed as ${then[k][j]}`);
+              break;
+            }
+          }
+        });
+        return faults;
+      };
+      /** Every way a consumer is handed a series of poses — the batch walk (`poseRawAnimationEach`) and a held and a looping live track — each kept to its end. */
+      const keptWalks = (view: CompiledDocument, label: string, name: string, plant: TimelinePlant): { faults: string[]; frames: number; moves: boolean } => {
+        const faults: string[] = [];
+        let frames = 0;
+        let moves = false;
+        const read = (how: string, poses: RawPose[], copies: number[][][]): void => {
+          frames += poses.length;
+          moves ||= copies.some((c) => JSON.stringify(c) !== JSON.stringify(copies[0]));
+          faults.push(...keptFaults(`${label} "${name}" ${how}`, poses, copies));
+        };
+        const walked: RawPose[] = [];
+        const walkedCopies: number[][][] = [];
+        poseRawAnimationEach(view, name, steps, plant, 'animation', (pose) => {
+          walked.push(pose);
+          walkedCopies.push(copyOf(pose));
+        });
+        read('walk', walked, walkedCopies);
+        for (const loop of [false, true]) {
+          const track = openTrack(view, name, { loop, reset: 'animation' }, plant);
+          const poses = [track.first];
+          const copies = [copyOf(track.first)];
+          for (const dt of steps) {
+            const pose = track.step(dt);
+            poses.push(pose);
+            copies.push(copyOf(pose));
+          }
+          read(loop ? 'looping track' : 'held track', poses, copies);
+        }
+        return { faults, frames, moves };
+      };
+      let walks = 0;
+      let frames = 0;
+      let moving = 0;
+      let plantedRed = 0;
+      for (const { where, model } of drawnSubjects) {
+        const view = noSkinView(readModel(model, where));
+        for (const name of fileAnimationOrder(view)) {
+          walks++;
+          const live = keptWalks(view, where, name, {});
+          frames += live.frames;
+          probes.push(...live.faults);
+          if (!live.moves) continue;
+          moving++;
+          // The plant: one buffer per attachment — keyed on the atlas rectangle a region is posed over and the vertex array a mesh is
+          // posed from, both the document's — written by every pose, so each pose hands out the array the pose before it handed out.
+          const buffers = new Map<object, number[]>();
+          const reuse = (key: object, fresh: number[]): number[] => {
+            const kept = buffers.get(key) ?? [];
+            kept.length = 0;
+            kept.push(...fresh);
+            buffers.set(key, kept);
+            return kept;
+          };
+          const planted = keptWalks(view, where, name, {
+            region: (region, bone) => reuse(region.atlas, regionCorners(region, bone)),
+            vertices: (vertices, bone, world, coords) => reuse(vertices, worldVertices(vertices, bone, world, coords)),
+          });
+          const raised = raisedBy(planted.faults, { was: live.faults, at: `${where} "${name}" ` });
+          if (raised.length === 0) probes.push(`${where} "${name}": a poser writing every pose into one buffer per attachment was not caught — every kept frame read its copy`);
+          else plantedRed++;
+        }
+      }
+      probes.push(...floorProbes([[frames, 1, `${frames} frame(s) kept`], [moving, 1, `${moving} walk(s) whose arrays move`], [plantedRed, 1, `${plantedRed} planted walk(s) read red`]], 'so a frame overwritten by a later pose was not seen to fail'));
+      const ok = probes.length === 0;
+      say(
+        'CO59_A_FRAME_KEPT_PAST_THE_POSES_AFTER_IT_READS_ITS_OWN_POSE_AND_A_POSER_REUSING_ONE_BUFFER_IS_READ_RED',
+        ok,
+        probeDetail(ok, probes.slice(0, 12), `${walks} animation(s) of the clipping probe and the gallery rows, each walked, held and looped and kept whole: ${frames} frame(s) read against the copy taken when each was posed, every number unmoved; a poser writing every pose into one buffer per attachment read red on ${plantedRed} of the ${moving} walk(s) whose arrays move`),
+        'issue #1530: the raw entry hands a frame the arrays its pose built rather than a copy of them, and a player keeps frame N while N+1 is posed; that holds only while no pose writes into an array an earlier pose handed out',
+      );
+    }
+
+    // --- CO60: a drawn attachment's UVs and triangles are one frozen array per document view, the same on every pose (issue #1530) --
+    //
+    // The raw entry used to spread a drawn attachment's UVs and triangles into new arrays on every pose. It now hands out
+    // `REGION_UVS`/`REGION_TRIANGLES` for a region and `meshArraysOf`'s copy for a mesh — frozen, and the same object on every pose of
+    // the document view — while the document's own arrays stay its reader's: not frozen, never handed out. Live: across a held
+    // track's poses, every drawn row's UVs and triangles are frozen, the document's are not, and one slot drawing one attachment
+    // hands out the same two arrays on every pose. Planted, each read red by `raisedBy` at its own fault's name: a cache that keeps
+    // one copy per mesh unfrozen, and the old copy per pose.
+    {
+      const steps = new Array<number>(6).fill(0.1);
+      const census = { rows: 0, meshes: 0, regions: 0, repeats: 0 };
+      const sharedFaults = (plant: TimelinePlant, count: boolean): string[] => {
+        const faults: string[] = [];
+        for (const { where, model } of drawnSubjects) {
+          const view = noSkinView(readModel(model, where));
+          for (const skin of view.skins) {
+            for (const [slot, records] of Object.entries(skin.attachments)) {
+              for (const [placeholder, record] of Object.entries(records)) {
+                const g = record.geometry;
+                if (g?.kind === 'mesh' && (Object.isFrozen(g.uvs) || Object.isFrozen(g.triangles))) faults.push(`document: ${where} skin "${skin.name}" slot "${slot}" "${placeholder}": the document's own arrays were frozen`);
+              }
+            }
+          }
+          for (const name of fileAnimationOrder(view)) {
+            const track = openTrack(view, name, { loop: true, reset: 'animation' }, plant);
+            const first = new Map<string, { uvs: readonly number[]; triangles: readonly number[] }>();
+            for (const pose of [track.first, ...steps.map((dt) => track.step(dt))]) {
+              for (const d of pose.drawn) {
+                const at = `${where} "${name}" slot "${d.slot}" "${d.attachment}"`;
+                if (count) {
+                  census.rows++;
+                  if (d.kind === 'mesh') census.meshes++;
+                  else census.regions++;
+                }
+                if (!Object.isFrozen(d.uvs) || !Object.isFrozen(d.triangles)) faults.push(`frozen: ${at}: its ${Object.isFrozen(d.uvs) ? 'triangles' : 'uvs'} can be written`);
+                const key = `${d.slot}\u0000${d.attachment}`;
+                const seen = first.get(key);
+                if (seen === undefined) first.set(key, { uvs: d.uvs, triangles: d.triangles });
+                else {
+                  if (count) census.repeats++;
+                  if (seen.uvs !== d.uvs || seen.triangles !== d.triangles) faults.push(`identity: ${at}: a later pose handed out other ${seen.uvs !== d.uvs ? 'uvs' : 'triangles'} than its first`);
+                }
+              }
+            }
+          }
+        }
+        return faults;
+      };
+      const live = sharedFaults({}, true);
+      const probes: string[] = [...firstFew(live, 'shared-array fault(s)')];
+      const unfrozenCache = new WeakMap<object, MeshArrays>();
+      const unfrozen = sharedFaults({
+        meshArrays: (mesh) => {
+          const kept = unfrozenCache.get(mesh) ?? { uvs: [...mesh.uvs], triangles: [...mesh.triangles] };
+          unfrozenCache.set(mesh, kept);
+          return kept;
+        },
+      }, false);
+      const copied = sharedFaults({ meshArrays: (mesh) => ({ uvs: [...mesh.uvs], triangles: [...mesh.triangles] }) }, false);
+      const unfrozenRaised = raisedBy(unfrozen, { was: live, at: 'frozen: ' });
+      const copiedRaised = raisedBy(copied, { was: live, at: 'identity: ' });
+      if (unfrozenRaised.length === 0) probes.push('a mesh cache handing out one unfrozen copy per mesh was not caught');
+      if (copiedRaised.length === 0) probes.push('a copy of the mesh arrays per pose, the reading before issue #1530, was not caught');
+      probes.push(...floorProbes([[census.meshes, 1, `${census.meshes} drawn mesh row(s)`], [census.regions, 1, `${census.regions} drawn region row(s)`], [census.repeats, 1, `${census.repeats} row(s) drawn again by a later pose`]], 'so a kind of drawn row was not held'));
+      const ok = probes.length === 0;
+      say(
+        'CO60_A_DRAWN_ATTACHMENTS_UVS_AND_TRIANGLES_ARE_ONE_FROZEN_ARRAY_PER_DOCUMENT_VIEW_AND_A_COPY_OR_AN_UNFROZEN_CACHE_IS_READ_RED',
+        ok,
+        probeDetail(ok, probes, `${census.rows} drawn row(s) of the clipping probe and the gallery rows — ${census.meshes} mesh, ${census.regions} region — every one's UVs and triangles frozen, the document's own arrays not, and the same two arrays on each of the ${census.repeats} row(s) a later pose drew again; an unfrozen cache read red on ${unfrozenRaised.length} row(s), a copy per pose on ${copiedRaised.length}`),
+        'issue #1530: the raw entry stopped copying a drawn attachment\'s UVs and triangles on every pose; handing one array out to every frame is sound only while no frame can write it, and it is worth something only while it is the same array on every pose',
       );
     }
 

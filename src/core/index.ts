@@ -176,7 +176,7 @@ import type { ModelAtlasRect, ModelBone, ModelEditorOrder, ModelPage, ModelPageR
 import { worldTransforms, type CoreWorld } from './world.ts';
 import { readAnimationTimelines, type CoreAnimationTimelines } from './animation.ts';
 import { readEventDefs, type CoreEventDef } from './events.ts';
-import { poseGeometry, readGeometry, type CoreAttachmentRow, type CoreClipRow, type CoreGeometry, type DrawWalk, type RegionPoser, type ShownGeometry, type VertexPoser } from './vertices.ts';
+import { poseGeometry, readGeometry, type CoreAttachmentRow, type CoreClipRow, type CoreGeometry, type DrawWalk, type MeshArraysOf, type RegionPoser, type ShownGeometry, type VertexPoser } from './vertices.ts';
 import type { CoreClippedRow, ShapeClipper, TriangleClipper } from './clipping.ts';
 import { applyConstraints, constraintsAbsentWhy, readConstraintRecord, readConstraintTimelines, solverRules, type ConstraintPlant, type CoreConstraintRecord, type CoreConstraintTimelines, type SolverRules } from './constraints.ts';
 import { readPathRecord } from './constraints_path.ts';
@@ -1077,6 +1077,8 @@ export interface CorePlant {
   region?: RegionPoser;
   /** A vertex array's world positions (`worldVertices` in `./vertices.ts`). */
   vertices?: VertexPoser;
+  /** A drawn mesh's read-only UVs and triangles (`meshArraysOf` in `./vertices.ts`) — the raw entry's `drawn`; nothing but a control passes one. */
+  meshArrays?: MeshArraysOf;
   /** The ik, transform and path constraints as posed, rewritten before they are applied (`./constraints.ts`). */
   constraints?: ConstraintPlant;
   /** Issue #979's solver rules, one planted back to the reading before it (`RUNTIME_SOLVER_RULES` in `./constraints.ts`). */

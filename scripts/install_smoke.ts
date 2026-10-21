@@ -451,6 +451,8 @@ const REQUESTED_IN_1416 = 'the environment the physics answers, requested on iss
  * (`CA12` holds the identity); this row holds the two symbols.
  */
 const REQUESTED_IN_1417 = 'rig-c/pose curve fitting, requested on issue #1417';
+/** The player's named setup geometry read, agreed on issue #1538. */
+const REQUESTED_IN_1538 = 'rig-play named setup mesh read, requested on issue #1538';
 /** The compiler's own lattice/reach preflight, agreed for parts#378 on core#1450. */
 const AGREED_IN_1450 = 'parts#378 segments preflight, agreed on issue #1450';
 
@@ -626,6 +628,7 @@ const OBSERVED_SYMBOLS: ObservedEntry[] = [
   { entry: './core', observed: REQUESTED_IN_1396, needsRuntime: false, values: { physicsClockStep: 'function', PHYSICS_CLOCK_LEAD: 'constant' }, types: [] },
   { entry: './core', observed: REQUESTED_IN_1416, needsRuntime: false, values: {}, types: ['PhysicsEnvironment'] },
   { entry: './core', observed: REQUESTED_IN_1417, needsRuntime: false, values: { bezierPolyline: 'function', BEZIER_PIECES: 'constant' }, types: [] },
+  { entry: './core', observed: REQUESTED_IN_1538, needsRuntime: false, values: { readSetupMesh: 'function' }, types: ['SetupMesh', 'SetupMeshTarget'] },
 ];
 
 /**
@@ -1329,7 +1332,19 @@ if (core && (typeof core.readModel !== 'function' || typeof core.poseRawSetup !=
 if (core) {
   const text = readFileSync(join(HERE, plan.model), 'utf8');
   try {
-    const pose = core.poseRawSetup(core.readModel(text));
+    const view = core.readModel(text);
+    const pose = core.poseRawSetup(view);
+    const selected = pose.drawn.find((row) => row.kind === 'mesh');
+    if (!selected) said('named setup probe reached no mesh');
+    else {
+      const mesh = core.readSetupMesh(view, { slot: selected.slot, attachment: selected.attachment });
+      const same = (a, b) => a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
+      if (!same(mesh.vertices, selected.vertices) || !same(mesh.triangles, selected.triangles) || mesh.hull !== selected.hull) said('readSetupMesh differs from the installed raw setup mesh');
+      mesh.vertices.fill(123); mesh.triangles.reverse();
+      const again = core.readSetupMesh(view, { slot: selected.slot, attachment: selected.attachment });
+      if (!same(again.vertices, selected.vertices) || !same(again.triangles, selected.triangles)) said('readSetupMesh exposes shared mutable arrays');
+      console.log('CORE_SETUP_MESH ' + selected.slot + ' ' + selected.vertices.length / 2 + ' vertices');
+    }
     const names = pose.bones.map((b) => b.name);
     if (names.join(',') !== plan.bones.join(',')) said('poseRawSetup posed the bones ' + JSON.stringify(names) + ', and the fixture declares ' + JSON.stringify(plan.bones));
     const bone = pose.bones.find((b) => b.name === plan.bone);
@@ -1360,8 +1375,8 @@ process.exit(bad.length === 0 && core !== null ? 0 : 1);
 `;
 
 /** The one file vite bundles: the two calls a player makes, through the entry, by its bare name. */
-const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup } from '${NAME}/core';
-export const core = { readModel, poseRawSetup };
+const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup, readSetupMesh } from '${NAME}/core';
+export const core = { readModel, poseRawSetup, readSetupMesh };
 `;
 
 /**

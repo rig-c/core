@@ -16380,6 +16380,366 @@ function scanPlantClauses(path: string, text: string): PlantClauseScan {
   return out;
 }
 
+// Named setup reads (issue #1538), through the promised entry.
+import { readSetupMesh, type SetupMesh, type SetupMeshTarget } from './src/core/entry.ts';
+
+function runSetupMesh1538Suite(): number {
+  console.log('\n── named setup mesh reads (issue #1538) ──');
+  let bad = 0;
+  const say = (id: string, probes: string[], detail: string): void => {
+    bad += reportCase(id, probes.length === 0, probeDetail(probes.length === 0, probes, detail),
+      'issue #1538: a named read must reuse the setup poser and stored geometry without changing the selection or exposing document arrays');
+  };
+  const same = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const mesh = (xy: number[], hull: number | null = 3): Record<string, unknown> => ({
+    kind: 'mesh', vertices: { weighted: false, xy }, uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], ...(hull === null ? {} : { hull }),
+  });
+  const base = mesh([3, 0, 0, 0, 0, 4]);
+  const alternate = { kind: 'mesh', vertices: { weighted: true, bindings: [
+    [{ bone: 'a', x: 3, y: 0, weight: 0.25 }, { bone: 'b', x: 9, y: 0, weight: 0.75 }],
+    [{ bone: 'a', x: 0.1, y: 0, weight: 0.1 }, { bone: 'b', x: -0.2, y: 0.3, weight: 0.7 }],
+    [{ bone: 'b', x: 0, y: 4, weight: 1 }],
+  ] }, uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], hull: 3 };
+  const document = (skins: unknown[], extra: Record<string, unknown> = {}): CompiledDocument => readModel(JSON.stringify({
+    spec: 'rigc-compiled/1', referenceScale: UNSTATED_REFERENCE_SCALE,
+    bones: [{ name: 'root' }, { name: 'a', parent: 'root', x: 5, y: 7 }, { name: 'b', parent: 'root', x: -1, y: 2 }, { name: 'sleep', parent: 'root', x: 50, skinRequired: true }],
+    slots: [{ name: 's', bone: 'a', setup: 'base' }, { name: 't', bone: 'b', setup: null }, { name: 'inactive', bone: 'sleep', setup: null }],
+    skins, constraints: [], events: [], animations: [], images: [], pageGrids: [], droppedStates: [], absentParts: [], meshBones: {}, meshes: {}, physics: [], deformTransforms: [], trackDerivations: [], rig: {}, spine: { sha256: FORGED_SPINE_SHA256 }, ...extra,
+  }));
+  const skin = (name: string, attachments: Record<string, unknown>, bones: string[] = []): Record<string, unknown> => ({ name, attachments, bones, constraints: {} });
+  const table = { base, alternate, bare: mesh([0, 0, 4, 0, 0, 4], null), region: { kind: 'region', width: 4, height: 4, atlas: { width: 4, height: 4, offsetX: 0, offsetY: 0, originalWidth: 4, originalHeight: 4 } },
+    box: { kind: 'boundingbox', vertices: { weighted: false, xy: [0, 0, 4, 0, 0, 4] } },
+    clip: { kind: 'clipping', vertices: { weighted: false, xy: [0, 0, 4, 0, 0, 4] }, end: 't' },
+    path: { kind: 'path', vertices: { weighted: false, xy: [0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0] }, vertexCount: 6, closed: false, constantSpeed: false, lengths: [3, 4] } };
+  const doc = document([skin('default', { s: table, t: { linked: { kind: 'linkedmesh', skin: 'default', slot: 's', source: 'base', timelines: true } }, inactive: { base } })]);
+  const before = JSON.stringify(doc);
+  {
+    const probes: string[] = [];
+    const s: SetupMesh = readSetupMesh(doc, { slot: 's', attachment: 'base' });
+    const a = readSetupMesh(doc, { slot: 's', attachment: 'alternate' });
+    const literal = document([skin('default', { s: { base } })], { bones: [{ name: 'a', x: 5, y: 7 }], slots: [{ name: 's', bone: 'a', setup: 'base' }] });
+    if (!same(readSetupMesh(literal, { slot: 's', attachment: 'base' }).vertices.slice(0, 2), [8, 7])) probes.push('literal translated sentinel differs from (8,7)');
+    if (a.vertices.length !== 6) probes.push('weighted read lost a vertex');
+    if (!same(s.triangles, [0, 1, 2]) || s.hull !== 3) probes.push('topology or hull lost');
+    if (readSetupMesh(doc, { slot: 's', attachment: 'bare' }).hull !== null) probes.push('an absent hull was invented');
+    const linked = readSetupMesh(doc, { slot: 't', attachment: 'linked' });
+    if (linked.vertices.length !== 6 || !same(linked.triangles, [0, 1, 2]) || linked.attachment !== 'linked' || linked.hull !== 3) probes.push('linked source topology or queried slot bone lost');
+    const selected = poseRawSetup(doc).drawn.find((r) => r.slot === 's');
+    if (selected === undefined || !same(s.vertices, selected.vertices)) probes.push('selected raw pose differs');
+    s.vertices.fill(123); s.triangles.reverse(); s.hull = 0; s.skin = 'changed';
+    const again = readSetupMesh(doc, { slot: 's', attachment: 'base' });
+    if (selected === undefined || !same(again.vertices, selected.vertices) || !same(again.triangles, [0, 1, 2]) || again.hull !== 3 || JSON.stringify(doc) !== before) probes.push('output mutation reached the view');
+    say('S1538_01_LITERAL_VALUES_LINKED_TOPOLOGY_AND_DETACHED_OUTPUT', probes, 'literal root translation (8,7), weighted and cross-slot linked geometry, absent hull null, selected raw doubles exact; output mutation leaves the view and next read unchanged');
+  }
+  {
+    const probes: string[] = [];
+    const badTargets: Array<[SetupMeshTarget, string]> = [
+      [{ slot: 'missing-slot', attachment: 'base' }, 'missing-slot'], [{ slot: 's', attachment: 'missing-attachment' }, 'missing-attachment'],
+      [{ slot: 's', attachment: 'base', skin: 'missing-skin' }, 'missing-skin'],
+      ...['region', 'box', 'clip', 'path'].map((attachment): [SetupMeshTarget, string] => [{ slot: 's', attachment }, 'not a mesh']),
+    ];
+    for (const [target, named] of badTargets) {
+      try { readSetupMesh(doc, target); probes.push(`${JSON.stringify(target)} was accepted`); }
+      catch (err) { if (!(err instanceof CoreInputError) || !err.message.includes(named)) probes.push(`${named}: ${String(err)}`); }
+    }
+    const skinned = document([skin('default', { s: { base }, inactive: { base } }, ['sleep']), skin('named', { s: { other: mesh([8, 0, 0, 0, 0, 2]) } }, ['sleep'])]);
+    const none = underNoSkin(skinned);
+    if (readSetupMesh(none, { slot: 's', attachment: 'base', skin: 'named' }).skin !== 'default') probes.push('named default fallback lost');
+    if (!same(readSetupMesh(none, { slot: 'inactive', attachment: 'base' }).vertices, [0, 0, 0, 0, 0, 0])) probes.push('no skin activated a required bone');
+    if (readSetupMesh(none, { slot: 'inactive', attachment: 'base', skin: 'default' }).vertices[0] !== 53) probes.push('explicit default did not activate its listed bone');
+    if (readSetupMesh(skinned, { slot: 's', attachment: 'other' }).skin !== 'named') probes.push('all unique record did not resolve');
+    try { readSetupMesh(none, { slot: 's', attachment: 'other' }); probes.push('no skin read a named-only attachment'); } catch (err) { if (!(err instanceof CoreInputError)) probes.push(String(err)); }
+    const ambiguous = document([skin('default', { s: { base } }), skin('named', { s: { base: mesh([9, 0, 0, 0, 0, 4]) } })]);
+    try { readSetupMesh(ambiguous, { slot: 's', attachment: 'base' }); probes.push('all guessed between different geometry with the same display name/path'); } catch (err) { if (!(err instanceof CoreInputError) || !err.message.includes('choose a named skin')) probes.push(String(err)); }
+    const identical = document([skin('default', { s: { base } }), skin('named', { s: { base } })]);
+    if (readSetupMesh(identical, { slot: 's', attachment: 'base' }).skin !== 'default') probes.push('identical all definitions changed existing first-supplier resolution');
+    if (JSON.stringify(doc) !== before) probes.push('refusal mutated the view');
+    say('S1538_02_NAMED_REFUSALS_AND_SKIN_VIEW_SEMANTICS', probes, `${badTargets.length} named refusals; no/named/all skins, fallback, inactive bones, identical definitions and ambiguous geometry checked without model mutation`);
+  }
+  {
+    const probes: string[] = [];
+    const atlas = 'probe.png\nsize: 64, 64\nbase\nbounds: 0, 0, 4, 4\nalternate\nbounds: 4, 0, 4, 4\n';
+    const skeleton = {
+      skeleton: { spine: '4.3.13' }, bones: [{ name: 'root' }, { name: 'a', parent: 'root', x: 5, y: 7 }, { name: 'b', parent: 'root', x: -1, y: 2 }],
+      slots: [{ name: 's', bone: 'a', attachment: 'base' }],
+      skins: [{ name: 'default', attachments: { s: {
+        base: { type: 'mesh', uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], vertices: [3, 0, 0, 0, 0, 4], hull: 3 },
+        alternate: { type: 'mesh', uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], vertices: [2, 1, 3, 0, 0.25, 2, 9, 0, 0.75, 2, 1, 0.1, 0, 0.1, 2, -0.2, 0.3, 0.7, 1, 2, 0, 4, 1], hull: 3 },
+      } } }], animations: {},
+    };
+    const data = loadOracleData(JSON.stringify(skeleton), atlas, 'named setup literal oracle');
+    const official = new Skeleton(data); official.setupPose(); official.update(0); official.updateWorldTransform(Physics.reset);
+    const slot = official.slots[0];
+    for (const name of ['base', 'alternate']) {
+      const attachment = data.defaultSkin?.getAttachment(0, name);
+      if (!(attachment instanceof MeshAttachment)) { probes.push(`official ${name} is not a mesh`); continue; }
+      const expected = new Array<number>(attachment.worldVerticesLength).fill(0);
+      attachment.computeWorldVertices(official, slot, 0, attachment.worldVerticesLength, expected, 0, 2);
+      const got = readSetupMesh(doc, { slot: 's', attachment: name });
+      if (!same(got.vertices, expected)) probes.push(`${name}: ${JSON.stringify(got.vertices)} vs ${JSON.stringify(expected)}`);
+      if (!same(got.triangles, Array.from(attachment.triangles)) || got.hull !== attachment.hullLength / 2) probes.push(`${name} topology differs`);
+    }
+    say('S1538_03_OFFICIAL_SELECTED_AND_NONSELECTED_WEIGHTED_GEOMETRY', probes, 'official computeWorldVertices tolerance 0, ordinary JS output array: stored float32 coordinates and non-unit weight sum preserved; unselected weighted attachment read without switching the slot');
+  }
+  {
+    const probes: string[] = [];
+    const sliderDoc = document([skin('default', { s: { base, linked: { kind: 'linkedmesh', skin: 'default', slot: 's', source: 'base', timelines: true }, independent: { kind: 'linkedmesh', skin: 'default', slot: 's', source: 'base', timelines: false } } })], {
+      constraints: [{ kind: 'slider', name: 'dial', declaredIn: 'rig', animation: 'deform', time: 0.5 }],
+      animations: [{ name: 'deform', duration: 1, bones: [], slots: [], constraints: { ik: [], transform: [], path: [], physics: [], slider: [] }, attachments: [{ name: 'default', slots: [{ name: 's', attachments: [{ name: 'base', deform: [{ time: 0, vertices: [1, 2] }, { time: 1, vertices: [3, 4] }] }] }] }], drawOrder: [], events: [] }],
+    });
+    const kept = JSON.stringify(sliderDoc);
+    const selected = poseRawSetup(sliderDoc).drawn[0];
+    const got = readSetupMesh(sliderDoc, { slot: 's', attachment: 'base' });
+    if (!same(got.vertices, selected.vertices)) probes.push('selected setup slider deform was lost');
+    for (const name of ['linked', 'independent']) if (!same(readSetupMesh(sliderDoc, { slot: 's', attachment: name }).vertices, readSetupMesh(doc, { slot: 's', attachment: 'base' }).vertices)) probes.push(`unselected ${name} invented a hypothetical slider deform`);
+    // Copies are test inputs only: the production API never writes a setup field.
+    for (const name of ['linked', 'independent']) {
+      const view = underSkin({ ...sliderDoc, slots: sliderDoc.slots.map((slot) => slot.name === 's' ? { ...slot, setup: name } : slot) }, 'default');
+      const expected = name === 'linked' ? got.vertices : readSetupMesh(doc, { slot: 's', attachment: 'base' }).vertices;
+      if (!same(readSetupMesh(view, { slot: 's', attachment: name }).vertices, expected)) probes.push(`${name} selected timeline inheritance lost`);
+    }
+    if (JSON.stringify(sliderDoc) !== kept) probes.push('slider read changed the model');
+    say('S1538_04_SETUP_SLIDER_DEFORM_AND_LINKED_TIMELINE_INHERITANCE', probes, 'selected deform exact to raw setup; selected linked inherits only with timelines=true; nonselected linked reads stored source geometry through unchanged setup matrices');
+  }
+  {
+    const probes: string[] = [];
+    const work = mkdtempSync(join(harnessTemp(), 'rigc-1538-gallery-'));
+    let meshes = 0; let vertices = 0; let views = 0;
+    const recipes = galleryRecipes(import.meta.dir, (line) => console.log(`          ${line}`));
+    try {
+      for (const [index, recipe] of recipes.entries()) {
+        const dir = join(work, String(index)); mkdirSync(dir, { recursive: true });
+        for (const stage of recipe.stage) cpSync(join(import.meta.dir, stage.from), join(dir, stage.to), { recursive: true });
+        const args = recipe.commands[0].map((a) => a.replaceAll('{{work}}', dir).replaceAll('{{out}}', join(dir, 'out')));
+        const arg = (flag: string): string | undefined => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
+        try {
+          const built = compile({ rigPath: arg('--rig')!, motionPath: arg('--motion')!, outDir: arg('--out')!, manifestPath: arg('--manifest'), atlasInPath: arg('--atlas-in') });
+          const model = readModel(modelDocument(built.model, built.skeletonText, built.atlasText));
+          const skinViews = [model, underNoSkin(model), ...model.skins.map((s) => underSkin(model, s.name))];
+          for (const view of skinViews) {
+            views++;
+            const kept = JSON.stringify(view);
+            const raw = poseRawSetup(view);
+            for (const row of raw.drawn.filter((r) => r.kind === 'mesh')) {
+              const shown = raw.shown.find((s) => s.slot === row.slot);
+              if (!shown) { probes.push(`${recipe.name} ${row.slot}: no shown record`); continue; }
+              const got = readSetupMesh(view, { slot: row.slot, attachment: shown.placeholder });
+              if (!same(got.vertices, row.vertices) || !same(got.triangles, row.triangles) || got.hull !== row.hull) probes.push(`${recipe.name} skin ${view.skin} ${row.slot}/${shown.placeholder}: not bit-identical`);
+              meshes++; vertices += row.vertices.length / 2;
+            }
+            if (JSON.stringify(view) !== kept) probes.push(`${recipe.name} skin ${view.skin}: view changed`);
+          }
+        } catch (err) { probes.push(`${recipe.name}: ${String(err)}`); }
+      }
+      if (meshes === 0) probes.push('the gallery reached no mesh');
+      say('S1538_05_EVERY_GALLERY_SETUP_SELECTED_MESH_IS_BIT_IDENTICAL', probes, `${recipes.length} gallery recipes, ${views} no/named/all views, ${meshes} selected meshes, ${vertices} vertices: vertices bit-identical (Object.is), triangles and hull exact to poseRawSetup; input views unchanged`);
+    } finally { rmSync(work, { recursive: true, force: true }); }
+  }
+  {
+    const source = join(import.meta.dir, 'examples', 'spineboy', 'export', 'spineboy-pro.json');
+    const pack = join(dirname(source), 'spineboy.atlas');
+    if (!existsSync(source) || !existsSync(pack)) {
+      console.log('  SKIP  S1538_06_PUBLIC_SPINEBOY_SELECTED_AND_NONSELECTED: public example absent');
+      console.log('          ⚠️ HOLE: named setup public spineboy coverage needs `bun run fetch-examples`');
+    } else {
+      const probes: string[] = [];
+      const dir = mkdtempSync(join(harnessTemp(), 'rigc-1538-spineboy-'));
+      let selected = 0; let arbitrary = 0; let coords = 0;
+      try {
+        const specs = ingest(JSON.parse(readFileSync(source, 'utf8')), { name: 'public_setup_probe', art: 'none', source: 'spineboy-pro.json', version: '0' });
+        writeFileSync(join(dir, 'rig.json'), JSON.stringify(specs.rig)); writeFileSync(join(dir, 'motion.json'), JSON.stringify(specs.motion));
+        const built = compile({ rigPath: join(dir, 'rig.json'), motionPath: join(dir, 'motion.json'), outDir: join(dir, 'out'), atlasInPath: pack });
+        const model = readModel(modelDocument(built.model, built.skeletonText, built.atlasText));
+        const data = loadOracleData(built.skeletonText, built.atlasText, 'public named setup oracle');
+        for (const view of [model, underNoSkin(model), ...model.skins.map((s) => underSkin(model, s.name))]) {
+          const skeleton = new Skeleton(data);
+          if (view.skin !== null && view.skin !== 'all') skeleton.setSkin(view.skin);
+          skeleton.setupPose(); skeleton.update(0); skeleton.updateWorldTransform(Physics.reset);
+          const pose = poseRawSetup(view);
+          for (const row of pose.drawn.filter((r) => r.kind === 'mesh')) {
+            const shown = pose.shown.find((s) => s.slot === row.slot)!;
+            const got = readSetupMesh(view, { slot: row.slot, attachment: shown.placeholder });
+            if (!same(got.vertices, row.vertices) || !same(got.triangles, row.triangles) || got.hull !== row.hull) probes.push(`skin ${view.skin} ${row.slot}: raw setup differs`);
+            selected++;
+          }
+          for (const skin of view.skins) for (const [slotName, table] of Object.entries(skin.attachments)) for (const [key, record] of Object.entries(table)) {
+            if (record.kind !== 'mesh' && record.kind !== 'linkedmesh') continue;
+            const got = readSetupMesh(view, { slot: slotName, attachment: key });
+            const slot = skeleton.slots.find((s) => s.data.name === slotName)!;
+            const attachment = data.findSkin(got.skin)?.getAttachment(slot.data.index, key);
+            if (!(attachment instanceof MeshAttachment)) { probes.push(`${got.skin}/${slotName}/${key}: oracle has no mesh`); continue; }
+            const expected = new Array<number>(attachment.worldVerticesLength).fill(0);
+            attachment.computeWorldVertices(skeleton, slot, 0, attachment.worldVerticesLength, expected, 0, 2);
+            if (!same(got.vertices, expected)) probes.push(`${got.skin}/${slotName}/${key}: official geometry differs`);
+            if (!same(got.triangles, Array.from(attachment.triangles)) || got.hull !== attachment.hullLength / 2) probes.push(`${key}: official topology differs`);
+            if (pose.shown.find((s) => s.slot === slotName)?.placeholder !== key) arbitrary++;
+            coords += expected.length;
+          }
+        }
+        if (selected === 0 || arbitrary === 0) probes.push(`coverage floor: ${selected} selected, ${arbitrary} arbitrary`);
+        console.log(`          source SHA256 ${createHash('sha256').update(readFileSync(source)).digest('hex')}; atlas SHA256 ${createHash('sha256').update(readFileSync(pack)).digest('hex')}`);
+      } catch (err) { probes.push(String(err)); }
+      finally { rmSync(dir, { recursive: true, force: true }); }
+      say('S1538_06_PUBLIC_SPINEBOY_SELECTED_AND_NONSELECTED', probes, `${selected} selected meshes bit-identical to raw setup; ${arbitrary} nonselected reads, ${coords} official coordinates at tolerance 0; selected/nonselected topology and hull exact`);
+    }
+  }
+  {
+    const probes: string[] = [];
+    let cases = 0; let coords = 0;
+    const atlas = 'probe.png\nsize: 64, 64\nbase\nbounds: 0, 0, 4, 4\nalternate\nbounds: 4, 0, 4, 4\n';
+    const variants = [
+      { rotation: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+      { rotation: 37, scaleX: -1.25, scaleY: 0.73, shearX: 13, shearY: -27 },
+      { rotation: -113, scaleX: 2.1, scaleY: -0.6, shearX: -18, shearY: 24 },
+    ];
+    for (const transform of variants) for (const inherit of ['normal', 'onlyTranslation', 'noRotationOrReflection', 'noScale', 'noScaleOrReflection']) {
+      const bones = [{ name: 'root', rotation: 19, scaleX: -0.9, scaleY: 1.3, shearY: 7 }, { name: 'a', parent: 'root', x: 5, y: 7, ...transform }, { name: 'b', parent: 'a', x: -1, y: 2, inherit, ...transform }];
+      const skeleton = { skeleton: { spine: '4.3.13' }, bones, slots: [{ name: 's', bone: 'a', attachment: 'base' }, { name: 't', bone: 'b' }], skins: [{ name: 'default', attachments: {
+        s: { base: { type: 'mesh', uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], vertices: [3, 0, 0, 0, 0, 4], hull: 3 },
+          alternate: { type: 'mesh', uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], vertices: [2, 1, 3, 0, 0.25, 2, 9, 0, 0.75, 2, 1, 0.1, 0, 0.1, 2, -0.2, 0.3, 0.7, 1, 2, 0, 4, 1], hull: 3 } },
+        t: { linked: { type: 'linkedmesh', path: 'base', source: 'base', skin: 'default', slot: 's', timelines: true }, weighted: { type: 'linkedmesh', path: 'alternate', source: 'alternate', skin: 'default', slot: 's', timelines: false } },
+      } }], animations: {} };
+      try {
+        const model = document([skin('default', { s: { base, alternate }, t: {
+          linked: { kind: 'linkedmesh', path: 'base', source: 'base', skin: 'default', slot: 's', timelines: true },
+          weighted: { kind: 'linkedmesh', path: 'alternate', source: 'alternate', skin: 'default', slot: 's', timelines: false },
+        } })], { bones: bones.map((bone) => { if (!('inherit' in bone)) return bone; const { inherit, ...rest } = bone; return { ...rest, inheritMode: inherit }; }), slots: [{ name: 's', bone: 'a', setup: 'base' }, { name: 't', bone: 'b', setup: null }] });
+        const data = loadOracleData(JSON.stringify(skeleton), atlas, 'named reflected and linked oracle');
+        const posed = new Skeleton(data); posed.setupPose(); posed.update(0); posed.updateWorldTransform(Physics.reset);
+        for (const [slotName, key] of [['s', 'base'], ['s', 'alternate'], ['t', 'linked'], ['t', 'weighted']]) {
+          const slot = posed.slots.find((s) => s.data.name === slotName)!;
+          const attachment = data.defaultSkin?.getAttachment(slot.data.index, key);
+          if (!(attachment instanceof MeshAttachment)) { probes.push(`${key}: official mesh missing`); continue; }
+          const world = new Array<number>(attachment.worldVerticesLength).fill(0);
+          attachment.computeWorldVertices(posed, slot, 0, attachment.worldVerticesLength, world, 0, 2);
+          const got = readSetupMesh(model, { slot: slotName, attachment: key });
+          if (!same(got.vertices, world)) probes.push(`${inherit} ${transform.rotation} ${key}: official geometry differs`);
+          cases++; coords += world.length;
+        }
+      } catch (err) { probes.push(`${inherit} ${transform.rotation}: ${String(err)}`); }
+    }
+    say('S1538_07_OFFICIAL_REFLECTION_SHEAR_INHERIT_AND_CROSS_SLOT_LINKS', probes, `${cases} mesh reads, ${coords} coordinates at tolerance 0 against computeWorldVertices: three transforms, five bone inheritance modes, weighted/nonweighted, selected/nonselected and cross-slot linked geometry`);
+  }
+  {
+    const probes: string[] = [];
+    const dir = mkdtempSync(join(harnessTemp(), 'rigc-1538-path-'));
+    try {
+      const skeleton = { skeleton: { spine: '4.3.13' }, bones: [{ name: 'root' }, { name: 'a', parent: 'root', x: 5, y: 7 }, { name: 'b', parent: 'root', length: 4 }],
+        slots: [{ name: 's', bone: 'a', attachment: 'rail' }],
+        constraints: [{ type: 'path', name: 'walk', bones: ['b'], slot: 's', positionMode: 'fixed', spacingMode: 'fixed', rotateMode: 'tangent', position: 2, spacing: 0, mixRotate: 1, mixX: 1, mixY: 1 }],
+        skins: [{ name: 'default', attachments: { s: {
+          rail: { type: 'path', vertexCount: 6, vertices: [-2, 0, 0, 0, 3, 0, 6, 2, 9, 4, 12, 4], lengths: [10, 15], closed: false, constantSpeed: false },
+          candidate: { type: 'mesh', width: 4, height: 4, uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], vertices: [1, 2, 0, 0, 1, 1, 2, 4, 0, 1, 1, 2, 0, 4, 1], hull: 3 },
+        } } }], animations: {} };
+      const specs = ingest(skeleton, { name: 'path_setup_probe', art: 'none', source: 'probe.json', version: '0' });
+      writeFileSync(join(dir, 'rig.json'), JSON.stringify(specs.rig)); writeFileSync(join(dir, 'motion.json'), JSON.stringify(specs.motion));
+      const atlas = 'probe.png\nsize: 8, 8\ncandidate\nbounds: 0, 0, 4, 4\n';
+      writeFileSync(join(dir, 'probe.atlas'), atlas);
+      const built = compile({ rigPath: join(dir, 'rig.json'), motionPath: join(dir, 'motion.json'), outDir: join(dir, 'out'), atlasInPath: join(dir, 'probe.atlas') });
+      const model = underNoSkin(readModel(modelDocument(built.model, built.skeletonText, built.atlasText)));
+      const kept = JSON.stringify(model);
+      const data = loadOracleData(built.skeletonText, built.atlasText, 'unchanged path selection oracle');
+      const posed = new Skeleton(data); posed.setupPose(); posed.update(0); posed.updateWorldTransform(Physics.reset);
+      const slot = posed.slots[0]; const attachment = data.defaultSkin?.getAttachment(0, 'candidate');
+      if (!(attachment instanceof MeshAttachment)) probes.push('official candidate is not a mesh');
+      else {
+        const expected = new Array<number>(attachment.worldVerticesLength).fill(0);
+        attachment.computeWorldVertices(posed, slot, 0, attachment.worldVerticesLength, expected, 0, 2);
+        const got = readSetupMesh(model, { slot: 's', attachment: 'candidate' });
+        if (!same(got.vertices, expected)) probes.push('unchanged setup path constraint: official coordinates differ');
+        const switched = underNoSkin({ ...model, slots: model.slots.map((s) => ({ ...s, setup: 'candidate' })) });
+        if (same(readSetupMesh(switched, { slot: 's', attachment: 'candidate' }).vertices, got.vertices)) probes.push('the rejected attachment-switch alternative did not move this probe');
+      }
+      if (JSON.stringify(model) !== kept || model.slots[0].setup !== 'rail') probes.push('the read changed the setup path selection');
+    } catch (err) { probes.push(String(err)); }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+    say('S1538_08_NONSELECTED_READ_PRESERVES_PATH_CONSTRAINT_INPUT', probes, 'nonselected weighted mesh equals official setup geometry with a path still selected; switching that slot changes the measured geometry, so the rejected rewrite would fail this probe');
+  }
+  {
+    const probes: string[] = []; const differences: string[] = []; let compared = 0;
+    const atlas = 'probe.png\nsize: 8, 8\nbase\nbounds: 0, 0, 4, 4\n';
+    const links = { linked: { kind: 'linkedmesh', source: 'base', skin: 'default', slot: 's', timelines: true }, independent: { kind: 'linkedmesh', source: 'base', skin: 'default', slot: 's', timelines: false } };
+    for (const setup of ['base', 'linked', 'independent']) {
+      const model = document([skin('default', { s: { base, ...links } })], {
+        slots: [{ name: 's', bone: 'a', setup }],
+        constraints: [{ kind: 'slider', name: 'dial', declaredIn: 'rig', animation: 'd', time: 0.5 }],
+        animations: [{ name: 'd', duration: 1, bones: [], slots: [], constraints: { ik: [], transform: [], path: [], physics: [], slider: [] }, attachments: [{ name: 'default', slots: [{ name: 's', attachments: [{ name: 'base', deform: [{ time: 0, vertices: [1, 2] }, { time: 1, vertices: [3, 4] }] }] }] }], drawOrder: [], events: [] }],
+      });
+      const skeleton = { skeleton: { spine: '4.3.13' }, bones: [{ name: 'root' }, { name: 'a', parent: 'root', x: 5, y: 7 }], slots: [{ name: 's', bone: 'a', attachment: setup }],
+        constraints: [{ type: 'slider', name: 'dial', animation: 'd', time: 0.5 }],
+        skins: [{ name: 'default', attachments: { s: { base: { type: 'mesh', uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], vertices: [3, 0, 0, 0, 0, 4], hull: 3 },
+          linked: { type: 'linkedmesh', source: 'base', skin: 'default', slot: 's', path: 'base', timelines: true }, independent: { type: 'linkedmesh', source: 'base', skin: 'default', slot: 's', path: 'base', timelines: false },
+        } } }], animations: { d: { attachments: { default: { s: { base: { deform: [{ time: 0, vertices: [1, 2] }, { time: 1, vertices: [3, 4] }] } } } } } } };
+      const data = loadOracleData(JSON.stringify(skeleton), atlas, 'named slider inheritance oracle');
+      const posed = new Skeleton(data); posed.setupPose(); posed.update(0); posed.updateWorldTransform(Physics.reset);
+      for (const key of ['base', 'linked', 'independent']) {
+        const att = data.defaultSkin?.getAttachment(0, key);
+        if (!(att instanceof MeshAttachment)) { probes.push(`${key} has no official mesh`); continue; }
+        const expected = new Array<number>(att.worldVerticesLength).fill(0);
+        att.computeWorldVertices(posed, posed.slots[0], 0, att.worldVerticesLength, expected, 0, 2);
+        const got = readSetupMesh(model, { slot: 's', attachment: key });
+        const selectedWorld = poseRawSetup(model).drawn[0].vertices;
+        if (!same(expected, selectedWorld)) probes.push(`${setup}->${key}: official slot-deform reading changed`);
+        const shouldDiffer = setup !== 'independent' && setup !== key;
+        if (same(expected, got.vertices) === shouldDiffer) probes.push(`${setup}->${key}: documented slot-deform distinction changed`);
+        if (setup !== key) {
+          const undeformed = readSetupMesh(underSkin({ ...model, constraints: [] }, 'default'), { slot: 's', attachment: key });
+          if (!same(got.vertices, undeformed.vertices)) probes.push(`${setup}->${key}: nonselected stored geometry changed`);
+        }
+        if (!same(expected, got.vertices)) {
+          const delta = Math.max(...expected.map((v, i) => Math.abs(v - got.vertices[i])));
+          differences.push(`${setup}->${key} max delta ${delta}; official ${JSON.stringify(expected)}; read ${JSON.stringify(got.vertices)}`);
+          if (setup === key) probes.push(`${setup}: selected official geometry differs`);
+        }
+        compared++;
+      }
+    }
+    for (const difference of differences) console.log(`          SLIDER_NONSELECTED ${difference}`);
+    say('S1538_09_OFFICIAL_SETUP_SLIDER_AND_LINKED_INHERITANCE', probes, `${compared} selected/nonselected official reads, ${differences.length} unselected slot-deform differences printed in full; selected setup-slider geometry agrees exactly`);
+  }
+  {
+    const probes: string[] = [];
+    const rekeyed = { hull: alternate.hull, triangles: [...alternate.triangles], uvs: [...alternate.uvs], vertices: {
+      bindings: alternate.vertices.bindings.map((row) => row.map(({ bone, x, y, weight }) => ({ weight, y, x, bone }))), weighted: true,
+    }, kind: alternate.kind };
+    const pair = (other: unknown): CompiledDocument => document([skin('default', { s: { alternate } }), skin('named', { s: { alternate: other } })]);
+    const reordered = pair(rekeyed);
+    const kept = JSON.stringify(reordered);
+    try {
+      const got = readSetupMesh(reordered, { slot: 's', attachment: 'alternate' });
+      const named = readSetupMesh(reordered, { slot: 's', attachment: 'alternate', skin: 'default' });
+      if (got.skin !== 'default' || !same(got.vertices, named.vertices) || !same(got.triangles, named.triangles) || got.hull !== named.hull) probes.push('reordered object keys changed geometry or first-supplier resolution');
+    } catch (err) { probes.push(`equivalent weighted bindings with reordered object keys were refused: ${String(err)}`); }
+    if (JSON.stringify(reordered) !== kept) probes.push('the equivalent read mutated the model');
+    const changed = structuredClone(rekeyed); changed.vertices.bindings[0][0].x += 1;
+    const influences = structuredClone(rekeyed); influences.vertices.bindings[0].reverse();
+    const vertices = structuredClone(rekeyed); vertices.vertices.bindings.reverse();
+    const different: Array<[string, unknown]> = [
+      ['binding value', changed], ['triangle order', { ...rekeyed, triangles: [...rekeyed.triangles].reverse() }],
+      ['influence order', influences], ['vertex order', vertices], ['uv order', { ...rekeyed, uvs: [...rekeyed.uvs].reverse() }],
+      ['absent hull', { ...rekeyed, hull: undefined }],
+    ];
+    const refused = (model: CompiledDocument, what: string): void => {
+      try { readSetupMesh(model, { slot: 's', attachment: 'alternate' }); probes.push(`${what} was accepted under all`); }
+      catch (err) {
+        if (!(err instanceof CoreInputError) || !err.message.includes('slot "s" attachment "alternate" under skin "all"') || !err.message.includes('skins [default, named]') || !err.message.includes('choose a named skin')) probes.push(`${what}: ${String(err)}`);
+      }
+    };
+    for (const [what, other] of different) refused(pair(other), what);
+    // Plant after JSON reading: JSON.stringify would erase this signed-zero input difference.
+    const signed = pair(rekeyed);
+    const geometry = signed.skins.find((s) => s.name === 'named')?.attachments.s.alternate.geometry;
+    if (geometry?.kind !== 'mesh' || !geometry.vertices.weighted) probes.push('signed-zero probe reached no weighted mesh');
+    else {
+      const binding = geometry.vertices.bindings.flat().find((b) => Object.is(b.x, 0));
+      if (binding === undefined) probes.push('signed-zero probe reached no positive-zero coordinate');
+      else { binding.x = -0; refused(signed, 'signed zero'); }
+    }
+    say('S1538_10_OBJECT_KEY_ORDER_IS_NOT_A_DIFFERENT_DEFINITION', probes, `reordered object keys at attachment, vertices and weighted-binding levels accepted with identical named geometry; ${different.length + 1} genuine value, shape, array-order and signed-zero differences refused by slot, attachment and skins`);
+  }
+  return bad;
+}
+
 // ---------------------------------------------------------------------------
 // the helpers the gates call, gated (issues #499, #506)
 // ---------------------------------------------------------------------------
@@ -144097,6 +144457,7 @@ function main(): void {
   tally.of('run-tally', () => runRunTallySuite(tally), { live: true, whole: true });
   tally.of('partial-run', () => runPartialRunSuite(tally));
   tally.of('gate-helper', runGateHelperSuite);
+  tally.of('setup-mesh', runSetupMesh1538Suite);
   const gallery = tally.of('gallery-example', runGallerySuite, {
     ran: (value) => value.examples > 0,
     failures: (value) => value.failures,
@@ -144409,6 +144770,7 @@ function main(): void {
     'table cannot see whether the wiring fills either number; and beside it the half that bites on a green run, ' +
     'where a suite whose value states no count at all is named rather than read as zero)';
   const gateHelpers =
+    ', + ' + n('setup-mesh') + ' named setup mesh read controls (issue #1538)' +
     ', + ' + n('gate-helper') + ' controls over the helpers the gates themselves call (issue #499 — the guard ' +
     'inside the helper a control hands its verdict and its probe list to: a FALSE verdict over an EMPTY list is ' +
     'the signature of a detail derived from something other than the verdict, and the helper prints that by name ' +

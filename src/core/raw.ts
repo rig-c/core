@@ -113,7 +113,7 @@
  * naming why (`CoreInputError`): a renderer handed a pose with a block
  * missing would draw a different picture in silence.
  */
-import { activeBones, CoreInputError, drawWalkOf, poseSetup, rawNumber, readColour, shownAttachment, sourceOfDoc, underNoSkin, type CompiledDocument, type CorePlant, type CoreSlotRow } from './index.ts';
+import { activeBones, CoreInputError, drawWalkOf, poseSetup, rawNumber, readColour, shownAttachment, sourceOfDoc, underNoSkin, underSkin, type CompiledDocument, type CorePlant, type CoreSlotRow } from './index.ts';
 import { posedBoneWorld, posedBoneWorldAlone, posedSlots, type CoreAnimationTimelines, type LocalAdjust, type TimelinePlant } from './animation.ts';
 import { constraintsAbsentWhy, pathAnimationsWhy } from './constraints.ts';
 import { freshStepContext, rotatePhysics, steppedPreviousPassWhy, translatePhysics, DEFAULT_PHYSICS_ENVIRONMENT, type PhysicsEnvironment, type PhysicsStepContext } from './constraints_physics.ts';
@@ -121,8 +121,9 @@ import { attachmentStates } from './deform.ts';
 import { drawOrderAt, type CoreDrawOrderKey } from './draw_order.ts';
 import { eventsFired, type CoreEventRow } from './events.ts';
 import { REGION_TRIANGLES, REGION_UVS, type CoreClippedRow, type ShapeClipper } from './clipping.ts';
-import { meshArraysOf, poseGeometry, type CoreAttachmentRow, type CoreClipRow, type ShownGeometry } from './vertices.ts';
+import { meshArraysOf, poseGeometry, worldVertices, type CoreAttachmentRow, type CoreClipRow, type ShownGeometry } from './vertices.ts';
 import { RUNTIME_DEG, type CoreWorld } from './world.ts';
+import { fillingSkins } from './skins.ts';
 import type { SliderApplication } from './constraints_slider.ts';
 
 /** One bone, posed: the world transform and the runtime getters' four readings (the header's `bones`). */
@@ -463,6 +464,81 @@ function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world:
  */
 export function poseRawSetup(doc: CompiledDocument, plant: CorePlant = {}): RawPose {
   return setupPoseIn(doc, plant, RAW_MODE);
+}
+
+/** A table key to read, with an optional skin-view override; omitted skin keeps the supplied view. */
+export interface SetupMeshTarget {
+  readonly slot: string;
+  readonly attachment: string;
+  /** A named skin (with default fallback), `all`, or `null` for no skin set. */
+  readonly skin?: string | null;
+}
+
+/** A detached named mesh in setup world units, y up; hull counts vertices, not coordinates. */
+export interface SetupMesh {
+  slot: string;
+  /** The requested attachment table key, even when the record states another display name. */
+  attachment: string;
+  /** The skin whose table supplied the requested record, including a fallback. */
+  skin: string;
+  vertices: number[];
+  triangles: number[];
+  hull: number | null;
+}
+
+/** Model definitions by value: object key order is irrelevant, array positions and signed zero are not. */
+function sameSetupMeshDefinition(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b) && a.length !== b.length) return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) && sameSetupMeshDefinition(left[key], right[key]));
+}
+
+/**
+ * Read a named mesh without changing the setup selection or playing anything
+ * (issue #1538). Setup constraints and reset physics use the raw poser's own
+ * path. A selected mesh includes its setup-slider deform; an unselected mesh
+ * reads its stored geometry through those same matrices, with no hypothetical
+ * attachment switch or deform. Linked meshes use their source topology and
+ * bindings, and the queried slot's bone for unweighted vertices; `timelines`
+ * affects only a selected mesh's setup-slider deform, as in `poseRawSetup`.
+ *
+ * Skin resolution is the supplied view's unless explicitly overridden. Under
+ * `all`, differing definitions of the requested mesh are refused: the model
+ * does not carry the file order that would choose one. Object property order
+ * does not distinguish definitions; array positions and Object.is leaf values
+ * do. Identical definitions keep the resolver's first supplying skin. All arrays are fresh.
+ */
+export function readSetupMesh(doc: CompiledDocument, target: SetupMeshTarget): SetupMesh {
+  const view = target.skin === undefined ? doc : target.skin === null ? underNoSkin(doc) : underSkin(doc, target.skin);
+  const where = `setup mesh slot ${JSON.stringify(target.slot)} attachment ${JSON.stringify(target.attachment)} under skin ${JSON.stringify(view.skin)}`;
+  const slot = view.slots.find((s) => s.name === target.slot);
+  if (slot === undefined) throw new CoreInputError(`${where}: no such slot`);
+  const resolved = shownAttachment(view, slot, target.attachment);
+  if (resolved === null) throw new CoreInputError(`${where}: no such attachment`);
+  const fills = fillingSkins(view, slot.name, target.attachment);
+  const definitions = fills.map((name) => view.skins.find((k) => k.name === name)?.attachments[slot.name]?.[target.attachment]);
+  if ('conflict' in resolved || definitions.some((r) => !sameSetupMeshDefinition(r, definitions[0]))) {
+    throw new CoreInputError(`${where}: skins [${fills.join(', ')}] fill this attachment differently; choose a named skin`);
+  }
+  const geometry = resolved.record.geometry;
+  const mesh = geometry?.kind === 'linkedmesh'
+    ? view.skins.find((s) => s.name === geometry.skin)?.attachments[geometry.slot]?.[geometry.source]?.geometry
+    : geometry;
+  if (mesh?.kind !== 'mesh') throw new CoreInputError(`${where}: ${resolved.record.kind} is not a mesh`);
+  const { world, shown, drawOrder } = setupPosed(view, {}, RAW_MODE);
+  const selected = shown.find((s) => s.slot === slot.name && s.placeholder === target.attachment && s.skin === resolved.skin);
+  const bone = world.get(slot.bone);
+  if (bone === undefined) throw new CoreInputError(`${where}: no setup transform for bone ${JSON.stringify(slot.bone)}`);
+  const vertices = selected === undefined
+    ? numbersOf(worldVertices(mesh.vertices, bone, world).map(rawNumber), `${where} vertex`, RAW_MODE)
+    : rawDrawn(view, [selected], world, drawOrder, {}).drawn[0].vertices;
+  return { slot: slot.name, attachment: target.attachment, skin: resolved.skin, vertices: [...vertices], triangles: [...mesh.triangles], hull: mesh.hull ?? null };
 }
 
 /** `poseRawSetup` in `mode` — under `keep`, a value that is not finite stays in the pose (`./walk.ts`). */

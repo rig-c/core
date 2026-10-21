@@ -1062,6 +1062,31 @@ before (`CO57`), so the row adds one type and no value. It lives in
 `src/core/constraints_physics.ts`, which the entry already reached, so its
 closure gained no module (`CUR123`).
 
+**Named setup mesh reads, promised by request**
+([#1538](https://github.com/rig-c/core/issues/1538), `REQUESTED_IN_1538`):
+
+| entry | values promised | types promised |
+| --- | --- | --- |
+| `rig-c/core` | `readSetupMesh` | `SetupMeshTarget`, `SetupMesh` |
+
+`readSetupMesh(view, { slot, attachment, skin? })` reads selected or unselected
+mesh and linked-mesh setup world vertices, detached triangles and hull. Omitted
+skin retains the view; `null`, a name and `all` use the core's no/named/all-skin
+rules. A named skin falls back to the default table without applying its
+activation lists. Definition equality ignores object property insertion order
+recursively, including weighted binding records; array positions, key presence
+and leaf values (`Object.is`, including signed zero) remain significant.
+Differing all-skin definitions are refused rather than chosen by an order the
+model lacks. Selected geometry includes setup-slider deform;
+unselected geometry is stored geometry through unchanged setup matrices, with
+no hypothetical selection or deform. AUTHORING §14 states the measured
+nonselected slider distinction (the official method reads the selected slot's
+deform array, worst delta `2.9999999999999982` in `S1538_09`), the full contract and
+named `CoreInputError` refusals. No new math, runtime or node dependency is added.
+The entry re-exports the implementation in `raw.ts`; the smoke's observed row
+checks the value and both types, and its direct and browser-bundle probes call
+it on the installed fixture and test output-array isolation without spine-core.
+
 🤝 **A sixth, by the same exception**
 ([#1417](https://github.com/rig-c/core/issues/1417)): `bezierPolyline` and
 `BEZIER_PIECES`, the polyline the poser draws a Bézier segment as — the

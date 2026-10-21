@@ -1196,10 +1196,11 @@ const shownOfView = new WeakMap<CompiledDocument, Map<string, Map<string, ShownR
  * The answer reads the view's skins and the slot's name and placeholder only,
  * so it is resolved once per view, slot and placeholder and kept (issue
  * #1134: every sample of a walk resolved every slot again). Read-only to every
- * caller; a view built anew resolves its own.
+ * caller; a view built anew resolves its own. An explicit placeholder reads
+ * another table key without changing the slot (issue #1538).
  */
-export function shownAttachment(doc: CompiledDocument, slot: ModelSlot): ShownResolution {
-  if (slot.setup === null) return null;
+export function shownAttachment(doc: CompiledDocument, slot: ModelSlot, placeholder: string | null = slot.setup): ShownResolution {
+  if (placeholder === null) return null;
   let bySlot = shownOfView.get(doc);
   if (bySlot === undefined) {
     bySlot = new Map();
@@ -1210,9 +1211,9 @@ export function shownAttachment(doc: CompiledDocument, slot: ModelSlot): ShownRe
     byPlaceholder = new Map();
     bySlot.set(slot.name, byPlaceholder);
   }
-  if (byPlaceholder.has(slot.setup)) return byPlaceholder.get(slot.setup) as ShownResolution;
-  const resolved = resolveShown(doc, slot.name, slot.setup);
-  byPlaceholder.set(slot.setup, resolved);
+  if (byPlaceholder.has(placeholder)) return byPlaceholder.get(placeholder) as ShownResolution;
+  const resolved = resolveShown(doc, slot.name, placeholder);
+  byPlaceholder.set(placeholder, resolved);
   return resolved;
 }
 

@@ -573,17 +573,17 @@ export function legibilityReading(
     repeat === null
       ? 'either the frame holds more than one place this part fits, or every candidate missed the true one — ' +
         'a narrower --scale or --rotation window around what you know of the part tells the two apart'
-      : `every placement in the margin is at the best's scale (within ${(repeat.scaleRatio * 100).toFixed(2)}%, ` +
-        `bar ${REPEAT_SCALE_RATIO * 100}%) and in another place (the nearest ${repeat.spans.toFixed(2)} span(s) away, ` +
-        `bar ${REPEAT_DISTANCE_SPANS})` +
-        // 📍 Said only when the grouping set placements aside (issue #1526), so
-        // that "every placement" is not claimed of a margin holding a turned
-        // fit at the best's own centre — and so that every reading it did not
-        // touch is the sentence it was.
+      : // 📍 The subject is the places the bars measured (issue #1526): when the
+        // grouping set placements aside, those were not measured, so the sentence
+        // speaks of every other *place*; when it set none aside, places are
+        // placements and the sentence is the one it was.
         (repeat.samePlace === 0
-          ? ', which is'
-          : ` once the ${repeat.samePlace} placement(s) closer than ${REPEAT_DISTANCE_SPANS} span to a better-scoring ` +
-            'one are counted as its place, another angle or size of that fit; that is') +
+          ? 'every placement in the margin'
+          : `every other place in the margin — the ${repeat.samePlace} placement(s) closer than ${REPEAT_DISTANCE_SPANS} ` +
+            'span to a better-scoring one counted as its place, another angle or size of that fit —') +
+        ` is at the best's scale (within ${(repeat.scaleRatio * 100).toFixed(2)}%, ` +
+        `bar ${REPEAT_SCALE_RATIO * 100}%) and in another place (the nearest ${repeat.spans.toFixed(2)} span(s) away, ` +
+        `bar ${REPEAT_DISTANCE_SPANS}), which is` +
         ' the part — or a near-copy, such as a left/right pair cut from one drawing — drawn more than once: read the placements as an unordered set and order it across frames ' +
         '(MOTION.md §2.2 🔀); a --rotation window that excludes one place chooses the answer rather than measuring it';
   return (

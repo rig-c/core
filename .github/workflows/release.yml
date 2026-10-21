@@ -20,6 +20,12 @@
 # whole selftest again in one process) and the confirmation. `CUR119` in
 # selftest.ts holds that order.
 #
+# A push re-run can cut a tag at a commit newer than its GITHUB_SHA. Before
+# emitting publish=true, plan resolves the tag through the commits API and
+# refuses PROVENANCE_SHA_MISMATCH with both SHAs and a tag-ref dispatch command.
+# The tag remains cut. gate and publish consume the verified full SHA on pushes;
+# dispatch keeps its existing tag resolution and checked-out HEAD guard (#1551).
+#
 # A failure after the tag leaves a version unpublished: release-please has cut
 # the tag and the GitHub release, so a re-run no longer reports
 # `release_created` and `gate` and `publish` are skipped, while the registry
@@ -126,6 +132,7 @@ jobs:
     outputs:
       publish: ${{ steps.target.outputs.publish }}
       tag: ${{ steps.target.outputs.tag }}
+      sha: ${{ steps.target.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -164,7 +171,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = push ]; then
-            if [ "$CREATED" = true ]; then echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; else echo "publish=false" >> "$GITHUB_OUTPUT"; fi
+            if [ "$CREATED" != true ]; then echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+            # The commits API peels annotated tags; the refs API returns their tag-object SHA.
+            # An explicit tag ref avoids resolving a branch with the same name.
+            if [[ ! "$CUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: \"$CUT_TAG\" is not a stable cut tag vX.Y.Z"; exit 1; fi
+            if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $CUT_TAG to a commit"; exit 1; fi
+            if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $CUT_TAG did not resolve to a full commit SHA"; exit 1; fi
+            if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $CUT_TAG's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $CUT_TAG -f tag=$CUT_TAG"; exit 1; fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
@@ -196,7 +210,8 @@ jobs:
       contents: read # check out the tag
     uses: ./.github/workflows/selftest-shards.yml
     with:
-      ref: ${{ needs.plan.outputs.tag }}
+      # Push uses the verified SHA; dispatch retains its tag and HEAD guard.
+      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}
 
   # Everything below runs only on a tag `plan` resolved — the push that merged
   # the release PR, or a dispatched tag — and only once `gate` is green.
@@ -229,7 +244,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.plan.outputs.tag }}
+          # Do not resolve a push's mutable tag again after the plan checked it.
+          ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}
 
       # npm's provenance reads GITHUB_SHA, not the tag checkout's HEAD. Keep
       # this before every publish, including aliases, and leave pushes alone.

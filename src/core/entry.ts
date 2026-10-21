@@ -35,7 +35,7 @@ export { readSetupMesh, poseRawSetup, poseRawAnimation, poseRawAnimationEach, lo
 export type { SetupMesh, SetupMeshTarget, RawPose, RawBone, RawDrawn, RawClip, RawClipped, RawEvent, RawReset } from './raw.ts';
 export { poseWalkSetup, poseLoopingWalk } from './walk.ts';
 export { openTrack } from './track.ts';
-export type { LiveTrack, TrackOptions, AdjustableLocals, BoneLocals, LocalAdjust, PhysicsEnvironment } from './track.ts';
+export type { LiveTrack, TrackOptions, AdjustableLocals, BoneLocals, LocalAdjust, LocalAdjustContext, PhysicsEnvironment } from './track.ts';
 export { openTracks } from './tracks.ts';
 export type { LiveTracks, TracksOptions, MixOptions, QueueOptions, TrackEntryView } from './tracks.ts';
 export type { WalkPose } from './walk.ts';

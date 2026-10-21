@@ -526,6 +526,7 @@ import {
   searchRotationClause,
   POSE_FLOOR,
   repeatedPlaces,
+  REPEAT_DISTANCE_SPANS,
   REPEAT_SCALE_RATIO,
   windowEdgeNote,
   type PoseCoarseGrid,
@@ -90083,8 +90084,14 @@ function buildPoseFixture(headScale?: number): {
  *
  * `secondScale`, when given, draws the second copy at that scale: two far
  * places at DIFFERENT sizes, the other reading of an ambiguity (PO35).
+ *
+ * `halfTurn` draws a plate that a half-turn maps onto itself, pixel for pixel —
+ * 18x30 in 6 px checks, three by five cells, so the turn moves every cell by an
+ * even count and keeps its colour, with the dark band at BOTH ends — so the
+ * search's own quarter- and half-turn polish finds a second fit at a copy's
+ * own centre (issue #1526). Not round, so `rotationFree` does not take it.
  */
-function buildTwinPoseFixture(o: { distanceSpans: number; apartDeg: number; secondScale?: number }): {
+function buildTwinPoseFixture(o: { distanceSpans: number; apartDeg: number; secondScale?: number; halfTurn?: boolean }): {
   dir: string;
   parts: string;
   framePath: string;
@@ -90093,7 +90100,8 @@ function buildTwinPoseFixture(o: { distanceSpans: number; apartDeg: number; seco
   const dir = mkdtempSync(join(harnessTemp(), 'rigc-pose-twins-'));
   const parts = join(dir, 'parts');
   mkdirSync(parts, { recursive: true });
-  const leg = poseChecker(18, 34, [70, 120, 60, 255], [120, 170, 90, 255], 6);
+  const leg = poseChecker(18, o.halfTurn === true ? 30 : 34, [70, 120, 60, 255], [120, 170, 90, 255], 6);
+  if (o.halfTurn === true) leg.rect(0, 0, leg.width, 5, [60, 40, 30, 255]);
   leg.rect(0, leg.height - 5, leg.width, 5, [60, 40, 30, 255]);
   leg.writePng(join(parts, 'leg.png'));
   const apart = o.distanceSpans * Math.max(leg.width, leg.height);
@@ -90277,36 +90285,76 @@ function runPoseSuite(): number {
     const WINDOW = 'tells the two apart';
     const branch = (reading: string): 'route' | 'window' | 'neither' =>
       reading.includes(ROUTE) && !reading.includes(WINDOW) ? 'route' : reading.includes(WINDOW) && !reading.includes(ROUTE) ? 'window' : 'neither';
-    const replant = (part: typeof eyesPart | undefined, forge: (best: PosePlacement, alt: PosePlacement) => PosePlacement): string => {
+    // 📍 Twins whose plate a half-turn maps onto itself (issue #1526): the
+    // search's own turn polish keeps a second fit at a copy's own centre, which
+    // put the nearest alternate 0 spans from the best and sent this shape to the
+    // window sentence until the margin was grouped into places. One span apart,
+    // between neighbours at 0.6 and 1.6 that read the same way.
+    const turned = buildTwinPoseFixture({ distanceSpans: 1, apartDeg: 6, halfTurn: true });
+    const turnedPart = estimatePose({ imagesDir: turned.parts, framePath: turned.framePath }).parts[0];
+    const replant = (
+      part: typeof eyesPart | undefined,
+      forge: (best: PosePlacement, alt: PosePlacement) => PosePlacement,
+      samePlaceSpans?: number,
+    ): string => {
       if (part?.placement == null || part.legibility === null) return '';
       const best = part.placement;
       const span = Math.max(part.legibility.width, part.legibility.height) * best.scale;
       const forged = part.alternates.map((alt) => forge(best, alt));
-      return legibilityReading(part.legibility, 'ambiguous', repeatedPlaces(best, forged, span));
+      return legibilityReading(part.legibility, 'ambiguous', repeatedPlaces(best, forged, span, samePlaceSpans));
     };
+    // 🔒 The one judge every shape and every plant goes through: a reading that
+    // is not the branch its shape has is a fault named by what was read.
+    type Branch = 'route' | 'window';
+    const misread = (what: string, reading: string, want: Branch): string[] =>
+      branch(reading) === want ? [] : [`${what}: read ${branch(reading)}, wanted ${want}`];
+    const other = (b: Branch): Branch => (b === 'route' ? 'window' : 'route');
     const twinPart = tree.part;
     const twinReading = twinPart?.legibility?.reading ?? '';
     const eyesReading = eyesPart?.legibility?.reading ?? '';
+    const turnedReading = turnedPart?.legibility?.reading ?? '';
     const cli = runCli(['pose', '--images', twins.parts, '--frame', twins.framePath, '--out', join(twins.dir, 'pose.json')]);
     const guide = readFileSync(resolve(import.meta.dir, 'docs/AUTHORING.md'), 'utf8');
-    const plants: [string, string, 'route' | 'window'][] = [
+    // Each plant names the shape it forges and that shape's own branch; it is
+    // caught when the judge, asked for that branch, names the OTHER one.
+    const plants: [string, string, Branch][] = [
       [
         `the twins' alternate moved off the best's scale by twice the ${REPEAT_SCALE_RATIO} bar`,
         replant(twinPart, (best, alt) => ({ ...alt, scale: best.scale * (1 + 2 * REPEAT_SCALE_RATIO) })),
-        'window',
+        'route',
       ],
-      ["the twins' alternate moved onto the best's centre", replant(twinPart, (best, alt) => ({ ...alt, x: best.x, y: best.y })), 'window'],
-      ["the far pair's alternate put at the best's scale", replant(eyesPart, (best, alt) => ({ ...alt, scale: best.scale })), 'route'],
+      ["the twins' alternate moved onto the best's centre", replant(twinPart, (best, alt) => ({ ...alt, x: best.x, y: best.y })), 'route'],
+      ["the far pair's alternate put at the best's scale", replant(eyesPart, (best, alt) => ({ ...alt, scale: best.scale })), 'window'],
+      [
+        'the turned twins with the grouping into places planted out (radius 0, the minimum over every alternate)',
+        replant(turnedPart, (_best, alt) => alt, 0),
+        'route',
+      ],
     ];
     const probes: string[] = [];
     if (!(twinPart?.ambiguous ?? false) || twinPart?.legibility?.floor !== 'above') probes.push('the twins are not an ambiguity above the floor');
-    if (branch(twinReading) !== 'route') probes.push(`the twins read ${branch(twinReading)}: ${JSON.stringify(twinReading)}`);
+    probes.push(...misread('the twins', twinReading, 'route').map((f) => `${f}: ${JSON.stringify(twinReading)}`));
     if (!(cli.stdout.includes(twinReading) && twinReading !== '')) probes.push("the twins' reading is not on the console");
     if (!(guide.includes(twinReading) && twinReading !== '')) probes.push("the twins' reading is not quoted in AUTHORING §11.5");
     if (!(eyesPart?.ambiguous ?? false) || eyesPart?.legibility?.floor !== 'above') probes.push('the far pair at two scales is not an ambiguity above the floor');
-    if (branch(eyesReading) !== 'window') probes.push(`the far pair reads ${branch(eyesReading)}: ${JSON.stringify(eyesReading)}`);
-    for (const [what, reading, want] of plants) {
-      if (branch(reading) !== want) probes.push(`${what}: read ${branch(reading)}, wanted ${want}`);
+    probes.push(...misread('the far pair', eyesReading, 'window').map((f) => `${f}: ${JSON.stringify(eyesReading)}`));
+    // The turned case is only this case if the margin really holds a turned fit
+    // at a copy's own centre — read off what the search reported.
+    const turnedFound = turnedPart?.placement ? [turnedPart.placement, ...turnedPart.alternates] : [];
+    const turnedSpan = turnedPart?.legibility == null || turnedPart.placement === null ? 0 : turnedPart.legibility.span;
+    const turnedPairs = turnedFound.flatMap((p, i) =>
+      turnedFound
+        .slice(i + 1)
+        .filter((q) => Math.hypot(p.x - q.x, p.y - q.y) < REPEAT_DISTANCE_SPANS * turnedSpan && Math.abs(normaliseDegrees(p.rotationDeg - q.rotationDeg)) >= 45)
+        .map((q) => `${p.rotationDeg.toFixed(1)}°/${q.rotationDeg.toFixed(1)}°`),
+    );
+    if (!(turnedPart?.ambiguous ?? false) || turnedPart?.legibility?.floor !== 'above') probes.push('the turned twins are not an ambiguity above the floor');
+    if (turnedPairs.length === 0) probes.push(`the turned twins' margin holds no turned fit at one centre: ${turnedFound.length} placement(s)`);
+    probes.push(...misread('the turned twins', turnedReading, 'route').map((f) => `${f}: ${JSON.stringify(turnedReading)}`));
+    for (const [what, reading, shape] of plants) {
+      if (raisedBy(misread(what, reading, shape), { at: `${what}: read ${other(shape)},` }).length === 0) {
+        probes.push(`${what}: not caught — read ${branch(reading)} where the shape reads ${shape}`);
+      }
     }
     const eyesFound = eyesPart?.placement ? [eyesPart.placement, ...eyesPart.alternates] : [];
     const eyesScales = eyesFound.map((p) => p.scale.toFixed(3)).join(' and ');
@@ -90318,14 +90366,19 @@ function runPoseSuite(): number {
         held,
         probes,
         `the twins read the 🔀 route, on the console and quoted in §11.5; the far pair at scales ${eyesScales} reads ` +
-          `the window; planted — ${plants.map(([what, reading]) => `${what}: ${branch(reading)}`).join('; ')}`,
+          `the window; the turned twins, ${turnedFound.length} placements with ${turnedPairs.length} turned pair(s) at ` +
+          `one centre (${turnedPairs.join(', ')}), read the 🔀 route; planted — ` +
+          `${plants.map(([what, reading]) => `${what}: ${branch(reading)}`).join('; ')}`,
       ),
       'a left/right pair cut from one drawing sits at one scale, so no --scale window separates it, and a --rotation ' +
         'window that "resolves" it does so by excluding one place — the sentence offering a window there sends the ' +
-        'reader to the one remedy that picks the answer instead of reading it (issue #1519)',
+        'reader to the one remedy that picks the answer instead of reading it (issue #1519); and a turned fit the ' +
+        'search keeps at a copy\'s own centre is not another place, or that remedy comes back for every part a ' +
+        'half-turn maps onto itself (issue #1526)',
     );
     rmSync(twins.dir, { recursive: true, force: true });
     rmSync(eyes.dir, { recursive: true, force: true });
+    rmSync(turned.dir, { recursive: true, force: true });
   }
 
   // --- rotation as a degree of freedom -------------------------------------

@@ -431,6 +431,18 @@ export function floorClause(): string {
  *   already separates; the closest repeat measured was the legs at 0.603.
  *   √(0.336 × 0.603) ≈ 0.45.
  *
+ *   📍 It is also the radius `repeatedPlaces` groups the margin into places by
+ *   (issue #1526), so it was measured again over every PAIR in a margin rather
+ *   than only pairs with the best. Over the 41 above-floor ambiguities of the
+ *   same 420 trials, every pair closer than 0.45 span was at most 0.336 apart —
+ *   one spot read at two scales, or turned, down to 0.000 for a half-turn — and
+ *   every farther pair at least 0.779, save one trial: a 24 px gun whose pairs
+ *   run on from 0.06 to 3.4 spans at scales up to 77% apart, which reads the
+ *   window sentence at every radius from 0 to 3 because the scale bar fails it.
+ *   The grid's readings came out the same at every radius in that range, so
+ *   nothing there moves the gap's middle; the repeats bound it from above
+ *   exactly as before.
+ *
  * ⚠️ One grid trial above the floor takes this branch and is not a repeat: a
  * blurred 48 px shin whose four placements all stopped on the scale FLOOR of the
  * default window, at 0.5 against a truth at 1.0. Every placement on one wall has
@@ -443,26 +455,67 @@ export const REPEAT_DISTANCE_SPANS = 0.45;
 
 /** How an ambiguity's placements stand to the best one, when they are one part in several places at one size. */
 export interface PoseRepeat {
-  /** The largest `|alternate.scale / best.scale − 1|` inside the margin. */
+  /** The largest `|place.scale / best.scale − 1|` over the other places, each read at its best-scoring placement. */
   scaleRatio: number;
-  /** The nearest alternate's centre distance from the best's, in spans at the best's scale. */
+  /** The nearest other place's centre distance from the best's, in spans at the best's scale. */
   spans: number;
+  /**
+   * Placements in the margin counted as a place already counted rather than as
+   * a place of their own — a quarter- or half-turn fit at the same centre, or a
+   * second size read at one spot (issue #1526).
+   */
+  samePlace: number;
 }
 
 /**
- * Whether every alternate inside the margin is a DIFFERENT place at the SAME
- * scale as the best, against `REPEAT_SCALE_RATIO` and `REPEAT_DISTANCE_SPANS`
- * — `null` when any one is not, or there is none. `span` is the part's longest
+ * Whether every OTHER PLACE in the margin holds the part at the SAME scale as
+ * the best, against `REPEAT_SCALE_RATIO` and `REPEAT_DISTANCE_SPANS` — `null`
+ * when one does not, or there is no other place. `span` is the part's longest
  * material side in frame pixels at the best placement's scale.
  *
+ * 📍 The margin is grouped into places first (issue #1526): walked best-scoring
+ * first, a placement whose centre is closer than `samePlaceSpans` spans to a
+ * place already counted is counted with it, and every other one opens a place
+ * of its own, read at that placement. The bars then apply to the places other
+ * than the best's own. Without the grouping, a fit the search keeps on purpose —
+ * the quarter- and half-turn polish of its primary candidate, at the primary's
+ * own centre — sat 0 spans from the best, the nearest distance went to 0, and a
+ * part drawn twice read the window sentence: the one remedy that can take the
+ * turned duplicate away and leave the two copies unresolved.
+ *
+ * ⚠️ The grouping radius defaults to `REPEAT_DISTANCE_SPANS` and is not a
+ * second number, because it is the same question asked of the same
+ * populations — *is this placement in another place than that one?* — which the
+ * distance bar already decides between an alternate and the best. Its
+ * measurement over every PAIR in the margin, not only pairs with the best, is
+ * beside the constant.
+ *
  * ⭐ Exported so the selftest can hand it a forged alternate and watch the
- * reading change branch; the search calls it with exactly what it reported.
+ * reading change branch, and plant the grouping out: at `samePlaceSpans` 0 no
+ * two centres are closer than the radius, every alternate is its own place, and
+ * the bars read the minimum over all of them — issue #1519's reading. The search
+ * calls it with exactly what it reported.
  */
-export function repeatedPlaces(best: PosePlacement, alternates: readonly PosePlacement[], span: number): PoseRepeat | null {
+export function repeatedPlaces(
+  best: PosePlacement,
+  alternates: readonly PosePlacement[],
+  span: number,
+  samePlaceSpans: number = REPEAT_DISTANCE_SPANS,
+): PoseRepeat | null {
   if (alternates.length === 0 || !(span > 0)) return null;
-  const scaleRatio = Math.max(...alternates.map((a) => Math.abs(a.scale / best.scale - 1)));
-  const spans = Math.min(...alternates.map((a) => hypot2(a.x - best.x, a.y - best.y) / span));
-  return scaleRatio <= REPEAT_SCALE_RATIO && spans >= REPEAT_DISTANCE_SPANS ? { scaleRatio, spans } : null;
+  // Best-scoring first, so a place is read at its best placement. The margin
+  // comes sorted that way already; a forged list need not.
+  const places: PosePlacement[] = [best];
+  let samePlace = 0;
+  for (const alt of [...alternates].sort((a, b) => a.residual - b.residual)) {
+    if (places.some((p) => hypot2(alt.x - p.x, alt.y - p.y) < samePlaceSpans * span)) samePlace++;
+    else places.push(alt);
+  }
+  const others = places.slice(1);
+  if (others.length === 0) return null;
+  const scaleRatio = Math.max(...others.map((a) => Math.abs(a.scale / best.scale - 1)));
+  const spans = Math.min(...others.map((a) => hypot2(a.x - best.x, a.y - best.y) / span));
+  return scaleRatio <= REPEAT_SCALE_RATIO && spans >= REPEAT_DISTANCE_SPANS ? { scaleRatio, spans, samePlace } : null;
 }
 
 /**
@@ -522,8 +575,16 @@ export function legibilityReading(
         'a narrower --scale or --rotation window around what you know of the part tells the two apart'
       : `every placement in the margin is at the best's scale (within ${(repeat.scaleRatio * 100).toFixed(2)}%, ` +
         `bar ${REPEAT_SCALE_RATIO * 100}%) and in another place (the nearest ${repeat.spans.toFixed(2)} span(s) away, ` +
-        `bar ${REPEAT_DISTANCE_SPANS}), which is the part — or a near-copy, such as a left/right pair cut from one ` +
-        'drawing — drawn more than once: read the placements as an unordered set and order it across frames ' +
+        `bar ${REPEAT_DISTANCE_SPANS})` +
+        // 📍 Said only when the grouping set placements aside (issue #1526), so
+        // that "every placement" is not claimed of a margin holding a turned
+        // fit at the best's own centre — and so that every reading it did not
+        // touch is the sentence it was.
+        (repeat.samePlace === 0
+          ? ', which is'
+          : ` once the ${repeat.samePlace} placement(s) closer than ${REPEAT_DISTANCE_SPANS} span to a better-scoring ` +
+            'one are counted as its place, another angle or size of that fit; that is') +
+        ' the part — or a near-copy, such as a left/right pair cut from one drawing — drawn more than once: read the placements as an unordered set and order it across frames ' +
         '(MOTION.md §2.2 🔀); a --rotation window that excludes one place chooses the answer rather than measuring it';
   return (
     `${figures} — above the measured floor (AUTHORING §11.5: ${floorClause()}), so size and texture do not explain this; ` +

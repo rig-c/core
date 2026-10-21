@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.66.0](https://github.com/rig-c/core/compare/v2.65.2...v2.66.0) (2026-10-21)
+
+
+### Features
+
+* **core:** read named mesh geometry at setup without changing selection ([#1544](https://github.com/rig-c/core/issues/1544)) ([877c54c](https://github.com/rig-c/core/commit/877c54cc86759e8356ec9a8da19c8a5113c1dfae))
+
+
+### Performance Improvements
+
+* **core:** reuse immutable attachment identity between poses ([#1543](https://github.com/rig-c/core/issues/1543)) ([e660f77](https://github.com/rig-c/core/commit/e660f772206b49b2a28956226794dd2c0b2d8a66)), closes [#1531](https://github.com/rig-c/core/issues/1531)
+
 ## [2.65.2](https://github.com/rig-c/core/compare/v2.65.1...v2.65.2) (2026-10-21)
 
 

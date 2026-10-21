@@ -92884,7 +92884,7 @@ import { BEZIER_SIXTH, bezierPolyline, BONE_TIMELINE_KINDS, channelAt, keyIndexA
 // The core entry's Bézier evaluation (issue #1417), its own statement so CA12 lands as one hunk.
 import { bezierPolyline as entryBezierPolyline, BEZIER_PIECES as ENTRY_BEZIER_PIECES } from './src/core/entry.ts';
 import { BEZIER_PIECES } from './src/core/animation.ts';
-import { DEFORM_CURVE_END, deformAt, deformPercent, heldArray, SEQUENCE_MODES as CORE_SEQUENCE_MODES, sequenceFrameAt, type CoreDeformKey } from './src/core/deform.ts';
+import { attachmentStates, DEFORM_CURVE_END, deformAt, deformPercent, heldArray, SEQUENCE_MODES as CORE_SEQUENCE_MODES, sequenceFrameAt, type CoreDeformKey } from './src/core/deform.ts';
 import { drawOrderAt } from './src/core/draw_order.ts';
 import { eventsFired, type CoreEventRow } from './src/core/events.ts';
 import { physicsState, stepPhysics, stepSchedule, type CorePhysicsRecord } from './src/core/constraints_physics.ts';
@@ -100689,6 +100689,130 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
       ok,
       probeDetail(ok, probes, `${cases.length} hand-written switches, each spine-core's row as measured and the core exact at tolerance 0 at setup and at the sample: a switch to another mesh or series drew it undeformed at its setup frame — even over a sample keying the one switched to — naming the one shown kept the sample's deform and frame, and the slider's own keys after its switch applied`),
       'issue #955: the sample\'s deform and sequence timelines are matched against what the slot shows after the sample\'s own switches, and a slider switching the slot to another attachment clears them (src/core/deform.ts, *A switch*). The first reading — every timeline matched against the slot\'s final attachment — posed the second case deformed, which spine-core does not',
+    );
+  }
+
+
+  // --- CD15: only immutable identity is shared; the next pose reads its own skin, switches, time and mix (issue #1531) --
+  if (parent) {
+    const spec: RSpec = {
+      bones: [{ name: 'root' }, { name: 'dial', parent: 'root' }, { name: 'inactive', parent: 'root', skin: true }],
+      slots: [{ name: 's', bone: 'root', attachment: 'm' }, { name: 'link', bone: 'root', attachment: 'on' }, { name: 'r', bone: 'root', attachment: 'r' }, { name: 'idle', bone: 'root', attachment: 'idle' }, { name: 'hidden', bone: 'inactive', attachment: 'm' }],
+      skins: {
+        default: {
+          s: { m: { kind: 'mesh', xy: [0, 0, 1, 0, 0, 1] }, n: { kind: 'mesh', xy: [10, 10, 11, 10, 10, 11] } },
+          link: { on: { kind: 'linkedmesh', source: 'm', slot: 's', timelines: true }, off: { kind: 'linkedmesh', source: 'm', slot: 's', timelines: false } },
+          r: { r: { kind: 'region', path: 'series', frames: 4, setup: 1 } },
+          idle: { idle: { kind: 'region' } }, hidden: { m: { kind: 'mesh', xy: [0, 0, 1, 0, 0, 1] } },
+        },
+        alt: { s: { m: { kind: 'mesh', xy: [20, 20, 21, 20, 20, 21] } }, r: { r: { kind: 'region', path: 'other', frames: 3, setup: 2 } } },
+      },
+      constraints: [{ type: 'slider', name: 'drive', animation: 'slider', bone: 'dial', property: 'x', scale: 1, local: true }],
+      anims: {
+        sample: {
+          bones: { dial: { translatex: [{ time: 0, value: 0 }, { time: 1, value: 1 }] } },
+          deform: [{ slot: 's', attachment: 'm', keys: [{ time: 0, vertices: [0, 0] }, { time: 1, vertices: [8, 4] }] }, { slot: 'hidden', attachment: 'm', keys: [{ time: 0, vertices: [9, 9] }] }],
+          sequence: [{ slot: 'r', attachment: 'r', keys: [{ time: 0, mode: 'loop', delay: 0.25 }] }],
+        },
+        slider: {
+          slots: { s: { attachment: [{ time: 0, name: 'm' }, { time: 0.5, name: 'n' }, { time: 0.75, name: null }, { time: 0.9, name: 'm' }] } },
+          deform: [{ slot: 's', attachment: 'm', keys: [{ time: 0, vertices: [2, 0] }, { time: 1, vertices: [6, 0] }] }, { slot: 's', attachment: 'n', keys: [{ time: 0, vertices: [7, 0] }] }],
+          sequence: [{ slot: 'r', attachment: 'r', keys: [{ time: 0, index: 3 }] }],
+        },
+      },
+    };
+    const pair = remainderPair(spec);
+    const doc = readModel(pair.model, 'the attachment identity probe');
+    const view = underSkin(doc, 'default');
+    const alt = underSkin(doc, 'alt');
+    const placeholders = new Map(view.slots.map((s) => [s.name, s.setup]));
+    const sample = view.animations.find((a) => a.name === 'sample')!.timelines;
+    const slider = view.animations.find((a) => a.name === 'slider')!.timelines;
+    const app = (at: number, alpha = 1, additive = false) => ({ name: 'slider', timelines: slider, at, alpha, additive });
+    type StateArgs = Parameters<typeof attachmentStates>;
+    const args = (v: CompiledDocument, t: number | null, apps: StateArgs[4] = [], p: StateArgs[2] = placeholders, mixed?: StateArgs[6]): StateArgs => [v, shownAttachment, p, t === null ? null : { timelines: sample, t }, apps, {}, mixed];
+    const requests: Array<[string, StateArgs]> = [
+      ['deform: first', args(view, 0)], ['deform: next', args(view, 0.5)],
+      ['sequence: next', args(view, 0.75)],
+      ['slider: first', args(view, 0.5, [app(0.2)])], ['slider: same placeholder next time', args(view, 0.5, [app(0.4)])],
+      ['slider: next mix', args(view, 0.5, [app(0.4, 0.25)])], ['slider: additive', args(view, 0.5, [app(0.4, 0.25, true)])],
+      ['slider: switch', args(view, 0.5, [app(0.6)])], ['slider: hide', args(view, 0.5, [app(0.8)])], ['slider: restore', args(view, 0.5, [app(1)])],
+      ['slider: order', args(view, 0.5, [app(0.6), app(0.2)])], ['slider: reverse order', args(view, 0.5, [app(0.2), app(0.6)])],
+      ['placeholder: next', args(view, 0.5, [], new Map([...placeholders, ['s', 'n'], ['link', 'off']]))],
+      ['placeholder: absent', args(view, 0.5, [], new Map([...placeholders, ['s', 'missing']]))],
+      ['skin: next view', args(alt, 0.5)], ['skin: no skin', args(underNoSkin(doc), 0.5)],
+      ['skin: ambiguity', args(doc, 0.5)], ['skin: back', args(view, 0.5)],
+      ['mixed: first', args(view, null, [], placeholders, new Map([['s', { deform: [1, 0, 1, 0, 0, 1], seen: ['default/s/m'] }]]))],
+      ['mixed: next', args(view, null, [], placeholders, new Map([['s', { deform: [5, 0, 1, 0, 0, 1], seen: ['default/s/m'] }]]))],
+      ['mixed: reset on switch', args(view, null, [app(0.6)], placeholders, new Map([['s', { deform: [5, 0, 1, 0, 0, 1], seen: ['default/s/m'] }]]))],
+    ];
+    const fresh = requests.map(([, a]) => {
+      const d = a[0].skin === 'all' ? readModel(pair.model) : a[0].skin === null ? underNoSkin(readModel(pair.model)) : underSkin(readModel(pair.model), a[0].skin);
+      return attachmentStates(d, a[1], a[2], a[3], a[4], a[5], a[6]);
+    });
+    const faults = (read: typeof attachmentStates): string[] => {
+      const out: string[] = [];
+      const kept = requests.map(([label, a], i) => {
+        const result = read(...a);
+        out.push(...sameLeaves(result, fresh[i], label));
+        return { label, result, text: JSON.stringify(result) };
+      });
+      for (const k of kept) if (JSON.stringify(k.result) !== k.text) out.push(`retained: ${k.label} changed after its next pose`);
+      const a = read(...args(view, null)).shown;
+      const b = read(...args(view, null)).shown;
+      const sampled = read(...args(view, 0.2)).shown;
+      if (a.find((s) => s.slot === 'idle') !== sampled.find((s) => s.slot === 'idle')) out.push('identity: an unrelated timeline rebuilt the idle slot');
+      if (a.length === 0) out.push('identity: no static attachment was shown');
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i] || !Object.isFrozen(a[i])) out.push(`identity: slot "${a[i].slot}" rebuilt or writable`);
+      return out;
+    };
+    const live = faults(attachmentStates);
+    const probes: string[] = [...live];
+    // Raw doubles against the official poser, not just this reader against a fresh copy of itself.
+    for (const skin of ['default', 'alt', 'none']) {
+      const compared = remainderCompare(pair, { phase: 'grid', samples: 9, skin, physics: 'none', dt: null, raw: true });
+      if (!compared.identical || blocksSkipped(compared).length > 0) probes.push(`oracle: skin "${skin}": ${compared.first ?? blocksSkipped(compared).join('; ')}`);
+    }
+    const track = openTrack(view, 'sample', { loop: false, reset: 'animation' });
+    const firstPose = track.first;
+    const firstText = JSON.stringify(firstPose);
+    const switched = track.step(0.6);
+    const hidden = track.step(0.2);
+    const restored = track.step(0.2);
+    if (firstPose.drawn.find((s) => s.slot === 's')?.attachment !== 'm' || switched.drawn.find((s) => s.slot === 's')?.attachment !== 'n' || hidden.drawn.some((s) => s.slot === 's') || restored.drawn.find((s) => s.slot === 's')?.attachment !== 'm') probes.push('track: the slider did not switch, hide and restore on the next frame');
+    if (JSON.stringify(firstPose) !== firstText) probes.push('track: later slider frames changed the retained first pose');
+    const first = fresh[0].shown;
+    if (first.find((s) => s.slot === 's')?.deform?.[0] !== 0 || fresh[1].shown.find((s) => s.slot === 's')?.deform?.[0] !== 4) probes.push('measurement: the sample did not move m from 0 to 4');
+    if (fresh[2].shown.find((s) => s.slot === 'r')?.frame !== 3) probes.push('measurement: the next sequence sample did not show frame 3');
+    if (first.find((s) => s.slot === 'link')?.deform?.[0] !== 0 || fresh[12].shown.find((s) => s.slot === 'link')?.deform !== undefined) probes.push('measurement: linked timeline inheritance did not turn off');
+    if (first.find((s) => s.slot === 'hidden')?.deform !== undefined) probes.push('measurement: an inactive slot was deformed');
+    if (fresh[16].why.length === 0) probes.push('measurement: the merged view did not name its ambiguous timeline');
+    let held: ReturnType<typeof attachmentStates> | undefined;
+    const stale = faults((...a) => held ??= attachmentStates(...a));
+    const categories = ['deform: ', 'sequence: ', 'slider: ', 'placeholder: ', 'skin: ', 'mixed: '];
+    for (const at of categories) {
+      const raised = raisedBy(stale, { was: live, at });
+      if (raised.length === 0) probes.push(`a cache keeping posed values was not caught at ${at}`);
+    }
+    const copied = faults((...a) => {
+      const r = attachmentStates(...a);
+      return { ...r, shown: r.shown.map((s) => ({ ...s })) };
+    });
+    const copyRaised = raisedBy(copied, { was: live, at: 'identity: ' });
+    if (copyRaised.length === 0) probes.push('per-pose identity copies were not caught');
+    // Even one resolver function can read different state between poses; it must not enter the immutable-reader cache.
+    let other = false;
+    const resolve: typeof shownAttachment = (d, s) => shownAttachment(other ? alt : d, s);
+    const before = attachmentStates(view, resolve, placeholders, null, []);
+    other = true;
+    const after = attachmentStates(view, resolve, placeholders, null, []);
+    if (before.shown.find((s) => s.slot === 's')?.skin !== 'default' || after.shown.find((s) => s.slot === 's')?.skin !== 'alt') probes.push('resolver: the same planted resolver did not reflect its next value');
+    const ok = probes.length === 0;
+    say(
+      'CD15_ATTACHMENT_IDENTITY_IS_SHARED_BUT_SKIN_SLIDER_PLACEHOLDER_SEQUENCE_AND_DEFORM_VALUES_STAY_FRESH',
+      ok,
+      probeDetail(ok, probes, `${requests.length} successive requests equal a fresh document view at every leaf, retained results unchanged; linked inheritance, inactive slots and merged-skin ambiguity held; static entries shared and frozen; a stale posed-value cache read red in all ${categories.length} change groups, per-pose identity copies on ${copyRaised.length} row(s); a planted resolver reflects its next value; three skin views exact against spine-core at 0 ulps; a live slider switches, hides and restores on successive frames`),
+      'issue #1531: cache only attachment and timeline identity, by document view and placeholder; times, slider order and mixes, sequence frames and mixed deforms belong to the current pose',
     );
   }
 

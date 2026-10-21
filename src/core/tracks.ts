@@ -1491,9 +1491,14 @@ class Tracks implements LiveTracks {
     ctx.time += this.clock === undefined ? dt : this.clock(dt);
     const pose = new Pose(doc, this.plant);
     const animationTime = this.mixer.apply(pose);
+    const entry = this.mixer.tracks[0] ?? null;
+    const adjustment = this.adjust === undefined ? undefined : {
+      callback: this.adjust,
+      context: { trackTime: entry?.trackTime ?? null, animation: entry?.anim.name ?? null, globalTime: this.time },
+    };
     const mixed = new Map(doc.slots.map((s, k) => [s.name, { deform: pose.slots[k].deform, seen: pose.slots[k].seen }]));
     return path.step(first, this.time, animationTime, {
-      world: (sliders) => steppedLocalsWorld(doc, pose.bones, path.raw, sliders, { ctx, before, adjust: this.adjust }, true),
+      world: (sliders) => steppedLocalsWorld(doc, pose.bones, path.raw, sliders, { ctx, before, adjustment }, true),
       slots: (sliders, placeholders) => slotRowsFrom(doc, path.raw, sliders, placeholders, (_slot, _live): SlotBase => {
         const s = pose.slots[doc.slots.indexOf(_slot)];
         return { placeholder: s.placeholder, light: s.light, dark: s.dark };

@@ -5381,6 +5381,39 @@ agreeing with `render` — and left out, a track steps the physics by the step i
 exactly as before. Which clock a player with a real clock uses is the player's
 question, and rigc does not answer it.
 
+A player's `adjust` option on `openTrack` or `openTracks` receives
+`(locals, ctx)` (issue #1540). `LocalAdjustContext`, `LocalAdjust`,
+`AdjustableLocals` and `BoneLocals` are types promised through `rig-c/core`.
+The callback runs once per evaluated pose **after all track composition**,
+before world transforms, constraints and physics. A crossfade does not call it
+for the outgoing entry as well. Existing unary callbacks keep the same writes,
+pose bytes and call schedule.
+
+- `ctx.trackTime: number | null` is the **current track-0 entry's** unwrapped
+  seconds from its own start. Loops do not wrap it; a held animation clamps its
+  sampling time while this entry clock continues. Replacing the entry starts its
+  clock at 0 even at a nonzero global time. A queued switch preserves the
+  remainder the mixer has already advanced into its new entry.
+- `ctx.animation: string | null` names that **same entry**. With no current
+  track-0 entry, both fields are null, even if an upper track plays. An explicit
+  empty entry has a null animation name and its own numeric entry time until
+  removed, matching `current(0)`.
+- `ctx.globalTime: number` is the running sum of this walk's steps, in seconds.
+  On a single track it equals the entry time. It is separate from entry time in
+  a composition, and is never substituted for an absent track-0 time. Neither
+  time includes the optional physics clock's lead.
+
+With `reset: 'animation'` the initial pose calls the hook at 0;
+`reset: 'setup'` leaves its initial setup pose unadjusted. Every explicit
+`step(0)` still evaluates a pose. This API adds no seek or cache: a caller may
+reuse a cached pose without asking the core to evaluate it again. Time-dependent
+adjustments replay exactly with the **same reset, environment and step
+partition**; arbitrary physics histories are not interchangeable. A callback
+closing over mutable external state still needs its caller's cache invalidated.
+For example, `adjust: (locals, ctx) => { locals.bone('dial').rotation =
+30 * (ctx.trackTime ?? 0); }` explicitly chooses a value when there is no base
+entry; the core supplies null rather than inventing that choice.
+
 🌬️ **`wind` and `gravity` are the constraint's response; the world is the
 consumer's** (issue #1416). In 4.3 the two are not forces but how strongly the
 constraint answers two directions the *skeleton* carries — `Skeleton.windX,

@@ -227,7 +227,7 @@ import type { LocalAdjust, TimelinePlant } from './animation.ts';
 import type { PhysicsEnvironment } from './constraints_physics.ts';
 import { LivePhysicsParameters, type PhysicsParameterPatch, type PhysicsParameterRead } from './physics_parameters.ts';
 export type { PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from './physics_parameters.ts';
-export type { AdjustableLocals, BoneLocals, LocalAdjust } from './animation.ts';
+export type { AdjustableLocals, BoneLocals, LocalAdjust, LocalAdjustContext } from './animation.ts';
 export type { PhysicsEnvironment } from './constraints_physics.ts';
 
 /** How a live track is opened: whether it loops, and where its physics is reset (`RawReset`) — both the caller's, neither with a default — the caller's adjustment of every pose's bone locals (the header's *The adjustment*), and what each step moves the physics clock by (the header's *The physics clock*). */

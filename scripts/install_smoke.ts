@@ -442,6 +442,8 @@ const REQUESTED_IN_1396 = 'rig-play fixed-step clock, requested on issue #1396';
  * player builds one with is importable from `rig-c/core`. This row holds it.
  */
 const REQUESTED_IN_1416 = 'the environment the physics answers, requested on issue #1416';
+/** The additive context a local-adjust callback reads (issue #1540). */
+const REQUESTED_IN_1540 = 'local-adjust evaluation context, requested on issue #1540';
 /**
  * The poser's Bézier evaluation (issue #1417): rig-c/pose fits Bézier curves
  * to dense keys and holds each fit to a tolerance measured the way the poser
@@ -628,6 +630,7 @@ const OBSERVED_SYMBOLS: ObservedEntry[] = [
   { entry: './core', observed: REQUESTED_IN_1276, needsRuntime: false, values: { openTrack: 'function' }, types: ['LiveTrack', 'TrackOptions'] },
   { entry: './core', observed: REQUESTED_IN_1336, needsRuntime: false, values: { openTracks: 'function' }, types: ['LocalAdjust', 'AdjustableLocals', 'BoneLocals', 'LiveTracks', 'TracksOptions', 'MixOptions', 'QueueOptions', 'TrackEntryView'] },
   { entry: './core', observed: REQUESTED_IN_1396, needsRuntime: false, values: { physicsClockStep: 'function', PHYSICS_CLOCK_LEAD: 'constant' }, types: [] },
+  { entry: './core', observed: REQUESTED_IN_1540, needsRuntime: false, values: {}, types: ['LocalAdjustContext'] },
   { entry: './core', observed: REQUESTED_IN_1416, needsRuntime: false, values: {}, types: ['PhysicsEnvironment'] },
   { entry: './core', observed: REQUESTED_IN_1417, needsRuntime: false, values: { bezierPolyline: 'function', BEZIER_PIECES: 'constant' }, types: [] },
   { entry: './core', observed: REQUESTED_IN_1538, needsRuntime: false, values: { readSetupMesh: 'function' }, types: ['SetupMesh', 'SetupMeshTarget'] },
@@ -1426,6 +1429,29 @@ if (core) {
     said('readModel then poseRawSetup on ' + plan.model + ' threw ' + why(e));
   }
   if (mode !== 'bundle') {
+    // Issue #1540: call the installed public entry, with no runtime beside it.
+    // The types row records the promise; these calls hold its runtime behavior.
+    try {
+      const doc = core.readModel(text);
+      const animation = doc.animations[0].name;
+      const contexts = [];
+      const adjust = (_locals, ctx) => contexts.push(ctx);
+      const single = core.openTrack(doc, animation, { loop: true, reset: 'animation', adjust });
+      single.step(0.5);
+      const wantSingle = [{ trackTime: 0, animation, globalTime: 0 }, { trackTime: 0.5, animation, globalTime: 0.5 }];
+      if (JSON.stringify(contexts) !== JSON.stringify(wantSingle)) said('LocalAdjust single-track context: ' + JSON.stringify(contexts));
+      contexts.length = 0;
+      const tracks = core.openTracks(doc, { reset: 'animation', adjust });
+      tracks.setAnimation(0, animation, { loop: true, mixDuration: 0 });
+      tracks.start(); tracks.step(0.5);
+      tracks.setAnimation(0, animation, { loop: true, mixDuration: 0.25 }); tracks.step(0);
+      if (contexts.length !== 3 || JSON.stringify(contexts[2]) !== JSON.stringify({ trackTime: 0, animation, globalTime: 0.5 })) said('LocalAdjust replacement context: ' + JSON.stringify(contexts));
+      const unary = core.openTrack(doc, animation, { loop: true, reset: 'animation', adjust: (locals) => { locals.bone(doc.bones[0].name).rotation += 7; } });
+      const binary = core.openTrack(doc, animation, { loop: true, reset: 'animation', adjust: (locals, _ctx) => { locals.bone(doc.bones[0].name).rotation += 7; } });
+      if (JSON.stringify(unary.first) !== JSON.stringify(binary.first) || JSON.stringify(unary.step(0.5)) !== JSON.stringify(binary.step(0.5))) said('LocalAdjust unary pose bytes differ');
+    } catch (e) {
+      said('LocalAdjust evaluation context from the install threw ' + why(e));
+    }
     let refusal = null;
     try {
       core.readModel('{}');

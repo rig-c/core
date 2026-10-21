@@ -299,9 +299,12 @@ and it never counts a slot whose bone the posed skin leaves unposed (a `"skin": 
 bone the skin does not name, or any bone below one, §3.4.8), which draws no pixel;
 when every drawn slot is such a slot, the render is refused by name (§3.4). Three commands take `--out`: a directory for `render`
 (default `render/`), the `.html` file for `preview` (default `preview.html`) and
-for `vote` (default `ballot.html`). Under `render`'s `--out` each animation is a set
-directory named by the rate (the `--fps` row): `<anim>/` at the default,
-`<anim>@<fps>fps/` at any other — `--fps 24` writes `<anim>@24fps/`, and the default 12 writes `<anim>/`. The line `render` prints for
+for `vote` (default `ballot.html`). Under `render`'s `--out` each render set is a
+directory named by the rate (the `--fps` row): one per animation, `<anim>/` at the default,
+`<anim>@<fps>fps/` at any other — `--fps 24` writes `<anim>@24fps/`, and the default 12 writes `<anim>/`;
+a rig with no animation writes one setup-pose set, `setup/` at the default and
+`setup@<fps>fps/` at any other — `--fps 24` writes `setup@24fps/` — which `frames.json`
+records with `animation: null`. The line `render` prints for
 each set ends in the directory it wrote, and `frames.json` beside the sets names
 each under `sets[].dir` — read the folder from there, not from the animation's name.
 

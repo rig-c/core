@@ -140265,7 +140265,7 @@ function runSeamSuite(): number {
 // ---------------------------------------------------------------------------
 
 import { type OutsidePlant, type OutsideReading, outsideViewport, SIDES, type Side } from './src/viewportpin.ts';
-import { frameSetDir } from './src/render_shared.ts';
+import { frameSetDir, SETUP_POSE_DIR } from './src/render_shared.ts';
 import { indexRuns } from './src/folds.ts';
 
 /**
@@ -140961,6 +140961,55 @@ function fpsNamingFragments(name: (animation: string, fps: number) => string): s
 }
 
 /**
+ * The setup-pose case of the `--out` sentence (issue #1524): the one set a rig
+ * with no animation writes, named by the naming function over `SETUP_POSE_DIR`
+ * at the default rate and at another, and the `animation: null` frames.json
+ * records it with. Held at the two `--out` places only — the `--out` row and
+ * AUTHORING's `--out` paragraph are where a reader of the render root looks.
+ */
+function setupNamingFragments(name: (animation: string, fps: number) => string): string[] {
+  const other = 24;
+  return [
+    `\`${name(SETUP_POSE_DIR, PROTOCOL_FPS)}/\` at the default`,
+    `\`${name(SETUP_POSE_DIR, other).split(String(other)).join('<fps>')}/\` at any other`,
+    `\`--fps ${other}\` writes \`${name(SETUP_POSE_DIR, other)}/\``,
+    '`animation: null`',
+  ];
+}
+
+/** Each place's text against the setup-pose fragments, whitespace folded — `fpsNamingFaults`' shape, so a fault starts with its place's label. */
+function setupNamingFaults(places: ReadonlyArray<readonly [string, string]>, name: (animation: string, fps: number) => string): string[] {
+  const faults: string[] = [];
+  for (const [label, text] of places) {
+    const folded = text.replace(/\s+/g, ' ');
+    for (const fragment of setupNamingFragments(name)) if (!folded.includes(fragment)) faults.push(`${label} does not say ${JSON.stringify(fragment)}`);
+  }
+  return faults;
+}
+
+/**
+ * A render of a rig with no animation against what the `--out` row names
+ * (issue #1524): the row says the setup-pose set's directory at this rate, the
+ * root holds that directory and no other, and frames.json lists that one set
+ * under `sets[].dir` with `animation: null`. Every fault starts with `label`.
+ */
+function setupSetFaults(label: string, row: string, root: string, fps: number): string[] {
+  const faults: string[] = [];
+  const want = frameSetDir(SETUP_POSE_DIR, fps);
+  const fragment = fps === PROTOCOL_FPS ? setupNamingFragments(frameSetDir)[0] : setupNamingFragments(frameSetDir)[2];
+  if (!row.replace(/\s+/g, ' ').includes(fragment)) faults.push(`${label}: the --out row does not name ${JSON.stringify(fragment)}, the directory a ${fps}-fps render of a rig with no animation writes`);
+  const sidecarPath = join(root, FRAMES_SIDECAR);
+  if (!existsSync(sidecarPath)) return [...faults, `${label}: wrote no ${FRAMES_SIDECAR}`];
+  const sheet = JSON.parse(readFileSync(sidecarPath, 'utf8')) as FramesSidecar;
+  const dirs = readdirSync(root).filter((f) => statSync(join(root, f)).isDirectory()).sort();
+  if (JSON.stringify(dirs) !== JSON.stringify([want])) faults.push(`${label}: the root holds directories [${dirs.join(', ')}], the help names [${want}]`);
+  const named = sheet.sets.map((set) => set.dir);
+  if (JSON.stringify(named) !== JSON.stringify([want])) faults.push(`${label}: ${FRAMES_SIDECAR} sets[].dir is [${named.join(', ')}], the help names [${want}]`);
+  for (const set of sheet.sets) if (set.animation !== null) faults.push(`${label}: ${FRAMES_SIDECAR} set "${set.dir}" records animation ${JSON.stringify(set.animation)}, the help names \`animation: null\``);
+  return faults;
+}
+
+/**
  * README.md's two statements of where `render` writes (issue #1468): the render
  * paragraph of the walkthrough, from its bold lead to the next command's, and the
  * `render` row of the Commands table. Each is cut out by its own lead so a
@@ -141109,12 +141158,23 @@ function runRenderNamingSuite(): number {
     ['docs/AUTHORING.md --out sentence', guideOutAt < 0 || guideOutEnd < 0 ? '' : guide.slice(guideOutAt, guideOutEnd)],
     ...readmeRender.places,
   ];
+  const outPlaces = places.filter(([label]) => label === 'render --help --out row' || label === 'docs/AUTHORING.md --out sentence');
+  const setupPlantSaid: string[] = [];
   const planted = (animation: string, fps: number): string => (fps === PROTOCOL_FPS ? animation : `${animation}_${fps}fps`);
 
   // RN01 — item 4: the sentence is in both places, held to the naming function, and the directories on disk are its.
   {
-    const probes = pre.length > 0 ? [...pre] : fpsNamingFaults(places, frameSetDir);
+    const probes = pre.length > 0 ? [...pre] : [...fpsNamingFaults(places, frameSetDir), ...setupNamingFaults(outPlaces, frameSetDir)];
     if (pre.length === 0) {
+      // The plant: each --out place with the setup-pose clause's directories cut, named by that place.
+      for (const [label, text] of outPlaces) {
+        const without = setupNamingFragments(frameSetDir)
+          .slice(0, 3)
+          .reduce((t, fragment) => t.split(fragment).join(''), text.replace(/\s+/g, ' '));
+        const raised = raisedBy(setupNamingFaults([[label, without]], frameSetDir), { at: label, was: setupNamingFaults(outPlaces, frameSetDir) });
+        if (raised.length === 0) probes.push(`${label} with the setup-pose case dropped read clean`);
+        else setupPlantSaid.push(raised[0]);
+      }
       for (const [root, fps] of [['r_24', 24], ['r_default', PROTOCOL_FPS]] as const) {
         const sheet = JSON.parse(readFileSync(join(probe.work, root, FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
         for (const set of ['turn', 'spin']) {
@@ -141127,8 +141187,13 @@ function runRenderNamingSuite(): number {
     say(
       'RN01_THE_FPS_DIRECTORY_SENTENCE_IS_THE_NAMING_FUNCTIONS',
       ok,
-      probeDetail(ok, probes, `${places.map(([label]) => label).join(', ')} each say ${fpsNamingFragments(frameSetDir).join(', ')} — every fragment derived from frameSetDir — and a render at 24 fps and at the default writes the directories it names`),
-      'issue #1414 item 4: `--fps 24` wrote `dance@24fps/` and nothing a reader could open said so; a sentence held to the function cannot drift from it — and issue #1468: README.md described `<animation>/` at every rate, so its two places are held to the same function',
+      probeDetail(
+        ok,
+        probes,
+        `${places.map(([label]) => label).join(', ')} each say ${fpsNamingFragments(frameSetDir).join(', ')} — every fragment derived from frameSetDir — and a render at 24 fps and at the default writes the directories it names; ` +
+          `${outPlaces.map(([label]) => label).join(' and ')} also say the setup-pose case ${setupNamingFragments(frameSetDir).join(', ')}, and with its directories dropped each is named: ${setupPlantSaid.join('; ')}`,
+      ),
+      'issue #1414 item 4: `--fps 24` wrote `dance@24fps/` and nothing a reader could open said so; a sentence held to the function cannot drift from it — and issue #1468: README.md described `<animation>/` at every rate, so its two places are held to the same function — and issue #1524: a rig with no animation writes `setup/`, which the --out row and paragraph described as "each animation"',
     );
   }
 
@@ -141253,6 +141318,47 @@ function runRenderNamingSuite(): number {
       ok,
       probeDetail(ok, probes, `every per-set line of a render at 24 fps and at the default ends in a directory on disk that ${FRAMES_SIDECAR} names under sets[].dir, every set has its line, and the 24-fps lines with "@24fps" cut are red: ${plantedFaults[0] ?? ''}`),
       'issue #1505: an examinee kept reading `dance/` after `--fps 24` wrote `dance@24fps/`; the path a line prints is what a reader copies, so it is held to the disk and the sidecar',
+    );
+  }
+
+  // RN08 — issue #1524: a rig with no animation, rendered at the default and at 24 fps, writes the one set the --out row names.
+  {
+    const probes = [...pre];
+    const said: string[] = [];
+    if (pre.length === 0) {
+      const dirs = writeProbeRig();
+      const build = runCli(['build', '--rig', dirs.rigPath, '--motion', staticMotionIn(dirs.dir), '--images', dirs.dir, '--out', dirs.outDir]);
+      if (build.status !== 0) probes.push(`the static probe did not build (exit ${String(build.status)}): ${(build.stdout + build.stderr).trim().slice(-300)}`);
+      else {
+        const row = outRow.row ?? '';
+        for (const [root, fps] of [['s_default', PROTOCOL_FPS], ['s_24', 24]] as const) {
+          const rootDir = join(dirs.dir, root);
+          const run = runCli(['render', '--candidate', dirs.outDir, '--max', '32', ...(fps === PROTOCOL_FPS ? [] : ['--fps', String(fps)]), '--out', rootDir]);
+          if (run.status !== 0) {
+            probes.push(`render of the static probe at ${fps} fps exited ${String(run.status)}: ${run.stderr.trim().slice(0, 300)}`);
+            continue;
+          }
+          const label = `static probe at ${fps} fps`;
+          probes.push(...setupSetFaults(label, row, rootDir, fps));
+          if (fps !== PROTOCOL_FPS) {
+            // The plant: the row's 24-fps setup directory spelled another way.
+            const at = frameSetDir(SETUP_POSE_DIR, fps);
+            const altered = row.split(at).join(`${SETUP_POSE_DIR}_${fps}fps`);
+            const plantLabel = `${label} (planted)`;
+            const raised = raisedBy(setupSetFaults(plantLabel, altered, rootDir, fps), { at: plantLabel, was: setupSetFaults(plantLabel, row, rootDir, fps) });
+            if (altered === row) probes.push(`the --out row carries no ${JSON.stringify(at)} for the plant to alter`);
+            else if (raised.length === 0) probes.push(`the --out row with ${JSON.stringify(at)} spelled \`${SETUP_POSE_DIR}_${fps}fps\` read clean`);
+            else said.push(raised[0]);
+          }
+        }
+      }
+    }
+    const ok = probes.length === 0;
+    say(
+      'RN08_A_RIG_WITH_NO_ANIMATION_WRITES_THE_SET_THE_OUT_ROW_NAMES',
+      ok,
+      probeDetail(ok, probes, `a rig with no animation rendered at the default and at 24 fps writes one directory each, ${frameSetDir(SETUP_POSE_DIR, PROTOCOL_FPS)}/ and ${frameSetDir(SETUP_POSE_DIR, 24)}/, which ${FRAMES_SIDECAR} lists alone under sets[].dir with animation null and the --out row names; the row with the 24-fps directory misspelled is named: ${said.join('; ')}`),
+      'issue #1524: `sampleAll` writes one setup-pose set for a rig with no animation, and the --out row said only "each animation" — so the folder it wrote was one the help never named',
     );
   }
 

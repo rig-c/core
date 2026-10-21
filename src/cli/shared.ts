@@ -59,6 +59,7 @@ import {
   FRAMES_SIDECAR,
   type PoserName,
   PROTOCOL_FPS,
+  SETUP_POSE_DIR,
   UnframeablePoseError,
 } from '../render_shared.ts';
 import { BallotError } from '../ballot.ts';
@@ -1758,9 +1759,12 @@ export const COMMANDS: CommandDoc[] = [
       out: {
         value: '<dir>',
         meaning:
-          'directory to write the frame series into (default `render/`). Each animation is a set directory under it, named by the rate (see --fps): ' +
+          'directory to write the frame series into (default `render/`). Each render set is a directory under it, named by the rate (see --fps): one per animation, ' +
           `\`${frameSetDir('<anim>', PROTOCOL_FPS)}/\` at the default, \`${frameSetDir('<anim>', 24).split('24').join('<fps>')}/\` at any other — ` +
-          `\`--fps 24\` writes \`${frameSetDir('<anim>', 24)}/\`, and the default ${PROTOCOL_FPS} writes \`${frameSetDir('<anim>', PROTOCOL_FPS)}/\`. ` +
+          `\`--fps 24\` writes \`${frameSetDir('<anim>', 24)}/\`, and the default ${PROTOCOL_FPS} writes \`${frameSetDir('<anim>', PROTOCOL_FPS)}/\`; ` +
+          `a rig with no animation writes one setup-pose set, \`${frameSetDir(SETUP_POSE_DIR, PROTOCOL_FPS)}/\` at the default and ` +
+          `\`${frameSetDir(SETUP_POSE_DIR, 24).split('24').join('<fps>')}/\` at any other — \`--fps 24\` writes \`${frameSetDir(SETUP_POSE_DIR, 24)}/\` — ` +
+          `which ${FRAMES_SIDECAR} records with \`animation: null\`. ` +
           `The line printed for each set ends in the directory it wrote, and ${FRAMES_SIDECAR} beside the sets names each under \`sets[].dir\``,
       },
       fps: {

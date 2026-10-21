@@ -455,6 +455,8 @@ const REQUESTED_IN_1540 = 'local-adjust evaluation context, requested on issue #
 const REQUESTED_IN_1417 = 'rig-c/pose curve fitting, requested on issue #1417';
 /** The player's named setup geometry read, agreed on issue #1538. */
 const REQUESTED_IN_1538 = 'rig-play named setup mesh read, requested on issue #1538';
+/** The player's per-instance physics preview controls, agreed on issue #1541. */
+const REQUESTED_IN_1541 = 'rig-play live named physics parameters, requested on issue #1541';
 /** The compiler's own lattice/reach preflight, agreed for parts#378 on core#1450. */
 const AGREED_IN_1450 = 'parts#378 segments preflight, agreed on issue #1450';
 
@@ -632,6 +634,7 @@ const OBSERVED_SYMBOLS: ObservedEntry[] = [
   { entry: './core', observed: REQUESTED_IN_1416, needsRuntime: false, values: {}, types: ['PhysicsEnvironment'] },
   { entry: './core', observed: REQUESTED_IN_1417, needsRuntime: false, values: { bezierPolyline: 'function', BEZIER_PIECES: 'constant' }, types: [] },
   { entry: './core', observed: REQUESTED_IN_1538, needsRuntime: false, values: { readSetupMesh: 'function' }, types: ['SetupMesh', 'SetupMeshTarget'] },
+  { entry: './core', observed: REQUESTED_IN_1541, needsRuntime: false, values: {}, types: ['PhysicsParameters', 'PhysicsParameterPatch', 'PhysicsParameterRead'] },
 ];
 
 /**
@@ -1373,6 +1376,43 @@ if (core) {
       }
       console.log('CORE_SETUP_EQUIVALENCE object keys accepted; binding value and triangle order refused');
     }
+    // A runtime-free installed live fixture; both imported and browser-bundled entries.
+    const liveInput = {
+      spec: 'rigc-compiled/1', referenceScale: 100, bones: [{ name: 'root' }], slots: [],
+      skins: [{ name: 'default', bones: [], constraints: {}, attachments: {} }],
+      constraints: [{ kind: 'physics', name: 'spring', declaredIn: 'rig', bone: 'root', x: 1 }], events: [],
+      animations: [{ name: 'move', duration: 1, bones: [{ name: 'root', timelines: [{ name: 'translate', keys: [{ time: 0, x: 0, y: 0 }, { time: 1, x: 20, y: 0 }] }] }], slots: [],
+        constraints: { ik: [], transform: [], path: [], physics: [], slider: [] }, attachments: [], drawOrder: [], events: [] }],
+      images: [], pageGrids: [], droppedStates: [], absentParts: [], meshBones: {}, meshes: {}, physics: [], deformTransforms: [], trackDerivations: [], rig: {}, spine: { sha256: '0'.repeat(64) },
+    };
+    const liveDoc = core.readModel(JSON.stringify(liveInput));
+    const liveSource = JSON.stringify(liveDoc);
+    const fields = ['strength', 'damping', 'inertia', 'wind', 'gravity', 'mix'];
+    for (const kind of ['single', 'composed']) {
+      const live = kind === 'single' ? core.openTrack(liveDoc, 'move', { loop: true, reset: 'animation' }) : core.openTracks(liveDoc, { reset: 'animation' });
+      if (kind === 'composed') {
+        if (live.readPhysicsParameters('spring').effective !== null) said('physics read invented values before start');
+        live.setAnimation(0, 'move', { loop: true, mixDuration: 0 });
+        live.start();
+      }
+      const original = live.readPhysicsParameters('spring');
+      if (original.override !== null || !original.effective || fields.some((field) => !Number.isFinite(original.effective[field]))) said('physics initial six values unavailable after pose 0');
+      for (const field of fields) {
+        live.setPhysicsParameters('spring', { [field]: 0.25 });
+        live.step(0.05);
+        const changed = live.readPhysicsParameters('spring');
+        if (changed.override[field] !== 0.25 || changed.effective[field] !== 0.25) said(kind + ' physics did not set/read ' + field);
+        live.clearPhysicsParameters('spring');
+        live.step(0.05);
+        const cleared = live.readPhysicsParameters('spring');
+        if (cleared.override !== null || JSON.stringify(cleared.effective) !== JSON.stringify(original.effective)) said(kind + ' physics did not clear ' + field);
+      }
+      let refusal = null;
+      try { live.setPhysicsParameters('spring', { wind: 8, damping: Infinity }); } catch (e) { refusal = e; }
+      if (!(refusal instanceof core.CoreInputError) || !why(refusal).includes('spring') || !why(refusal).includes('damping') || live.readPhysicsParameters('spring').override !== null) said(kind + ' physics did not atomically refuse a nonfinite patch');
+    }
+    if (JSON.stringify(liveDoc) !== liveSource) said('live physics modified its source document');
+    console.log('CORE_PHYSICS_PARAMETERS single/composed six fields set/read/clear; atomic refusal; source unchanged');
     const names = pose.bones.map((b) => b.name);
     if (names.join(',') !== plan.bones.join(',')) said('poseRawSetup posed the bones ' + JSON.stringify(names) + ', and the fixture declares ' + JSON.stringify(plan.bones));
     const bone = pose.bones.find((b) => b.name === plan.bone);
@@ -1426,8 +1466,8 @@ process.exit(bad.length === 0 && core !== null ? 0 : 1);
 `;
 
 /** The one file vite bundles: the two calls a player makes, through the entry, by its bare name. */
-const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup, readSetupMesh } from '${NAME}/core';
-export const core = { readModel, poseRawSetup, readSetupMesh };
+const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup, readSetupMesh, openTrack, openTracks, CoreInputError } from '${NAME}/core';
+export const core = { readModel, poseRawSetup, readSetupMesh, openTrack, openTracks, CoreInputError };
 `;
 
 /**

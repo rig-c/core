@@ -25,7 +25,9 @@
  * own evaluation rather than to a mirror of it, issue #1417 — re-exported,
  * never copied, because a copy is the drift the request exists to remove;
  * `CA12` holds the identity; `readSetupMesh`, issue #1538, the named setup
- * geometry read requested by the player, with `SetupMesh` and `SetupMeshTarget`).
+ * geometry read requested by the player, with `SetupMesh` and `SetupMeshTarget`;
+ * `PhysicsParameters`, `PhysicsParameterPatch`, `PhysicsParameterRead`, the live
+ * named constraint overrides requested on issue #1541).
  * The list is `scripts/install_smoke.ts`'s `OBSERVED_SYMBOLS` rows for
  * `./core`, and a symbol added here and not there is not promised.
  */
@@ -36,6 +38,7 @@ export type { SetupMesh, SetupMeshTarget, RawPose, RawBone, RawDrawn, RawClip, R
 export { poseWalkSetup, poseLoopingWalk } from './walk.ts';
 export { openTrack } from './track.ts';
 export type { LiveTrack, TrackOptions, AdjustableLocals, BoneLocals, LocalAdjust, LocalAdjustContext, PhysicsEnvironment } from './track.ts';
+export type { PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from './physics_parameters.ts';
 export { openTracks } from './tracks.ts';
 export type { LiveTracks, TracksOptions, MixOptions, QueueOptions, TrackEntryView } from './tracks.ts';
 export type { WalkPose } from './walk.ts';

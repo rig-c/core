@@ -24,14 +24,15 @@
  * a Bézier segment as, so that a fitter holds its tolerance to the poser's
  * own evaluation rather than to a mirror of it, issue #1417 — re-exported,
  * never copied, because a copy is the drift the request exists to remove;
- * `CA12` holds the identity).
+ * `CA12` holds the identity; `readSetupMesh`, issue #1538, the named setup
+ * geometry read requested by the player, with `SetupMesh` and `SetupMeshTarget`).
  * The list is `scripts/install_smoke.ts`'s `OBSERVED_SYMBOLS` rows for
  * `./core`, and a symbol added here and not there is not promised.
  */
 export { readModel, underSkin, underNoSkin, CoreInputError, CORE_DOCUMENT_SPEC, CORE_DOCUMENT_SPECS, CORE_BLEND_MODES, activeBones } from './index.ts';
 export type { CompiledDocument, CoreSlotRow, CoreBlendMode } from './index.ts';
-export { poseRawSetup, poseRawAnimation, poseRawAnimationEach, loopedTime, setupBounds, physicsClockStep, PHYSICS_CLOCK_LEAD } from './raw.ts';
-export type { RawPose, RawBone, RawDrawn, RawClip, RawClipped, RawEvent, RawReset } from './raw.ts';
+export { readSetupMesh, poseRawSetup, poseRawAnimation, poseRawAnimationEach, loopedTime, setupBounds, physicsClockStep, PHYSICS_CLOCK_LEAD } from './raw.ts';
+export type { SetupMesh, SetupMeshTarget, RawPose, RawBone, RawDrawn, RawClip, RawClipped, RawEvent, RawReset } from './raw.ts';
 export { poseWalkSetup, poseLoopingWalk } from './walk.ts';
 export { openTrack } from './track.ts';
 export type { LiveTrack, TrackOptions, AdjustableLocals, BoneLocals, LocalAdjust, LocalAdjustContext, PhysicsEnvironment } from './track.ts';

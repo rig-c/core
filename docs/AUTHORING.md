@@ -12078,3 +12078,79 @@ for `declared` and the run says so on a line of its own.
   `@rig-c/play` or `rigc preview`.
 - **Not a second poser.** Everything it draws is a pose `render` would have drawn at
   the same frame; where it disagrees with `render --geometry`, it is wrong (`IN04`).
+
+## 14. Read a named mesh at setup
+
+`rig-c/core` promises `readSetupMesh(view, target)` and the types
+`SetupMeshTarget` and `SetupMesh` (issue #1538). It reads any named mesh or linked
+mesh, including one the setup pose does not select, without a player, animation
+step or change to the document's setup selection.
+
+```ts
+import { readModel, underNoSkin, readSetupMesh } from 'rig-c/core';
+import type { SetupMeshTarget, SetupMesh } from 'rig-c/core';
+
+const view = underNoSkin(readModel(modelText));
+const target: SetupMeshTarget = { slot: 'flag', attachment: 'alternate' };
+const mesh: SetupMesh = readSetupMesh(view, target);
+// mesh.vertices: full-double world x,y pairs, y up; no crop/camera conversion.
+```
+
+| field | contract |
+| --- | --- |
+| `target.slot`, `target.attachment` | exact slot name and attachment **table key**; a record's display name, path or atlas region is not an alias |
+| `target.skin` omitted | retain the supplied view, including `readModel`'s `all`; use `underNoSkin` for a fresh skeleton's view |
+| `target.skin: null` | no skin set: default-table fallback, no skin-required bones or constraints activated |
+| `target.skin: name` | the named view, with default-table fallback; only the named skin's activation lists apply |
+| `target.skin: 'all'` | all activation lists; a uniquely filled key resolves, identical definitions keep the existing resolver's first supplying skin, differing definitions are refused because the model does not carry the Spine file's merge order |
+| `mesh.slot`, `mesh.attachment`, `mesh.skin` | requested slot and table key, and the table's supplying skin (which can be the default fallback); a linked mesh retains its own identity |
+| `mesh.vertices` | fresh mutable `number[]`, flat x,y in world units; stored coordinates and weights use the poser's float32 reading and influence order, without normalization |
+| `mesh.triangles`, `mesh.hull` | fresh mutable triangle indices; hull is the number of leading hull **vertices**, or `null` when absent |
+
+Definition equality ignores object property insertion order at every depth,
+including weighted binding records. Array positions, object key presence and
+leaf values remain significant; leaves use `Object.is`, so positive and negative
+zero are distinct when retained in a model. Reordering object keys alone is not
+a different definition. A genuine value, shape or array-order difference still
+produces the same named all-skin refusal; no merge order is inferred.
+
+The setup matrices come from the raw setup poser's existing constraint path,
+including setup sliders and reset physics. A selected mesh is bit-identical to
+`poseRawSetup(view)`'s geometry, including any setup-slider deform. An unselected
+mesh uses its stored vertices through those same matrices: the API never switches
+an attachment to ask what a slider or path constraint would do after a switch.
+A linked mesh borrows its source vertices, triangles and hull; unweighted
+vertices use the queried slot's bone, weighted vertices their named bindings.
+Its `timelines` flag controls source-deform inheritance only when selected, as
+in the existing setup poser. An inactive bone keeps the existing zero world
+matrix; an attachment read does not activate it.
+
+Every result is detached: changing its object or arrays changes no document,
+pose, cached topology or subsequent read. Missing slots, attachments and skins,
+and region, clipping, path or bounding-box targets, throw `CoreInputError`
+naming the requested identity and the problem. Examples include
+`setup mesh slot "s" attachment "missing" under skin null: no such attachment`
+and `…: region is not a mesh`. Ambiguous all-skin definitions name their skins
+and say `choose a named skin`; unknown skin retains `underSkin`'s existing
+`--skin "missing": no such skin` refusal. Existing setup/non-finite refusals
+propagate; the read does not manufacture a partial result when setup is absent.
+
+`S1538` controls exercise literal coordinates, detached data, linked meshes,
+skin lookup and activation, setup-slider deform, and the official runtime's
+`computeWorldVertices` using ordinary JS output arrays at tolerance 0. The
+runtime stores local mesh coordinates and weights in float32, but an output
+`Float32Array` would add a second rounding that this API does not perform.
+
+**Measured nonselected slider distinction.** In spine-core 4.3.13,
+`computeWorldVertices(skeleton, slot, …)` over an unselected mesh still reads
+the **selected slot's deform array**, even for a linked mesh with
+`timelines: false`. `S1538_09` measures a slider at time 0.5 interpolating
+local offsets `(1,2)` and `(3,4)` to `(2,3)`, with a selected source mesh,
+a linked mesh inheriting its timeline, and an independent linked mesh.
+All three selected reads are exact. Four of the six nonselected calls to the
+official method reuse the selected deform; their maximum absolute difference
+from this API is `2.9999999999999982` world units. The other two nonselected
+calls, with the independent linked mesh selected, agree exactly. The API's
+nonselected output is the stored source geometry through the unchanged setup
+matrices; it does not borrow a different selection's deform. The control
+checks both results and the source of the difference, without an epsilon.

@@ -453,6 +453,8 @@ const REQUESTED_IN_1540 = 'local-adjust evaluation context, requested on issue #
  * (`CA12` holds the identity); this row holds the two symbols.
  */
 const REQUESTED_IN_1417 = 'rig-c/pose curve fitting, requested on issue #1417';
+/** The player's named setup geometry read, agreed on issue #1538. */
+const REQUESTED_IN_1538 = 'rig-play named setup mesh read, requested on issue #1538';
 /** The compiler's own lattice/reach preflight, agreed for parts#378 on core#1450. */
 const AGREED_IN_1450 = 'parts#378 segments preflight, agreed on issue #1450';
 
@@ -629,6 +631,7 @@ const OBSERVED_SYMBOLS: ObservedEntry[] = [
   { entry: './core', observed: REQUESTED_IN_1540, needsRuntime: false, values: {}, types: ['LocalAdjustContext'] },
   { entry: './core', observed: REQUESTED_IN_1416, needsRuntime: false, values: {}, types: ['PhysicsEnvironment'] },
   { entry: './core', observed: REQUESTED_IN_1417, needsRuntime: false, values: { bezierPolyline: 'function', BEZIER_PIECES: 'constant' }, types: [] },
+  { entry: './core', observed: REQUESTED_IN_1538, needsRuntime: false, values: { readSetupMesh: 'function' }, types: ['SetupMesh', 'SetupMeshTarget'] },
 ];
 
 /**
@@ -1332,7 +1335,44 @@ if (core && (typeof core.readModel !== 'function' || typeof core.poseRawSetup !=
 if (core) {
   const text = readFileSync(join(HERE, plan.model), 'utf8');
   try {
-    const pose = core.poseRawSetup(core.readModel(text));
+    const view = core.readModel(text);
+    const pose = core.poseRawSetup(view);
+    const selected = pose.drawn.find((row) => row.kind === 'mesh');
+    if (!selected) said('named setup probe reached no mesh');
+    else {
+      const mesh = core.readSetupMesh(view, { slot: selected.slot, attachment: selected.attachment });
+      const same = (a, b) => a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
+      if (!same(mesh.vertices, selected.vertices) || !same(mesh.triangles, selected.triangles) || mesh.hull !== selected.hull) said('readSetupMesh differs from the installed raw setup mesh');
+      mesh.vertices.fill(123); mesh.triangles.reverse();
+      const again = core.readSetupMesh(view, { slot: selected.slot, attachment: selected.attachment });
+      if (!same(again.vertices, selected.vertices) || !same(again.triangles, selected.triangles)) said('readSetupMesh exposes shared mutable arrays');
+      console.log('CORE_SETUP_MESH ' + selected.slot + ' ' + selected.vertices.length / 2 + ' vertices');
+      const input = JSON.parse(text);
+      const slotBone = input.slots.find((slot) => slot.name === selected.slot).bone;
+      const definition = { kind: 'mesh', vertices: { weighted: true, bindings: [
+        [{ bone: slotBone, x: 0, y: 0, weight: 1 }], [{ bone: slotBone, x: 3, y: 0, weight: 1 }], [{ bone: slotBone, x: 0, y: 4, weight: 1 }],
+      ] }, uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], hull: 3 };
+      const rekey = (value) => Array.isArray(value) ? value.map(rekey) : value !== null && typeof value === 'object'
+        ? Object.fromEntries(Object.entries(value).reverse().map(([key, child]) => [key, rekey(child)])) : value;
+      input.skins.find((skin) => skin.name === 'default').attachments[selected.slot].order_probe = definition;
+      input.skins.push({ name: 'order_probe', bones: [], constraints: {}, attachments: { [selected.slot]: { order_probe: rekey(definition) } } });
+      if (input.editorOrder) input.editorOrder.skins.push({ name: 'order_probe', slots: [selected.slot] });
+      const allView = core.readModel(JSON.stringify(input));
+      const target = { slot: selected.slot, attachment: 'order_probe' };
+      const allMesh = core.readSetupMesh(allView, target);
+      const namedMesh = core.readSetupMesh(allView, { ...target, skin: 'default' });
+      if (allMesh.skin !== 'default' || !same(allMesh.vertices, namedMesh.vertices) || !same(allMesh.triangles, namedMesh.triangles) || allMesh.hull !== namedMesh.hull) said('object key order changed the installed named setup mesh');
+      for (const change of ['binding value', 'triangle order']) {
+        const changed = JSON.parse(JSON.stringify(input));
+        const other = changed.skins.find((skin) => skin.name === 'order_probe').attachments[selected.slot].order_probe;
+        if (change === 'binding value') other.vertices.bindings[0][0].x += 1;
+        else other.triangles.reverse();
+        let refusal = null;
+        try { core.readSetupMesh(core.readModel(JSON.stringify(changed)), target); } catch (e) { refusal = e; }
+        if (refusal === null || !why(refusal).includes('attachment "order_probe"') || !why(refusal).includes('skins [default, order_probe]') || !why(refusal).includes('choose a named skin')) said(change + ' lost the installed named all-skin refusal');
+      }
+      console.log('CORE_SETUP_EQUIVALENCE object keys accepted; binding value and triangle order refused');
+    }
     const names = pose.bones.map((b) => b.name);
     if (names.join(',') !== plan.bones.join(',')) said('poseRawSetup posed the bones ' + JSON.stringify(names) + ', and the fixture declares ' + JSON.stringify(plan.bones));
     const bone = pose.bones.find((b) => b.name === plan.bone);
@@ -1386,8 +1426,8 @@ process.exit(bad.length === 0 && core !== null ? 0 : 1);
 `;
 
 /** The one file vite bundles: the two calls a player makes, through the entry, by its bare name. */
-const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup } from '${NAME}/core';
-export const core = { readModel, poseRawSetup };
+const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup, readSetupMesh } from '${NAME}/core';
+export const core = { readModel, poseRawSetup, readSetupMesh };
 `;
 
 /**

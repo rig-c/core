@@ -180,9 +180,9 @@
  */
 import type { ModelSlot, ModelVertices } from '../model.ts';
 import { bezierPolyline, keyIndexAt, type CoreAnimationTimelines, type CoreCurve } from './animation.ts';
-import { activeBones, shownRow, type CompiledDocument, type CoreShown, type CoreSkin, type ShownResolution } from './index.ts';
+import { activeBones, shownAttachment, shownRow, type CompiledDocument, type CoreShown, type CoreSkin, type ShownResolution } from './index.ts';
 import { fillingSkins, slotTimelinesApply, type SlotTimelineGate } from './skins.ts';
-import type { CoreGeometry, ShownGeometry } from './vertices.ts';
+import type { ShownGeometry } from './vertices.ts';
 
 /** The far end the deform curve's recurrence runs to — the header's measurement. */
 export const DEFORM_CURVE_END = 0.99999999;
@@ -515,6 +515,111 @@ export function timelineIdentity(slot: string, shown: CoreShown): string | null 
 
 const nameOf = (a: CoreAttachmentTimeline): string => `${a.skin}/${a.slot}/${a.attachment}`;
 
+/** The part of an attachment state that depends only on the document view and placeholder. */
+interface AttachmentIdentity {
+  readonly entry: ShownGeometry;
+  readonly identity: string | null;
+  readonly vertices: ModelVertices | null;
+  readonly count: number | undefined;
+  readonly fillers: readonly string[];
+}
+
+/** Like shownAttachment's cache, scoped to the view; a new skin view resolves its own records. */
+const identitiesOfView = new WeakMap<CompiledDocument, Map<string, Map<string, AttachmentIdentity | null>>>();
+
+function readIdentity(doc: CompiledDocument, resolve: (doc: CompiledDocument, slot: ModelSlot) => ShownResolution, slot: ModelSlot, placeholder: string): AttachmentIdentity | null {
+  const s = resolve(doc, { ...slot, setup: placeholder });
+  if (s === null || 'conflict' in s || s.record.geometry === undefined) return null;
+  const g = s.record.geometry;
+  const source = g.kind === 'linkedmesh' ? doc.skins.find((k) => k.name === g.skin)?.attachments[g.slot]?.[g.source] : s.record;
+  const sg = source?.geometry;
+  return Object.freeze({
+    entry: Object.freeze({ slot: slot.name, bone: slot.bone, name: shownRow(s).name, placeholder: s.placeholder, skin: s.skin, geometry: g }),
+    identity: timelineIdentity(slot.name, s),
+    vertices: sg !== undefined && sg.kind !== 'region' && sg.kind !== 'linkedmesh' ? sg.vertices : null,
+    count: source?.sequenceCount,
+    fillers: Object.freeze(fillingSkins(doc, slot.name, s.placeholder).map((k) => `"${k}"`)),
+  });
+}
+
+function identityOf(doc: CompiledDocument, resolve: (doc: CompiledDocument, slot: ModelSlot) => ShownResolution, slot: ModelSlot, placeholder: string | null): AttachmentIdentity | null {
+  if (placeholder === null) return null;
+  // A planted resolver may read changing state outside the document. Only the document's own reader is immutable.
+  if (resolve !== shownAttachment) return readIdentity(doc, resolve, slot, placeholder);
+  let slots = identitiesOfView.get(doc);
+  if (slots === undefined) identitiesOfView.set(doc, slots = new Map());
+  let placeholders = slots.get(slot.name);
+  if (placeholders === undefined) slots.set(slot.name, placeholders = new Map());
+  if (placeholders.has(placeholder)) return placeholders.get(placeholder) as AttachmentIdentity | null;
+  const identity = readIdentity(doc, resolve, slot, placeholder);
+  placeholders.set(placeholder, identity);
+  return identity;
+}
+
+/** Index only immutable timeline identity. Times, mixes and the values they compute are never cached. */
+const attachmentsByIdentity = new WeakMap<readonly CoreAttachmentTimeline[], ReadonlyMap<string, readonly CoreAttachmentTimeline[]>>();
+type AttachmentSlots = AttachmentApplication['timelines']['slots'];
+type AttachmentSwitch = NonNullable<AttachmentSlots[number]['timelines'][number]['keys']>;
+const switchesBySlot = new WeakMap<AttachmentSlots, ReadonlyMap<string, readonly AttachmentSwitch[]>>();
+
+function matchingAttachments(timelines: readonly CoreAttachmentTimeline[], identity: string): readonly CoreAttachmentTimeline[] | undefined {
+  let index = attachmentsByIdentity.get(timelines);
+  if (index === undefined) {
+    const rows = new Map<string, CoreAttachmentTimeline[]>();
+    for (const a of timelines) {
+      const name = nameOf(a);
+      const found = rows.get(name);
+      if (found === undefined) rows.set(name, [a]);
+      else found.push(a);
+    }
+    attachmentsByIdentity.set(timelines, index = rows);
+  }
+  return index.get(identity);
+}
+
+function slotSwitches(slots: AttachmentSlots, slot: string): readonly AttachmentSwitch[] | undefined {
+  let index = switchesBySlot.get(slots);
+  if (index === undefined) {
+    const rows = new Map<string, AttachmentSwitch[]>();
+    for (const target of slots) {
+      for (const tl of target.timelines) {
+        if (tl.kind !== 'attachment' || tl.keys === undefined) continue;
+        const found = rows.get(target.name);
+        if (found === undefined) rows.set(target.name, [tl.keys]);
+        else found.push(tl.keys);
+      }
+    }
+    switchesBySlot.set(slots, index = rows);
+  }
+  return index.get(slot);
+}
+
+/** Allocated only when a matching timeline or a mixed deform actually has per-pose state. */
+interface AttachmentValues {
+  deform: number[] | null;
+  frame: number | null;
+  seen: string[];
+}
+
+function applyAttachment(now: AttachmentIdentity | null, values: AttachmentValues | null, timelines: readonly CoreAttachmentTimeline[], t: number, blend: AttachmentApplication | null, evalDeform: DeformEvaluator, blendOf: DeformBlender, evalFrame: SequenceEvaluator): AttachmentValues | null {
+  if (now === null || now.identity === null) return values;
+  const matching = matchingAttachments(timelines, now.identity);
+  if (matching === undefined) return values;
+  values ??= { deform: null, frame: null, seen: [] };
+  if (!values.seen.includes(now.identity)) values.seen.push(now.identity);
+  for (const a of matching) {
+    if (a.deform !== null && now.vertices !== null) {
+      const target = evalDeform(now.vertices, a.deform, t);
+      if (target !== null) values.deform = blend === null ? target : blendOf(now.vertices, values.deform, target, blend.alpha, blend.additive);
+    }
+    if (a.sequence !== null && now.count !== undefined) {
+      const f = evalFrame(a.sequence, now.count, t);
+      if (f !== null) values.frame = f;
+    }
+  }
+  return values;
+}
+
 /**
  * Every slot's shown geometry at one pose — the setup's (`sample` null) or a
  * sample's — with the deform array and the series' frame its attachment
@@ -528,6 +633,11 @@ const nameOf = (a: CoreAttachmentTimeline): string => `${a.skin}/${a.slot}/${a.a
  * differently is left to the slots' own absence. `why` names what the core
  * does not pose: a timeline moving a record whose placeholder several skins
  * fill (the header's ⚠️).
+ *
+ * Identity is kept per document view, slot and placeholder, and timelines
+ * indexed by their record identity. A slot with no per-pose values reuses its
+ * frozen entry; deform arrays and sequence frames are evaluated afresh.
+ * Sliders select identities in application order, never a cached posed value.
  */
 export function attachmentStates(
   doc: CompiledDocument,
@@ -557,66 +667,39 @@ export function attachmentStates(
     const live = gate(doc, slot, active);
     let placeholder = placeholders.get(slot.name) ?? null;
     const base = live ? mixed?.get(slot.name) : undefined;
-    let deform: number[] | null = base?.deform ?? null;
-    let frame: number | null = null;
-    const seen: string[] = base === undefined ? [] : [...base.seen];
-    // What the slot shows now, the record its timelines are keyed as, and what a deform or a frame is computed on.
-    const state = (): { s: CoreShown; identity: string | null; vertices: ModelVertices | null; count: number | undefined } | null => {
-      if (placeholder === null) return null;
-      const s = resolve(doc, { ...slot, setup: placeholder });
-      if (s === null || 'conflict' in s || s.record.geometry === undefined) return null;
-      const g = s.record.geometry;
-      const source = g.kind === 'linkedmesh' ? doc.skins.find((k) => k.name === g.skin)?.attachments[g.slot]?.[g.source] : s.record;
-      const sg = source?.geometry;
-      const vertices = sg !== undefined && sg.kind !== 'region' && sg.kind !== 'linkedmesh' ? sg.vertices : null;
-      return { s, identity: timelineIdentity(slot.name, s), vertices, count: source?.sequenceCount };
-    };
-    const apply = (timelines: readonly CoreAttachmentTimeline[], t: number, blend: { alpha: number; additive: boolean } | null): void => {
-      const now = state();
-      if (now === null || now.identity === null) return;
-      for (const a of timelines) {
-        if (nameOf(a) !== now.identity) continue;
-        if (!seen.includes(now.identity)) seen.push(now.identity);
-        if (a.deform !== null && now.vertices !== null) {
-          const target = evalDeform(now.vertices, a.deform, t);
-          if (target !== null) deform = blend === null ? target : blendOf(now.vertices, deform, target, blend.alpha, blend.additive);
-        }
-        if (a.sequence !== null && now.count !== undefined) {
-          const f = evalFrame(a.sequence, now.count, t);
-          if (f !== null) frame = f;
-        }
-      }
-    };
-    if (sample !== null && live) apply(sample.timelines.attachments, sample.t, null);
-    for (const app of live ? sliders : []) {
-      // The slider's attachment key first, as the slot timelines are (`applySliderSlots` in `./constraints_slider.ts`); a switch to another placeholder clears what the timelines set.
-      for (const target of app.timelines.slots) {
-        if (target.name !== slot.name) continue;
-        for (const tl of target.timelines) {
-          if (tl.kind !== 'attachment' || tl.keys === undefined) continue;
-          const i = keyIndexAt(tl.keys, app.at);
-          if (i < 0) continue;
-          const next = tl.keys[i].name ?? null;
-          if (next !== placeholder) {
-            deform = null;
-            frame = null;
+    let values: AttachmentValues | null = base === undefined || (base.deform === null && base.seen.length === 0) ? null : { deform: base.deform, frame: null, seen: [...base.seen] };
+    let now = identityOf(doc, resolve, slot, placeholder);
+    if (sample !== null && live) values = applyAttachment(now, values, sample.timelines.attachments, sample.t, null, evalDeform, blendOf, evalFrame);
+    if (live) for (const app of sliders) {
+      // Each slider switches first, clearing only the per-pose values; then its attachment timelines apply to the new identity.
+      const switches = slotSwitches(app.timelines.slots, slot.name);
+      if (switches !== undefined) for (const keys of switches) {
+        const i = keyIndexAt(keys, app.at);
+        if (i < 0) continue;
+        const next = keys[i].name ?? null;
+        if (next !== placeholder) {
+          if (values !== null) {
+            values.deform = null;
+            values.frame = null;
           }
           placeholder = next;
+          now = identityOf(doc, resolve, slot, placeholder);
         }
       }
-      apply(app.timelines.attachments, app.at, { alpha: app.alpha, additive: app.additive });
+      values = applyAttachment(now, values, app.timelines.attachments, app.at, app, evalDeform, blendOf, evalFrame);
     }
-    const now = state();
     if (now === null) continue;
-    const entry: ShownGeometry = { slot: slot.name, bone: slot.bone, name: shownRow(now.s).name, placeholder: now.s.placeholder, skin: now.s.skin, geometry: now.s.record.geometry as CoreGeometry };
+    // The cached entry is frozen. A pose with a deform/frame owns its wrapper and values; later poses cannot write into it.
+    const entry = values === null || (values.deform === null && values.frame === null) ? now.entry : { ...now.entry };
     shown.push(entry);
-    const fillers = fillingSkins(doc, slot.name, now.s.placeholder).map((k) => `"${k}"`);
-    if (seen.length > 0 && fillers.length > 1) {
-      why.push(`slot "${slot.name}" shows placeholder "${now.s.placeholder}", which skins ${fillers.join(', ')} fill, and ${seen.map((x) => `"${x}"`).join(', ')} key(s) it — which record --skin all shows, and so whether the timeline moves it, is the Spine file's skin order, not the model's`);
+    if (values !== null && values.seen.length > 0 && now.fillers.length > 1) {
+      why.push(`slot "${slot.name}" shows placeholder "${now.entry.placeholder}", which skins ${now.fillers.join(', ')} fill, and ${values.seen.map((x) => `"${x}"`).join(', ')} key(s) it — which record --skin all shows, and so whether the timeline moves it, is the Spine file's skin order, not the model's`);
       continue;
     }
-    if (deform !== null) entry.deform = deform;
-    if (frame !== null) entry.frame = frame;
+    if (values !== null) {
+      if (values.deform !== null) entry.deform = values.deform;
+      if (values.frame !== null) entry.frame = values.frame;
+    }
   }
   return { shown, why };
 }

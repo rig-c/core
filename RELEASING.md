@@ -326,7 +326,8 @@ string a program outside this tree decides on.
 ## Publishing
 
 **Automated, on the release push.** The second `release` run — the one that tags
-`vX.Y.Z` — checks out that tag and publishes it. It authenticates over OIDC (npm
+`vX.Y.Z` — resolves that tag to a full commit SHA, requires it to match the
+run's `GITHUB_SHA`, and gates and publishes that verified commit. It authenticates over OIDC (npm
 trusted publishing): the runner exchanges a short-lived GitHub token for a
 publish grant, so there is no `NPM_TOKEN` in this repository and no OTP to type.
 That is what `id-token: write` in the `publish` job's permissions is for, and it is also
@@ -435,9 +436,9 @@ which clause the tally failed.
 
 **What runs where.** `release.yml`'s release push is `plan` (release-please:
 the release commit, the tag, the GitHub release) → `gate` (the selftest as six
-shards and their merge, `selftest-shards.yml`, on the tag — the same reusable
+shards and their merge, `selftest-shards.yml`, on the verified push SHA — the same reusable
 workflow `ci.yml` calls on every change, so the two cannot drift; `CUR120`) →
-`publish` (check out the tag, fetch the corpus, download the
+`publish` (check out that verified push SHA, fetch the corpus, download the
 `selftest-merged-tally` artifact, `npm publish` with `RIGC_PREPUBLISH_TALLY` set
 on that step alone, then the alias's publish from the tarball
 `scripts/alias_tarball.ts` packs) → the confirmation of both names. `CUR119` holds that order, the one
@@ -469,7 +470,9 @@ signing-service `502` from `npm publish --provenance` (issue
 [#1504](https://github.com/rig-c/core/issues/1504)). Re-running that run cannot
 recover it: release-please no longer reports `release_created` for a tag it has
 already cut, so `gate` and `publish` are skipped and the registry keeps serving
-the previous version. A publish by hand would lose provenance, and the trusted
+the previous version. A push re-run can also cut a tag at a newer commit than
+that run's original `GITHUB_SHA`; the tag existing does not prove the run's
+provenance names its commit. A publish by hand would lose provenance, and the trusted
 publisher of every name is pinned to `release.yml`.
 
 **Source provenance has to name the checkout.** npm records `GITHUB_REF` and
@@ -479,12 +482,35 @@ older tag therefore names `main`'s commit as the source of the tag's files.
 Before any publish — `rig-c` or either alias — the publish job compares
 `GITHUB_SHA` to `git rev-parse HEAD` on a `workflow_dispatch`. If they differ,
 it fails with `PROVENANCE_SHA_MISMATCH`, naming both full SHAs, and no publish
-runs. The push path is unchanged. This refuses a mismatched attestation; it
+runs. This dispatch guard is unchanged.
+
+On a push that created a release, `plan` resolves the cut tag through
+`gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha`: the commits API peels
+the observed annotated tag to its commit instead of returning its tag-object
+SHA, and the full `refs/tags/` namespace avoids a same-named branch. The shorter
+`commits/tags%2F...` spelling is insufficient: a read-only check on `git/git`'s
+annotated `v2.45.0` returned HTTP 422 there, while the full namespace resolved
+commit `786a3e4b8d754d2b14b1208b98eeb0a554ef19a8`; the lightweight core
+`v2.67.1` full ref resolved `ebf243299d5edba458726fd359e84947ded01a7b`. These
+are specific API observations; the workflow mocks model them rather than proving
+live API behavior. Lookup failure, a missing or
+invalid full SHA, or an invalid stable cut-tag spelling fails closed as
+`RELEASE_TAG_UNRESOLVED`. Before emitting `publish=true`, the plan compares
+that full SHA with `GITHUB_SHA`. A difference is `PROVENANCE_SHA_MISMATCH`,
+naming both SHAs, saying the tag remains cut and printing the exact tag-ref recovery command below with the actual tag.
+Neither `gate` nor any of the three publishes can start on that refusal. Both
+`gate` and the publish checkout use the verified full SHA, so a moved tag is
+not resolved again on a push. A matching push follows the same gate and all
+three publishes; a push with no newly created release performs no lookup and
+publishes nothing. Dispatch retains its existing refusal order and tag/HEAD
+semantics. This refuses a mismatched attestation; it
 does not rewrite the run's provenance variables or re-attest a published version
-(issue [#1542](https://github.com/rig-c/core/issues/1542)). `CUR133` executes
-the guard and publish bodies with closed command mocks: a mismatched dispatch
-publishes nothing, a matching dispatch reaches every name, and a push is not
-subject to the dispatch check.
+(issues [#1542](https://github.com/rig-c/core/issues/1542) and
+[#1551](https://github.com/rig-c/core/issues/1551)). `CUR133` executes the
+resolve, dispatch guard and publish bodies with closed command mocks, including
+annotated tags, a mismatched re-run, failed lookups and each dispatch refusal.
+It also holds both push consumers to the verified SHA. These are mocked workflow
+readings; they do not cut a live tag or publish a package.
 
 **Only dispatched refs containing the guard can enforce it.** GitHub runs
 `release.yml` from the dispatch's selected ref. A tag whose workflow predates
@@ -493,7 +519,7 @@ For a tag that contains the fix, dispatch on that tag explicitly so the run's
 SHA and checkout agree:
 
 ```sh
-gh workflow run release.yml -f tag=vX.Y.Z --ref vX.Y.Z
+gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
 ```
 
 Another dispatched ref can pass only when it contains the guard and resolves

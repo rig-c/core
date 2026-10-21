@@ -80349,7 +80349,7 @@ function runCurrencySuite(): number {
       const [gateName, gateJob] = gate;
       const [publishName, publishJob] = publish;
       const resolved = `\${{ needs.${planName}.outputs.publish == 'true' }}`;
-      const resolvedTag = `\${{ needs.${planName}.outputs.tag }}`;
+      const resolvedTag = `\${{ needs.${planName}.outputs.sha || needs.${planName}.outputs.tag }}`;
 
       // The order: plan → gate → publish, the last two held to the one condition plan resolved (issue #1504).
       if (!needsOf(gateJob).includes(planName)) faults.push(`release.yml: job "${gateName}" does not need "${planName}", so the gate can start before a tag exists`);
@@ -80376,7 +80376,7 @@ function runCurrencySuite(): number {
         if (planJob.outputs?.[output] !== want) faults.push(`release.yml: job "${planName}" exports \`${output}\` as ${JSON.stringify(planJob.outputs?.[output] ?? null)}, not ${want}`);
       }
       if ((gateJob.with?.ref ?? '') !== resolvedTag) {
-        faults.push(`release.yml: job "${gateName}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateJob.with?.ref ?? null)}, not the tag "${planName}" resolved (${resolvedTag}), so the gate reads another tree than the publish`);
+        faults.push(`release.yml: job "${gateName}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateJob.with?.ref ?? null)}, not the ref "${planName}" resolved (${resolvedTag}), so the gate reads another tree than the publish`);
       }
 
       // The publish job's steps: the fetch and the tally before the publish, the variable on the publish alone.
@@ -80542,7 +80542,7 @@ function runCurrencySuite(): number {
           { what: 'the gate loses the resolved condition', edit: once(releaseText, gateIf, gateIf.replace("needs.plan.outputs.publish == 'true'", "github.event_name == 'push'")) },
           { what: 'a dispatch reaches the gate past the resolve step', edit: once(releaseText, gateIf, gateIf.replace("needs.plan.outputs.publish == 'true'", "needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'")) },
           { what: 'the publish is keyed on release-please again', edit: uniq(releaseText, publishIf, publishIf.replace("needs.plan.outputs.publish == 'true'", "github.event_name == 'push' && needs.plan.outputs.release_created == 'true'")) },
-          { what: 'the gate is called on the default branch rather than the tag', edit: uniq(releaseText, '\n      ref: ${{ needs.plan.outputs.tag }}\n\n', "\n      ref: ''\n\n") },
+          { what: 'the gate is called on the default branch rather than the tag', edit: uniq(releaseText, '\n      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n\n', "\n      ref: ''\n\n") },
           { what: 'release-please runs on a dispatch', edit: uniq(releaseText, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n') },
           { what: 'the resolve step is skipped on a dispatch', edit: uniq(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n") },
           { what: 'plan exports the cut tag rather than the resolved one', edit: uniq(releaseText, '      tag: ${{ steps.target.outputs.tag }}\n', '      tag: ${{ steps.release.outputs.tag_name }}\n') },
@@ -80632,7 +80632,7 @@ function runCurrencySuite(): number {
     } else {
       const REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_TAG_PRERELEASE', 'RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'] as const;
       const UNPUBLISHED_CUT_LINE = 'a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch';
-      const DISPATCH = 'gh workflow run release.yml -f tag=';
+      const DISPATCH = 'gh workflow run release.yml --ref vX.Y.Z -f tag=';
       const PLAN_TERMS = ["github.event_name == 'push'", "inputs.tag != ''", "inputs.version == ''"];
       const CONFIRM_TERMS = ["github.event_name == 'workflow_dispatch'", "inputs.version != ''", "inputs.tag == ''"];
       interface DispatchInput {
@@ -80700,13 +80700,14 @@ function runCurrencySuite(): number {
         }
         const condition = `\${{ needs.${planName}.outputs.publish == 'true' }}`;
         const tag = `\${{ needs.${planName}.outputs.tag }}`;
+        const ref = `\${{ needs.${planName}.outputs.sha || needs.${planName}.outputs.tag }}`;
         for (const [name, job] of [gateEntry, publishEntry]) {
           if (job.if !== condition) faults.push(`release.yml: job "${name}" runs under ${JSON.stringify(job.if ?? null)}, not ${condition}`);
         }
-        if (gateEntry[1].with?.ref !== tag) faults.push(`release.yml: job "${gateEntry[0]}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateEntry[1].with?.ref ?? null)}, not ${tag}`);
+        if (gateEntry[1].with?.ref !== ref) faults.push(`release.yml: job "${gateEntry[0]}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateEntry[1].with?.ref ?? null)}, not ${ref}`);
         const publishSteps = publishEntry[1].steps ?? [];
         const checkout = publishSteps.find((step) => /^actions\/checkout@/.test(step.uses ?? ''));
-        if (checkout?.with?.ref !== tag) faults.push(`release.yml: job "${publishEntry[0]}" checks out ${JSON.stringify(checkout?.with?.ref ?? null)}, not ${tag}`);
+        if (checkout?.with?.ref !== ref) faults.push(`release.yml: job "${publishEntry[0]}" checks out ${JSON.stringify(checkout?.with?.ref ?? null)}, not ${ref}`);
         const confirmation = publishSteps.find((step) => runLines(step).some((line) => line.startsWith('bun run smoke')));
         if (confirmation?.env?.TAG_NAME !== tag) faults.push(`release.yml: the confirmation in job "${publishEntry[0]}" reads TAG_NAME ${JSON.stringify(confirmation?.env?.TAG_NAME ?? null)}, not ${tag}`);
         for (const [name, job] of jobs) {
@@ -80751,8 +80752,8 @@ function runCurrencySuite(): number {
         { what: 'the resolve step skipped on a dispatch', yml: one(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n"), want: 'could skip its refusals' },
         { what: 'the gate keyed on release-please again', yml: one(releaseText, `    needs: plan\n${condition}`, "    needs: plan\n    if: ${{ github.event_name == 'push' && needs.plan.outputs.release_created == 'true' }}\n"), want: 'job "gate" runs under' },
         { what: 'the publish admits any dispatch', yml: one(releaseText, `    needs: [plan, gate]\n${condition}`, "    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch' }}\n"), want: 'job "publish" runs under' },
-        { what: 'the gate reads the cut tag again', yml: one(releaseText, '    with:\n      ref: ${{ needs.plan.outputs.tag }}\n', '    with:\n      ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'with ref' },
-        { what: 'the publish checks out the cut tag again', yml: one(releaseText, '        with:\n          ref: ${{ needs.plan.outputs.tag }}\n', '        with:\n          ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'checks out' },
+        { what: 'the gate reads the cut tag again', yml: one(releaseText, '\n      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n', '\n      ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'with ref' },
+        { what: 'the publish checks out the cut tag again', yml: one(releaseText, '\n          ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n', '\n          ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'checks out' },
         { what: 'the confirmation reads the cut tag again', yml: one(releaseText, 'TAG_NAME: ${{ needs.plan.outputs.tag }}', 'TAG_NAME: ${{ needs.plan.outputs.tag_name }}'), want: 'reads TAG_NAME' },
         { what: 'plan exports the cut tag', yml: one(releaseText, '      tag: ${{ steps.target.outputs.tag }}\n', '      tag: ${{ steps.release.outputs.tag_name }}\n'), want: 'exports `tag`' },
         { what: 'the dispatch-input refusal unnamed', yml: releaseText.includes('::error::RELEASE_DISPATCH_INPUT:') ? releaseText.split('::error::RELEASE_DISPATCH_INPUT:').join('::error::') : null, want: 'RELEASE_DISPATCH_INPUT' },
@@ -81016,9 +81017,11 @@ function runCurrencySuite(): number {
           run?: string;
           if?: string;
           'continue-on-error'?: boolean | string;
+          id?: string;
+          with?: Record<string, string>;
         }
         interface ProvenanceWorkflow {
-          jobs?: Record<string, { steps?: ProvenanceStep[] }>;
+          jobs?: Record<string, { steps?: ProvenanceStep[]; with?: Record<string, string>; outputs?: Record<string, string> }>;
         }
         const rule = 'PROVENANCE_SHA_MISMATCH';
         const mock = mkdtempSync(join(harnessTemp(), 'rigc-provenance-'));
@@ -81029,7 +81032,8 @@ function runCurrencySuite(): number {
         const different = '2'.repeat(40);
         const bodies: Record<string, string> = {
           git: 'printf "git %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$*" = "rev-parse HEAD" ] || exit 91\nprintf "%s\\n" "$MOCK_HEAD"\n',
-          npm: 'printf "npm %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$1" = publish ] || exit 92\n',
+          gh: 'printf "gh %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = api ]; then\n  case "$*" in "api repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG --jq .sha") printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/commits/tags%2F$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "HTTP 422: No commit found for SHA: tags/%s\\n" "$CUT_TAG" >&2; exit 1; fi; printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/git/ref/tags/$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "%s\\n" "$MOCK_OBJECT"; else printf "%s\\n" "$MOCK_COMMIT"; fi;; *) exit 94;; esac\n  exit "$MOCK_API_EXIT"\nfi\n[ "$*" = "release view $INPUT_TAG --repo mock/core" ] || exit 95\nexit "$MOCK_RELEASE_EXIT"\n',
+          npm: 'printf "npm %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = publish ]; then exit 0; fi\n[ "$1" = view ] && [ "$3" = version ] || exit 92\ncase "$2" in rig-c@*) [ -n "$MOCK_SERVED" ] || exit 1; printf "%s\\n" "$MOCK_SERVED";; rig-c) printf "%s\\n" "$MOCK_LATEST";; *) exit 96;; esac\n',
           bun: 'printf "bun %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$1" = scripts/alias_tarball.ts ] && [ "$2" = pack ] || exit 93\nprintf "mock-alias.tgz\\n"\n',
         };
         for (const [name, body] of Object.entries(bodies)) {
@@ -81037,6 +81041,112 @@ function runCurrencySuite(): number {
           writeFileSync(file, `#!/bin/bash\nset -euo pipefail\n${body}`);
           chmodSync(file, 0o755);
         }
+        // grep and the JS runtime execute only the extracted dispatch spelling/semver
+        // logic. All service commands are stubs and the child inherits no credentials.
+        symlinkSync('/usr/bin/grep', join(bin, 'grep'));
+        symlinkSync(process.execPath, join(bin, 'node'));
+        const inspectPlan = (wf: ProvenanceWorkflow, steps: ProvenanceStep[]): { faults: string[]; rows: string[] } => {
+          const faults: string[] = [];
+          const rows: string[] = [];
+          const plan = wf.jobs?.plan;
+          const target = plan?.steps?.find((step) => step.id === 'target');
+          if (target?.run === undefined) return { faults: ['plan has no executable target body'], rows };
+          const pinned = '${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}';
+          if (plan?.outputs?.sha !== '${{ steps.target.outputs.sha }}') faults.push('plan must export the verified SHA');
+          if (wf.jobs?.gate?.with?.ref !== pinned) faults.push('gate must consume the verified push SHA, with tag fallback only for dispatch');
+          if (steps.find((step) => /^actions\/checkout@/.test(step.uses ?? ''))?.with?.ref !== pinned) faults.push('publish checkout must consume the same verified push SHA');
+          const tag = 'v1.2.3';
+          // Narrow public observations supplied by a read-only API capture:
+          // git/git's annotated v2.45.0 short commit ref returned 422, while
+          // refs/tags resolved its commit; core's lightweight full ref also resolved.
+          // The stubs model those responses; this control is no live API oracle.
+          const annotated = { repo: 'git/git', cutTag: 'v2.45.0', expectedCommit: '786a3e4b8d754d2b14b1208b98eeb0a554ef19a8', object: '8be58deda2ccce7d036072ec34439f9fad88204f', refKind: 'tag' };
+          const lightweight = { repo: 'rig-c/core', cutTag: 'v2.67.1', expectedCommit: 'ebf243299d5edba458726fd359e84947ded01a7b', refKind: 'commit' };
+          interface Scenario {
+            name: string; event?: string; created?: string; cutTag?: string; inputTag?: string; inputVersion?: string;
+            commit?: string; sha?: string; apiExit?: string; releaseExit?: string; served?: string; latest?: string;
+            rule?: string; noRelease?: boolean; apiReads?: number; published?: number; refKind?: string;
+            repo?: string; expectedCommit?: string; object?: string;
+          }
+          const scenarios: Scenario[] = [
+            { name: 'matching lightweight push', ...lightweight },
+            { name: 'matching annotated push', ...annotated },
+            { name: 'mismatching rerun retains cut tag', sha: different, rule: rule },
+            { name: 'annotated object SHA is not the commit', ...annotated, sha: annotated.object, rule: rule },
+            { name: 'lookup fails with plausible SHA', apiExit: '1', rule: 'RELEASE_TAG_UNRESOLVED' },
+            ...['', 'null', checkedOut.slice(0, 7), 'g'.repeat(40), `${checkedOut}\n${different}`, `{"sha":"${checkedOut}"}`].map((commit) => ({ name: `invalid commit ${JSON.stringify(commit)}`, commit, rule: 'RELEASE_TAG_UNRESOLVED' })),
+            { name: 'invalid cut tag', cutTag: '../heads/main', rule: 'RELEASE_TAG_UNRESOLVED', apiReads: 0 },
+            ...['false', ''].map((created) => ({ name: `no release ${JSON.stringify(created)}`, created, cutTag: '', noRelease: true, apiReads: 0 })),
+            { name: 'matching dispatch', event: 'workflow_dispatch', apiReads: 0 },
+            { name: 'mismatched dispatch', event: 'workflow_dispatch', sha: different, rule: rule, apiReads: 0, published: 0 },
+            { name: 'both dispatch inputs precede form check', event: 'workflow_dispatch', inputTag: 'bad', inputVersion: '1.2.3', rule: 'RELEASE_DISPATCH_INPUT', apiReads: 0 },
+            { name: 'neither dispatch input', event: 'workflow_dispatch', inputTag: '', rule: 'RELEASE_DISPATCH_INPUT', apiReads: 0 },
+            { name: 'invalid dispatch form', event: 'workflow_dispatch', inputTag: 'main', rule: 'RELEASE_TAG_FORM', apiReads: 0 },
+            { name: 'prerelease precedes release lookup', event: 'workflow_dispatch', inputTag: 'v1.2.3-rc.1', releaseExit: '1', rule: 'RELEASE_TAG_PRERELEASE', apiReads: 0 },
+            { name: 'unreleased precedes registry reads', event: 'workflow_dispatch', releaseExit: '1', served: '1.2.3', rule: 'RELEASE_TAG_UNRELEASED', apiReads: 0 },
+            { name: 'already published precedes below latest', event: 'workflow_dispatch', served: '1.2.3', latest: '1.2.4', rule: 'RELEASE_ALREADY_PUBLISHED', apiReads: 0 },
+            { name: 'below latest', event: 'workflow_dispatch', latest: '1.2.4', rule: 'RELEASE_TAG_BELOW_LATEST', apiReads: 0 },
+          ];
+          for (const scenario of scenarios) {
+            const event = scenario.event ?? 'push';
+            const expectedCommit = scenario.expectedCommit ?? checkedOut;
+            const scenarioTag = scenario.cutTag ?? tag;
+            const repo = scenario.repo ?? 'mock/core';
+            const tagObject = scenario.object ?? '3'.repeat(40);
+            const recovery = `gh workflow run release.yml --ref ${scenarioTag} -f tag=${scenarioTag}`;
+            const sha = scenario.sha ?? expectedCommit;
+            const outputFile = join(mock, 'outputs.txt');
+            writeFileSync(outputFile, '');
+            writeFileSync(trace, '');
+            // The cut is a fixture that predates plan. The mock never cuts or
+            // removes it; refusal must preserve it, just as a failed job does.
+            const cutFile = join(mock, 'already-cut-tag.txt');
+            writeFileSync(cutFile, `${scenarioTag}\n${expectedCommit}\n`);
+            const env = {
+              PATH: bin, MOCK_TRACE: trace, MOCK_HEAD: expectedCommit,
+              MOCK_COMMIT: scenario.commit ?? expectedCommit, MOCK_API_EXIT: scenario.apiExit ?? '0', MOCK_KIND: scenario.refKind ?? 'commit', MOCK_OBJECT: tagObject,
+              MOCK_RELEASE_EXIT: scenario.releaseExit ?? '0', MOCK_SERVED: scenario.served ?? '', MOCK_LATEST: scenario.latest ?? '1.2.2',
+              EVENT: event, CREATED: scenario.created ?? 'true', CUT_TAG: scenario.cutTag ?? tag,
+              INPUT_TAG: scenario.inputTag ?? tag, INPUT_VERSION: scenario.inputVersion ?? '',
+              REPO: repo, GITHUB_SHA: sha, GITHUB_EVENT_NAME: event, GITHUB_OUTPUT: outputFile, RUNNER_TEMP: 'mock-runner-temp',
+            };
+            const run = (body: string) => spawnSync('/bin/bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', body], { cwd: mock, encoding: 'utf8', timeout: 5000, env });
+            const resolved = run(target.run);
+            const outputs = Object.fromEntries(readFileSync(outputFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => line.split('=')));
+            let exit = resolved.status;
+            let output = `${resolved.stdout ?? ''}${resolved.stderr ?? ''}`;
+            if (resolved.error !== undefined) output += String(resolved.error);
+            // Follow the real publish condition only after a successful plan,
+            // then execute its existing guard and all three actual publish bodies.
+            if (exit === 0 && outputs.publish === 'true') {
+              for (const step of steps.filter((step) => (step.run ?? '').includes(rule) || /\bnpm publish\b/.test(step.run ?? ''))) {
+                const ran = run(step.run ?? '');
+                exit = ran.status;
+                output += `${ran.stdout ?? ''}${ran.stderr ?? ''}`;
+                if (ran.error !== undefined) output += String(ran.error);
+                if (exit !== 0) break;
+              }
+            }
+            const calls = readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean);
+            const published = calls.filter((line) => line.startsWith('npm publish '));
+            const api = calls.filter((line) => line.startsWith('gh api '));
+            const wantExit = scenario.rule === undefined ? 0 : 1;
+            const wantPublished = scenario.published ?? (wantExit === 0 && !scenario.noRelease ? 3 : 0);
+            if (exit !== wantExit || published.length !== wantPublished) faults.push(`${scenario.name}: exit ${exit}, publishes ${published.length}, required ${wantExit}/${wantPublished}; ${JSON.stringify(output)}`);
+            if (api.length !== (scenario.apiReads ?? 1) || calls.some((line) => line.startsWith('gh api ') && line !== `gh api repos/${repo}/commits/refs%2Ftags%2F${scenarioTag} --jq .sha`)) faults.push(`${scenario.name}: unexpected commits API reads ${JSON.stringify(api)}`);
+            if (scenario.rule !== undefined && !output.includes(`::error::${scenario.rule}:`)) faults.push(`${scenario.name}: missing named refusal ${scenario.rule}`);
+            if (event === 'push' && scenario.rule !== undefined && Object.keys(outputs).length !== 0) faults.push(`${scenario.name}: plan emitted outputs before refusal ${JSON.stringify(outputs)}`);
+            if (scenario.rule === rule && (!output.includes(sha) || !output.includes(expectedCommit))) faults.push(`${scenario.name}: refusal must name both full SHAs`);
+            if (event === 'push' && scenario.rule === rule && (!output.includes(recovery) || !output.includes('the tag remains cut'))) faults.push(`${scenario.name}: refusal must retain the cut and give exact recovery ${recovery}`);
+            if (event === 'push' && wantExit === 0 && !scenario.noRelease && JSON.stringify(outputs) !== JSON.stringify({ publish: 'true', tag: scenarioTag, sha: expectedCommit })) faults.push(`${scenario.name}: wrong verified outputs ${JSON.stringify(outputs)}`);
+            if (event === 'workflow_dispatch' && outputs.sha !== undefined) faults.push(`${scenario.name}: dispatch resolution changed to emit a SHA`);
+            if (scenario.noRelease && JSON.stringify(outputs) !== JSON.stringify({ publish: 'false' })) faults.push(`${scenario.name}: no-release output changed`);
+            if (readFileSync(cutFile, 'utf8') !== `${scenarioTag}\n${expectedCommit}\n`) faults.push(`${scenario.name}: cut tag changed`);
+            if (published.some((line) => !line.includes('--provenance'))) faults.push(`${scenario.name}: publish lost provenance`);
+            rows.push(`${scenario.name}${scenario.refKind === 'tag' ? ` (annotated object ${tagObject}, commits API ${expectedCommit})` : ''}: exit ${exit}, publishes ${published.length}/3, outputs ${JSON.stringify(outputs)}, calls ${JSON.stringify(calls)}, output ${JSON.stringify(output.trim())}`);
+          }
+          return { faults, rows };
+        };
         const publishes = (step: ProvenanceStep): boolean => /\bnpm publish\b/.test(step.run ?? '');
         const inspect = (text: string): { faults: string[]; rows: string[] } => {
           const faults: string[] = [];
@@ -81058,6 +81168,9 @@ function runCurrencySuite(): number {
           if (checkout < 0 || checkout >= guard) faults.push('the provenance guard must read HEAD after checkout');
           if (publishSteps.some((at) => at <= guard)) faults.push('the provenance guard must precede every publish, canonical and aliases');
           if (steps[guard].if !== undefined || steps[guard]['continue-on-error'] !== undefined) faults.push('the provenance guard can be skipped or its failure ignored');
+          const planMeasured = inspectPlan(wf, steps);
+          faults.push(...planMeasured.faults);
+          rows.push(...planMeasured.rows);
           const selected = steps.filter((step, at) => at === guard || publishes(step));
           const scenarios = [
             { name: 'mismatched dispatch', event: 'workflow_dispatch', sha: different, exit: 1, publish: 0, git: 1 },
@@ -81098,7 +81211,7 @@ function runCurrencySuite(): number {
         try {
           const standing = inspect(releaseText);
           const parsed = readYaml(releaseText) as ProvenanceWorkflow;
-          const steps = Object.values(parsed.jobs ?? {}).flatMap((job) => job.steps ?? []);
+          const steps = Object.values(parsed.jobs ?? {}).find((job) => (job.steps ?? []).some(publishes))?.steps ?? [];
           const guardBody = steps.find((step) => (step.run ?? '').includes(rule))?.run ?? '';
           const lateGuard = readYaml(releaseText) as ProvenanceWorkflow;
           const lateSteps = Object.values(lateGuard.jobs ?? {}).find((job) => (job.steps ?? []).some(publishes))?.steps ?? [];
@@ -81107,12 +81220,40 @@ function runCurrencySuite(): number {
             const [moved] = lateSteps.splice(guardAt, 1);
             lateSteps.splice(lateSteps.findIndex(publishes) + 1, 0, moved);
           }
+          const planBody = parsed.jobs?.plan?.steps?.find((step) => step.id === 'target')?.run ?? '';
+          const changePlan = (from: string, to: string): string | null => {
+            if (planBody.split(from).length !== 2) return null;
+            const changed = readYaml(releaseText) as ProvenanceWorkflow;
+            const step = changed.jobs?.plan?.steps?.find((item) => item.id === 'target');
+            if (step === undefined) return null;
+            step.run = planBody.replace(from, to);
+            return JSON.stringify(changed);
+          };
+          const guardDeleted = guardBody === '' ? null : releaseText.replace(guardBody.trimEnd().split('\n').map((line) => `          ${line}`).join('\n'), '          :');
+          const deletionFaults: string[] = [];
+          if (guardDeleted === null || guardDeleted === releaseText) deletionFaults.push('dispatch guard deletion made no edit');
+          else {
+            const deleted = readYaml(guardDeleted) as ProvenanceWorkflow;
+            const deletedSteps = Object.values(deleted.jobs ?? {}).find((job) => (job.steps ?? []).some(publishes))?.steps ?? [];
+            const originalAt = steps.findIndex((step) => step.run === guardBody);
+            if (originalAt < 0 || deletedSteps[originalAt]?.run?.trim() !== ':') deletionFaults.push('deletion did not replace the intended publish dispatch guard');
+            if (deleted.jobs?.plan?.steps?.find((step) => step.id === 'target')?.run !== planBody) deletionFaults.push('dispatch guard deletion changed the plan resolver');
+          }
           const plants = [
-            { what: 'guard deleted', text: guardBody === '' ? null : releaseText.replace(guardBody.trimEnd().split('\n').map((line) => `          ${line}`).join('\n'), '          :') },
+            { what: 'push comparison reversed', text: changePlan('"$GITHUB_SHA" != "$tag_sha"', '"$GITHUB_SHA" = "$tag_sha"') },
+            { what: 'push lookup failure ignored', text: changePlan('if ! tag_sha=', 'if tag_sha=') },
+            { what: 'push accepts a short SHA', text: changePlan('^[0-9a-f]{40}$', '^[0-9a-f]{7,40}$') },
+            { what: 'push uses short commit ref that rejects the observed annotated tag', text: changePlan('commits/refs%2Ftags%2F$CUT_TAG', 'commits/tags%2F$CUT_TAG') },
+            { what: 'push compares a tag object from refs API', text: changePlan('commits/refs%2Ftags%2F$CUT_TAG', 'git/ref/tags/$CUT_TAG') },
+            { what: 'push publishes true before comparison', text: changePlan('if [ "$GITHUB_SHA" != "$tag_sha" ]; then', 'echo "publish=true" >> "$GITHUB_OUTPUT"; if [ "$GITHUB_SHA" != "$tag_sha" ]; then') },
+            { what: 'gate re-resolves mutable tag', text: releaseText.replace('      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}', '      ref: ${{ needs.plan.outputs.tag }}') },
+            { what: 'checkout re-resolves mutable tag', text: releaseText.replace('          ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}', '          ref: ${{ needs.plan.outputs.tag }}') },
+            { what: 'recovery loses tag ref', text: changePlan('release.yml --ref $CUT_TAG -f tag=$CUT_TAG', 'release.yml -f tag=$CUT_TAG') },
+            { what: 'guard deleted', text: guardDeleted },
             { what: 'guard after the canonical publish', text: guardAt < 0 ? null : JSON.stringify(lateGuard) },
             { what: 'SHA comparison reversed', text: releaseText.includes('"$GITHUB_SHA" != "$checked_out_sha"') ? releaseText.replace('"$GITHUB_SHA" != "$checked_out_sha"', '"$GITHUB_SHA" = "$checked_out_sha"') : null },
           ];
-          const probes: string[] = [];
+          const probes: string[] = [...deletionFaults];
           const rows = [...standing.rows];
           for (const plant of plants) {
             if (plant.text === null || plant.text === releaseText) probes.push(`${plant.what}: no edit was made`);

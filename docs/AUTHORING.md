@@ -6974,7 +6974,14 @@ names the one file there that reads as it (§5.1.2). It is never read as that fi
 
 **Maintainers — release workflow failures:** `PROVENANCE_SHA_MISMATCH` is a
 release-workflow refusal, not a rig-spec or `build` failure. It names both SHAs:
-the run's `GITHUB_SHA` and the checked-out `HEAD`. Recovery requires a dispatched
+the run's `GITHUB_SHA` and either the cut tag's commit resolved by the commits
+API with the full `refs/tags/` namespace in the push plan, or the checked-out
+`HEAD` in the dispatch publish job.
+A mismatched push leaves the tag cut and prints
+`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z` with the actual tag;
+neither the gate nor any publish starts. A failed commit lookup or invalid full
+SHA is `RELEASE_TAG_UNRESOLVED`. Matching pushes gate and check out the verified
+full SHA; dispatch keeps its tag/HEAD guard. Recovery requires a dispatched
 ref at the tag's commit whose `release.yml` contains the guard; an old tag whose
 workflow predates the guard cannot gain it from a newer `main`. See
 [Republishing a cut whose publish failed](https://github.com/rig-c/core/blob/main/RELEASING.md#republishing-a-cut-whose-publish-failed)

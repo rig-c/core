@@ -747,8 +747,18 @@ export interface AdjustableLocals {
   bone(name: string): BoneLocals;
 }
 
-/** What `openTrack`'s `adjust` is: called once per pose with the step's locals (`BoneLocals`). */
-export type LocalAdjust = (locals: AdjustableLocals) => void;
+/** The pose being adjusted (issue #1540), independent of the physics clock. */
+export interface LocalAdjustContext {
+  /** Current track-0 entry's unwrapped seconds, starting at 0; null without that entry. */
+  readonly trackTime: number | null;
+  /** That same entry's animation name; null without it or for an explicit empty entry. */
+  readonly animation: string | null;
+  /** Running sum of this walk's steps, in seconds; never the physics clock. */
+  readonly globalTime: number;
+}
+
+/** Called once per evaluated pose, after track composition and before world transforms and physics. Unary callbacks remain assignable. */
+export type LocalAdjust = (locals: AdjustableLocals, ctx: LocalAdjustContext) => void;
 
 /** The seven channels a `BoneLocals` reads and writes, each with the value an unstated one reads as (`worldTransforms`' defaults). */
 const LOCAL_CHANNELS = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 } as const;
@@ -789,7 +799,7 @@ class StepLocals implements BoneLocals {
 }
 
 /** The adjustment run over a step's `bones` (`posedBones`' array, in the document's order), which it may replace bone by bone (`BoneLocals`). */
-function adjustLocals(doc: CompiledDocument, bones: ModelBone[], adjust: LocalAdjust): void {
+function adjustLocals(doc: CompiledDocument, bones: ModelBone[], adjust: LocalAdjust, context: LocalAdjustContext): void {
   const views = new Map<string, StepLocals>();
   const names = doc.bones.map((b) => b.name);
   adjust({
@@ -805,7 +815,7 @@ function adjustLocals(doc: CompiledDocument, bones: ModelBone[], adjust: LocalAd
       }
       return view;
     },
-  });
+  }, context);
 }
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -925,7 +935,8 @@ export function slotRowsFrom(
 export interface PoseStep {
   ctx: PhysicsStepContext;
   before: number;
-  adjust?: LocalAdjust;
+  /** Callback and its authoritative evaluation identity travel together; no inferred clock fallback. */
+  adjustment?: { callback: LocalAdjust; context: LocalAdjustContext };
 }
 
 /**
@@ -991,7 +1002,7 @@ function posedBoneStep(doc: CompiledDocument, timelines: CoreAnimationTimelines,
   if (constraints !== undefined && step !== undefined) return steppedLocals(doc, bones, plant, () => pathDeformed(doc, posedRecords(constraintRecords(doc), constraints, t), timelines, t, plant), constraints.physicsKeyed ?? [], t, sliders, step);
   const active = activeBones(doc);
   // The caller's adjustment, after the timelines and before anything reads the locals (`LocalAdjust`).
-  if (step?.adjust !== undefined) adjustLocals(doc, bones, step.adjust);
+  if (step?.adjustment !== undefined) adjustLocals(doc, bones, step.adjustment.callback, step.adjustment.context);
   let world = (plant.evaluate ?? worldTransforms)(bones, active);
   if (constraints !== undefined) {
     const setupRecords = constraintRecords(doc);
@@ -1018,7 +1029,7 @@ function posedBoneStep(doc: CompiledDocument, timelines: CoreAnimationTimelines,
 function steppedLocals(doc: CompiledDocument, bones: ModelBone[], plant: TimelinePlant, records: () => CoreConstraintRecord[], physicsKeyed: NonNullable<CoreConstraintTimelines['physicsKeyed']>, t: number, sliders: SliderApplication[] | undefined, step: PoseStep): PosedStep {
   const active = activeBones(doc);
   // The caller's adjustment, after the timelines and before anything reads the locals (`LocalAdjust`).
-  if (step.adjust !== undefined) adjustLocals(doc, bones, step.adjust);
+  if (step.adjustment !== undefined) adjustLocals(doc, bones, step.adjustment.callback, step.adjustment.context);
   let world = (plant.evaluate ?? worldTransforms)(bones, active);
   const stepped = stepPhysicsRecords(records(), physicsKeyed, t, active, step.ctx, step.before);
   world = applyConstraints(bones, world, active, plant.constraints ? plant.constraints(stepped) : stepped, null, sliders, step.ctx, undefined, solverRules(plant.solver));

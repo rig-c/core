@@ -16380,6 +16380,172 @@ function scanPlantClauses(path: string, text: string): PlantClauseScan {
   return out;
 }
 
+/** Issue #1540: small literal poses, current-entry identity, and identical-history replay. No builds or corpus. */
+function runLocalAdjustContextSuite(): number {
+  console.log('\n── local-adjust evaluation context (issue #1540) ──');
+  let bad = 0;
+  const same = (got: unknown, want: unknown): boolean => JSON.stringify(got) === JSON.stringify(want);
+  const check = (name: string, run: () => string[]): void => {
+    let faults: string[];
+    try { faults = run(); } catch (e) { faults = [e instanceof Error ? e.stack ?? e.message : String(e)]; }
+    bad += reportCase(name, faults.length === 0, probeDetail(faults.length === 0, faults, 'every probe held'), 'issue #1540: evaluation identity and callback schedule must come from the pose being evaluated');
+  };
+  const document = (physics = false): CompiledDocument => readModel(JSON.stringify({
+    spec: 'rigc-compiled/1', referenceScale: 100,
+    bones: [{ name: 'root' }, { name: 'tip', parent: 'root', x: 10, length: 12 }],
+    slots: [{ name: 'tip', bone: 'tip', setup: 'tile' }],
+    skins: [{ name: 'default', bones: [], constraints: {}, attachments: { tip: { tile: { kind: 'region', width: 4, height: 4, atlas: { width: 4, height: 4, offsetX: 0, offsetY: 0, originalWidth: 4, originalHeight: 4 } } } } }],
+    constraints: physics ? [{ kind: 'physics', name: 'spring', declaredIn: 'rig', bone: 'tip', rotate: 1, wind: 20, gravity: 12, strength: 40, damping: 0.85, inertia: 0.5, mass: 1 }] : [],
+    events: [], animations: [['a', 2], ['b', 10]].map(([name, x]) => ({
+      name, duration: 1,
+      bones: [{ name: 'root', timelines: [{ name: 'translatex', keys: [{ time: 0, value: x }, { time: 1, value: Number(x) + 4 }] }] }],
+      slots: [], constraints: { ik: [], transform: [], path: [], physics: [], slider: [] }, attachments: [], drawOrder: [], events: [],
+    })),
+    images: [], pageGrids: [], droppedStates: [], absentParts: [], meshBones: {}, meshes: {}, physics: [], deformTransforms: [], trackDerivations: [], rig: {}, spine: { sha256: FORGED_SPINE_SHA256 },
+  }), 'the local-adjust context probe');
+  const context = (trackTime: number | null, animation: string | null, globalTime: number): LocalAdjustContext => ({ trackTime, animation, globalTime });
+
+  check('LA154001_SINGLE_ENTRY_TIME_IS_UNWRAPPED_AND_EXCLUDES_THE_PHYSICS_CLOCK', () => {
+    const faults: string[] = [];
+    for (const loop of [false, true]) for (const reset of ['animation', 'setup'] as const) {
+      const calls: LocalAdjustContext[] = [];
+      const t = openTrack(document(), 'a', { loop, reset, clock: (dt) => dt * 3, adjust: (_locals, ctx) => { calls.push(ctx); } });
+      const initial = calls.length;
+      if (initial !== (reset === 'animation' ? 1 : 0)) faults.push(`${loop}/${reset}: initial calls ${initial}`);
+      const poses = [t.step(0), t.step(0.25), t.step(0.75), t.step(0.5)];
+      const want = [0, 0.25, 1, 1.5].map((v) => context(v, 'a', v));
+      if (!same(calls.slice(initial), want)) faults.push(`${loop}/${reset}: contexts ${JSON.stringify(calls)}`);
+      if (reset === 'animation' && !same(calls[0], context(0, 'a', 0))) faults.push('initial context was not entry 0');
+      if (poses.at(-1)?.animationTime !== (loop ? 0.5 : 1)) faults.push('the animation sampling time changed');
+    }
+    return faults;
+  });
+
+  check('LA154002_REPLACEMENT_AT_NONZERO_GLOBAL_TIME_AND_FADE_ADJUST_ONCE_AFTER_COMPOSITION', () => {
+    const calls: Array<{ ctx: LocalAdjustContext; x: number }> = [];
+    const t = openTracks(document(), { reset: 'animation', clock: (dt) => dt * 3, adjust: (locals, ctx) => {
+      const root = locals.bone('root'); calls.push({ ctx, x: root.x }); root.x += 100;
+    } });
+    t.setAnimation(0, 'a', { loop: true, mixDuration: 0 }); t.start(); t.step(0.5);
+    t.setAnimation(0, 'b', { loop: true, mixDuration: 1 });
+    const zero = t.step(0); const mixed = t.step(0.25);
+    const expected = [
+      { ctx: context(0, 'a', 0), x: 2 }, { ctx: context(0.5, 'a', 0.5), x: 4 },
+      { ctx: context(0, 'b', 0.5), x: 4 }, { ctx: context(0.25, 'b', 0.75), x: 6.5 },
+    ];
+    const faults = same(calls, expected) ? [] : [`calls: ${JSON.stringify(calls)}, wanted ${JSON.stringify(expected)}`];
+    if (zero.bones[0].worldX !== 104 || mixed.bones[0].worldX !== 106.5) faults.push('the adjusted mixed locals did not reach the world');
+    return faults;
+  });
+
+  check('LA154003_QUEUE_SWITCHES_CURRENT_IDENTITY_AND_PRESERVES_ENTRY_REMAINDER', () => {
+    const faults: string[] = [];
+    for (const [first, next, entry] of [[0.5, 0, 0], [0.625, 0.125, 0.25]]) {
+      const calls: LocalAdjustContext[] = [];
+      const t = openTracks(document(), { reset: 'animation', adjust: (_locals, ctx) => { calls.push(ctx); } });
+      t.setAnimation(0, 'a', { loop: false, mixDuration: 0 });
+      t.addAnimation(0, 'b', { loop: true, mixDuration: 0.25, delay: 0.5 });
+      t.start(); t.step(first); t.step(next);
+      const expected = [context(0, 'a', 0), context(first, 'a', first), context(entry, 'b', first + next)];
+      if (!same(calls, expected)) faults.push(`queue ${first}/${next}: ${JSON.stringify(calls)}`);
+    }
+    return faults;
+  });
+
+  check('LA154004_ABSENT_BASE_AND_UPPER_ONLY_ARE_NULL_AND_EMPTY_ENTRY_RETAINS_ITS_CLOCK_UNTIL_CLEARED', () => {
+    const calls: LocalAdjustContext[] = [];
+    const t = openTracks(document(), { reset: 'animation', adjust: (_locals, ctx) => { calls.push(ctx); } });
+    t.start(); t.setAnimation(1, 'b', { loop: true, mixDuration: 0 }); t.step(0.25);
+    t.setEmptyAnimation(0, 0.5); t.step(0); t.step(0.5); t.step(0);
+    const expected = [context(null, null, 0), context(null, null, 0.25), context(0, null, 0.25), context(0.5, null, 0.75), context(null, null, 0.75)];
+    const faults = same(calls, expected) ? [] : [`contexts ${JSON.stringify(calls)}, wanted ${JSON.stringify(expected)}`];
+    if (t.current(0) !== null || t.current(1)?.animation !== 'b') faults.push('the probe did not clear track 0 with the upper entry still playing');
+    return faults;
+  });
+
+  check('LA154005_UPPER_TRACKS_COMPOSE_BEFORE_THE_ONE_BASE_ENTRY_CALLBACK', () => {
+    const calls: Array<[LocalAdjustContext, number]> = [];
+    const t = openTracks(document(), { reset: 'animation', adjust: (locals, ctx) => { calls.push([ctx, locals.bone('root').x]); } });
+    t.setAnimation(0, 'a', { loop: true, mixDuration: 0 });
+    t.setAnimation(1, 'b', { loop: true, mixDuration: 0, alpha: 0.5 });
+    t.start(); t.step(0.25); t.step(1);
+    const expected = [[context(0, 'a', 0), 6], [context(0.25, 'a', 0.25), 7], [context(1.25, 'a', 1.25), 7]];
+    return same(calls, expected) ? [] : [`calls ${JSON.stringify(calls)}, wanted ${JSON.stringify(expected)}`];
+  });
+
+  check('LA154006_COLD_BACKWARD_REMAINDER_AND_WARM_REPLAY_MATCH_WITH_IDENTICAL_RESET_ENVIRONMENT_AND_STEPS', () => {
+    const faults: string[] = [];
+    for (const composed of [false, true]) for (const reset of ['animation', 'setup'] as const) {
+      let calls = 0;
+      const open = () => {
+        let state = '';
+        const plant: TimelinePlant = { physicsStep: (...args) => {
+          const moved = stepPhysics(...args);
+          state = JSON.stringify(args[3], (_key, value: unknown) => value instanceof Map || value instanceof Set ? [...value] : value);
+          return moved;
+        } };
+        const adjust: LocalAdjust = (locals, ctx) => { calls++; locals.bone('root').rotation = 30 * (ctx.trackTime ?? 0) + 2 * ctx.globalTime; };
+        const doc = document(true);
+        const t = composed ? openTracks(doc, { reset, adjust, clock: physicsClockStep }, plant) : openTrack(doc, 'a', { loop: true, reset, adjust, clock: physicsClockStep }, plant);
+        if ('setAnimation' in t) { t.setAnimation(0, 'a', { loop: true, mixDuration: 0 }); t.addAnimation(0, 'b', { loop: true, mixDuration: 0.25, delay: 0.5 }); }
+        const first = 'start' in t ? t.start() : t.first;
+        t.setEnvironment({ wind: [0.25, -0.5], gravity: [0.75, 1.25] });
+        return { t, first, snapshot: (pose: RawPose) => JSON.stringify({ pose, state }) };
+      };
+      const reference = open();
+      const expected = new Map<number, string>([[0, reference.snapshot(reference.first)]]);
+      for (let i = 0; i < 10; i++) { const p = reference.t.step(0.125); expected.set(reference.t.trackTime, reference.snapshot(p)); }
+      const end = reference.t.step(0.03125); expected.set(reference.t.trackTime, reference.snapshot(end));
+      const beforeRead = calls;
+      void reference.t.trackTime; void reference.t.environment;
+      if (calls !== beforeRead) faults.push('a state read invoked the callback');
+      // The cache is the caller's, not a core seek API. It must return a stored pose without asking core for another evaluation.
+      const cache = new Map<number, string>();
+      let frontier = open();
+      const seek = (at: number): string => {
+        const hit = cache.get(at); if (hit !== undefined) return hit;
+        if (at < frontier.t.trackTime) frontier = open();
+        let pose = frontier.first;
+        while (frontier.t.trackTime < at) pose = frontier.t.step(Math.min(0.125, at - frontier.t.trackTime));
+        const value = frontier.snapshot(pose); cache.set(at, value); return value;
+      };
+      for (const at of [0.75, 0.25, 0.5, 1.28125, 0.75, 1.28125]) {
+        const hit = cache.has(at); const before = calls; const got = seek(at);
+        if (got !== expected.get(at)) faults.push(`${composed}/${reset} at ${at}: pose or physics state differs`);
+        if (hit && calls !== before) faults.push(`${composed}/${reset} at ${at}: cache hit added callbacks`);
+      }
+      if (!expected.get(1.28125)?.includes('spring')) faults.push('the replay probe recorded no physics state');
+    }
+    return faults;
+  });
+
+  check('LA154007_UNARY_NOOP_AND_UNARY_WRITES_KEEP_POSE_BYTES_PHYSICS_STATE_AND_CALL_SCHEDULE', () => {
+    const faults: string[] = [];
+    for (const composed of [false, true]) for (const reset of ['animation', 'setup'] as const) {
+      const walk = (kind: 'absent' | 'noop' | 'unary' | 'binary') => {
+        let calls = 0; let state = '';
+        const unary = (locals: AdjustableLocals): void => { calls++; locals.bone('root').rotation += 7; };
+        const adjust: LocalAdjust | undefined = kind === 'absent' ? undefined : kind === 'noop' ? () => { calls++; } : kind === 'unary' ? unary : (locals, _ctx) => unary(locals);
+        const plant: TimelinePlant = { physicsStep: (...args) => { const moved = stepPhysics(...args); state = JSON.stringify(args[3], (_key, value: unknown) => value instanceof Map || value instanceof Set ? [...value] : value); return moved; } };
+        const doc = document(true); const before = JSON.stringify(doc);
+        const t = composed ? openTracks(doc, { reset, adjust }, plant) : openTrack(doc, 'a', { loop: true, reset, adjust }, plant);
+        if ('setAnimation' in t) { t.setAnimation(0, 'a', { loop: true, mixDuration: 0 }); t.addAnimation(0, 'b', { loop: true, mixDuration: 0.25, delay: 0.5 }); }
+        const first = 'start' in t ? t.start() : t.first;
+        const poses = [JSON.stringify({ pose: first, state })];
+        for (const dt of [0, 0.25, 0.25, 0.125, 0.625, 0.03125]) poses.push(JSON.stringify({ pose: t.step(dt), state }));
+        if (JSON.stringify(doc) !== before) faults.push('the adjustment mutated the model document');
+        return { poses, calls };
+      };
+      const absent = walk('absent'); const noop = walk('noop'); const unary = walk('unary'); const binary = walk('binary');
+      if (!same(absent.poses, noop.poses) || !same(unary, binary)) faults.push(`${composed}/${reset}: pose bytes, state or calls differ`);
+      if (noop.calls !== 6 + (reset === 'animation' ? 1 : 0) || unary.calls !== noop.calls) faults.push(`${composed}/${reset}: callback count ${noop.calls}/${unary.calls}`);
+      if (same(unary.poses, absent.poses)) faults.push('the unary write stimulated no output');
+    }
+    return faults;
+  });
+  return bad;
+}
+
 // ---------------------------------------------------------------------------
 // the helpers the gates call, gated (issues #499, #506)
 // ---------------------------------------------------------------------------
@@ -92556,6 +92722,7 @@ import { loopedTime } from './src/core/raw.ts';
 import { poseLoopingWalk, poseWalkSetup, scanLoopingWalk, scanWalkSetup, type WalkPlant, type WalkPose } from './src/core/walk.ts';
 import type { ScanPose } from './src/core/raw.ts';
 import { walkIn, type RawReset } from './src/core/raw.ts';
+import type { AdjustableLocals, LocalAdjust, LocalAdjustContext } from './src/core/entry.ts';
 import { openTrack, type PhysicsEnvironment, type TrackOptions } from './src/core/track.ts';
 import { mixPropertyOrder, openTracks, type TracksPlant } from './src/core/tracks.ts';
 import type { CoreSlotRow } from './src/core/index.ts';
@@ -144068,6 +144235,7 @@ function main(): void {
   tally.of('pose', runPoseSuite);
   tally.of('pose-oracle', runPoseOracleSuite);
   tally.of('core', runCoreSuite);
+  tally.of('local-adjust-context', runLocalAdjustContextSuite);
   const emitHashesBad = tally.of('emit-hashes', runEmitHashesSuite, { ran: ranIt });
   const renderHashesBad = tally.of('render-hashes', runRenderHashesSuite, { ran: ranIt });
   tally.of('deform-core', runDeformCoreSuite, { ran: ranIt });
@@ -144967,6 +145135,7 @@ function main(): void {
       'refused with exit 2 and nothing written; stepped physics moving only what a physics constraint carries; and ' +
       'every public example\'s rigc rebuild posed against its export at the reading measured, with what the corpus ' +
       'cannot grade printed as a HOLE — or all of that last half a HOLE when the corpus is not fetched)' +
+      ', + ' + n('local-adjust-context') + ' local-adjust context controls (issue #1540: current-entry time and identity after composition, unary compatibility and identical-history replay)' +
       ', + ' + n('core') + ' core controls (issue #925 — rigc\'s own core in `src/core/`, the second dumper of the pose ' +
       'oracle: `readModel` reading a built `rigc-compiled/1` document and refusing each plant by its path, two at ' +
       'once in one refusal; `dump --core` writing the setup bones twice to the byte, every block the core has not ' +

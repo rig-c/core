@@ -1038,6 +1038,22 @@ without adding to it: an entry's `alpha` and `additive` are fields of
 row keeps its symbols and no row is added for that issue: a row is keyed by
 the symbols an entry exports, and none was added.
 
+The additive evaluation context requested by
+[#1540](https://github.com/rig-c/core/issues/1540) promises one more type through
+`rig-c/core`: `LocalAdjustContext` (`REQUESTED_IN_1540`). `LocalAdjust` now takes
+`(locals, ctx)` with readonly `trackTime: number | null`,
+`animation: string | null` and `globalTime: number`. The first two identify the
+current track-0 entry, with unwrapped seconds starting at 0; no entry means
+null/null, with no upper-track or global-time fallback. An explicit empty entry
+retains its numeric clock and null name until removed, as `current(0)` does.
+`globalTime` is the walk's elapsed seconds, independent of the physics clock.
+One callback follows the whole composition, including a fade; unary callbacks
+keep their output and schedule. AUTHORING states reset, queue and replay
+semantics. The install smoke's types row records the type promise under the
+existing types policy; its direct core probe additionally exercises both live
+entries' callback context and unary pose bytes from the runtime-free install.
+That runtime probe does not type-check consumers.
+
 🤝 **A fourth, by the same exception**
 ([#1396](https://github.com/rig-c/core/issues/1396)): `physicsClockStep` and
 `PHYSICS_CLOCK_LEAD`, the render's physics clock (issue

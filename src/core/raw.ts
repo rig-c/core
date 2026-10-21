@@ -830,8 +830,9 @@ function stepWalk<P>(track: TrackState<P>, dt: number, first = false): P {
   // `clipped` rows are empty. The live track's looping mode (`live`) fires its events across the wrap by the rule `./track.ts` states as measured.
   const fire = plant.events ?? eventsFired;
   const keys = anim.timelines.events;
+  const adjustment = adjust === undefined ? undefined : { callback: adjust, context: { trackTime, animation: anim.name, globalTime: trackTime } };
   const pose = poseStepFrom(doc, plant, resolve, shape, mode, ctx, first, trackTime, t, {
-    world: (sliders) => (shape.rows ? posedBoneWorld(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjust }).world : posedBoneWorldAlone(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjust })),
+    world: (sliders) => (shape.rows ? posedBoneWorld(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjustment }).world : posedBoneWorldAlone(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjustment })),
     slots: (sliders, placeholders) => posedSlots(doc, anim.timelines, t, raw, sliders, placeholders),
     drawOrder: anim.timelines.drawOrder,
     at: t,

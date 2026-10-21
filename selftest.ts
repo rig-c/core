@@ -80988,6 +80988,135 @@ function runCurrencySuite(): number {
       );
     }
 
+    // --- CUR133: dispatched provenance names the checked-out commit (#1542)
+    // Execute the workflow's own guard and publish bodies with git, npm and
+    // bun replaced by closed mocks. No registry, token or Git operation runs.
+    {
+      const id = 'CUR133_DISPATCH_PROVENANCE_REFUSES_A_DIFFERENT_SHA_BEFORE_EVERY_PUBLISH_AND_LEAVES_PUSH_UNCHANGED';
+      if (BUN_YAML === null) {
+        reportYamlHole(id);
+      } else {
+        interface ProvenanceStep {
+          name?: string;
+          uses?: string;
+          run?: string;
+          if?: string;
+          'continue-on-error'?: boolean | string;
+        }
+        interface ProvenanceWorkflow {
+          jobs?: Record<string, { steps?: ProvenanceStep[] }>;
+        }
+        const rule = 'PROVENANCE_SHA_MISMATCH';
+        const mock = mkdtempSync(join(harnessTemp(), 'rigc-provenance-'));
+        const bin = join(mock, 'bin');
+        mkdirSync(bin);
+        const trace = join(mock, 'calls.txt');
+        const checkedOut = '1'.repeat(40);
+        const different = '2'.repeat(40);
+        const bodies: Record<string, string> = {
+          git: 'printf "git %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$*" = "rev-parse HEAD" ] || exit 91\nprintf "%s\\n" "$MOCK_HEAD"\n',
+          npm: 'printf "npm %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$1" = publish ] || exit 92\n',
+          bun: 'printf "bun %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$1" = scripts/alias_tarball.ts ] && [ "$2" = pack ] || exit 93\nprintf "mock-alias.tgz\\n"\n',
+        };
+        for (const [name, body] of Object.entries(bodies)) {
+          const file = join(bin, name);
+          writeFileSync(file, `#!/bin/bash\nset -euo pipefail\n${body}`);
+          chmodSync(file, 0o755);
+        }
+        const publishes = (step: ProvenanceStep): boolean => /\bnpm publish\b/.test(step.run ?? '');
+        const inspect = (text: string): { faults: string[]; rows: string[] } => {
+          const faults: string[] = [];
+          const rows: string[] = [];
+          let wf: ProvenanceWorkflow;
+          try {
+            wf = readYaml(text) as ProvenanceWorkflow;
+          } catch (error) {
+            return { faults: [`release.yml does not parse: ${String(error)}`], rows };
+          }
+          const jobs = Object.entries(wf.jobs ?? {}).filter(([, job]) => (job.steps ?? []).some(publishes));
+          if (jobs.length !== 1) return { faults: [`${jobs.length} jobs publish, required one guarded job`], rows };
+          const steps = jobs[0][1].steps ?? [];
+          const guards = steps.map((step, at) => (step.run ?? '').includes(rule) ? at : -1).filter((at) => at >= 0);
+          if (guards.length !== 1) return { faults: [`${guards.length} guards name ${rule}, required one`], rows };
+          const guard = guards[0];
+          const checkout = steps.findIndex((step) => /^actions\/checkout@/.test(step.uses ?? ''));
+          const publishSteps = steps.map((step, at) => publishes(step) ? at : -1).filter((at) => at >= 0);
+          if (checkout < 0 || checkout >= guard) faults.push('the provenance guard must read HEAD after checkout');
+          if (publishSteps.some((at) => at <= guard)) faults.push('the provenance guard must precede every publish, canonical and aliases');
+          if (steps[guard].if !== undefined || steps[guard]['continue-on-error'] !== undefined) faults.push('the provenance guard can be skipped or its failure ignored');
+          const selected = steps.filter((step, at) => at === guard || publishes(step));
+          const scenarios = [
+            { name: 'mismatched dispatch', event: 'workflow_dispatch', sha: different, exit: 1, publish: 0, git: 1 },
+            { name: 'matching dispatch', event: 'workflow_dispatch', sha: checkedOut, exit: 0, publish: publishSteps.length, git: 1 },
+            { name: 'mismatched push', event: 'push', sha: different, exit: 0, publish: publishSteps.length, git: 0 },
+          ];
+          for (const scenario of scenarios) {
+            writeFileSync(trace, '');
+            let exit: number | null = 0;
+            let output = '';
+            for (const step of selected) {
+              const ran = spawnSync('/bin/bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', step.run ?? ''], {
+                cwd: mock,
+                encoding: 'utf8',
+                timeout: 5000,
+                // PATH contains only the mocks, and env contains no inherited
+                // BASH_ENV, credentials or npm configuration.
+                env: { PATH: bin, MOCK_TRACE: trace, MOCK_HEAD: checkedOut, GITHUB_EVENT_NAME: scenario.event, GITHUB_SHA: scenario.sha, RUNNER_TEMP: 'mock-runner-temp' },
+              });
+              exit = ran.status;
+              output += ran.stdout ?? '';
+              output += ran.stderr ?? '';
+              if (ran.error !== undefined) output += String(ran.error);
+              if (exit !== 0) break;
+            }
+            const calls = readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean);
+            const published = calls.filter((line) => line.startsWith('npm publish '));
+            const reads = calls.filter((line) => line.startsWith('git '));
+            const named = output.includes(`::error::${rule}:`) && output.includes(scenario.sha) && output.includes(checkedOut);
+            if (exit !== scenario.exit || published.length !== scenario.publish || reads.length !== scenario.git || (scenario.exit === 1 ? !named : output.includes(rule))) {
+              faults.push(`${scenario.name}: exit ${exit}, publishes ${published.length}, git reads ${reads.length}, output ${JSON.stringify(output)}; required exit ${scenario.exit}, publishes ${scenario.publish}, git reads ${scenario.git}${scenario.exit === 1 ? ', named refusal with both SHAs' : ', no refusal'}`);
+            }
+            if (published.some((line) => !line.includes('--provenance'))) faults.push(`${scenario.name}: a publish lost --provenance`);
+            rows.push(`${scenario.name}: exit ${exit}, publishes ${published.length}/${publishSteps.length}, git reads ${reads.length}, calls ${JSON.stringify(calls)}, output ${JSON.stringify(output.trim())}`);
+          }
+          return { faults, rows };
+        };
+        try {
+          const standing = inspect(releaseText);
+          const parsed = readYaml(releaseText) as ProvenanceWorkflow;
+          const steps = Object.values(parsed.jobs ?? {}).flatMap((job) => job.steps ?? []);
+          const guardBody = steps.find((step) => (step.run ?? '').includes(rule))?.run ?? '';
+          const lateGuard = readYaml(releaseText) as ProvenanceWorkflow;
+          const lateSteps = Object.values(lateGuard.jobs ?? {}).find((job) => (job.steps ?? []).some(publishes))?.steps ?? [];
+          const guardAt = lateSteps.findIndex((step) => (step.run ?? '').includes(rule));
+          if (guardAt >= 0) {
+            const [moved] = lateSteps.splice(guardAt, 1);
+            lateSteps.splice(lateSteps.findIndex(publishes) + 1, 0, moved);
+          }
+          const plants = [
+            { what: 'guard deleted', text: guardBody === '' ? null : releaseText.replace(guardBody.trimEnd().split('\n').map((line) => `          ${line}`).join('\n'), '          :') },
+            { what: 'guard after the canonical publish', text: guardAt < 0 ? null : JSON.stringify(lateGuard) },
+            { what: 'SHA comparison reversed', text: releaseText.includes('"$GITHUB_SHA" != "$checked_out_sha"') ? releaseText.replace('"$GITHUB_SHA" != "$checked_out_sha"', '"$GITHUB_SHA" = "$checked_out_sha"') : null },
+          ];
+          const probes: string[] = [];
+          const rows = [...standing.rows];
+          for (const plant of plants) {
+            if (plant.text === null || plant.text === releaseText) probes.push(`${plant.what}: no edit was made`);
+            else {
+              const found = inspect(plant.text);
+              if (found.faults.length === 0) probes.push(`${plant.what}: no fault fired`);
+              rows.push(`${plant.what}: ${found.faults.length} fault(s) — ${found.faults.join('; ')}`);
+            }
+          }
+          const held = standing.faults.length === 0 && probes.length === 0;
+          say(id, held, probeDetail(held, [...standing.faults, ...probes], `${rows.length} measured row(s): ${rows.join('; ')}`),
+            'issue #1542: checkout does not change the GITHUB_SHA npm records in provenance; a dispatch from another commit must stop before any name is published');
+        } finally {
+          rmSync(mock, { recursive: true, force: true });
+        }
+      }
+    }
+
     // --- CUR124–CUR125: the squash text release-please reads (issue #1354) ----
     //
     // The squash of #1352 (1c04a03) shipped nothing: line 20 of its body opened

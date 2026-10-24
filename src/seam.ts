@@ -77,7 +77,7 @@ import type { AttachmentPose, AttachmentRest, Piece, Viewport } from './render_s
 export const SEAM_FILE = 'seam.json';
 export const SEAM_SPEC = 'rigc-seam/1';
 
-/** One pair as the flag names it. The reading is symmetric: `a:b` and `b:a` are one pair. */
+/** One pair as the flag names it. Reversing it preserves the union and exchanges the ghost owners. */
 export interface SeamPair {
   a: string;
   b: string;
@@ -176,6 +176,10 @@ export interface SeamPairReading {
   maxPx: number;
   gap: SeamKindReading;
   ghost: SeamKindReading;
+  /** Ghost cells drawn by `a` only; together with ghostB, an exact partition of ghost. */
+  ghostA: SeamKindReading;
+  /** Ghost cells drawn by `b` only. Ownership is the flag's order, not draw order. */
+  ghostB: SeamKindReading;
 }
 
 /** `seam.json`: one frame set's reading, every pair the flag names, in the flag's order. */
@@ -186,12 +190,12 @@ export interface SeamFile {
   skin?: string;
   fps: number;
   /** What the numbers mean, stated in the file so a reader does not need this module. */
-  reading: { read: string; cell: string; drawn: string; band: string; carried: string; gap: string; ghost: string; box: string; status: string };
+  reading: { read: string; cell: string; drawn: string; band: string; carried: string; gap: string; ghost: string; box: string; status: string; ghostA: string; ghostB: string };
   pairs: SeamPairReading[];
 }
 
 /**
- * A planted defect, for the suite's mutants only (`SM` controls in
+ * A planted defect, for the suite's mutants only (`SE` controls in
  * `selftest.ts`). Production passes none.
  */
 export interface SeamPlant {
@@ -203,6 +207,8 @@ export interface SeamPlant {
   bothViews?: boolean;
   /** Count a ghost cell wherever a piece draws what its partner's view had none of, not only from the band. */
   ghostAnyArt?: boolean;
+  /** Attribute every ghost to a, regardless of which piece draws it. */
+  ghostOnlyA?: boolean;
   /** Report a pair with no band as read, rather than as a SKIP. */
   skipAsRead?: boolean;
   /** Count nothing. */
@@ -347,8 +353,8 @@ interface Cells {
 
 const restPiece = (side: Side): Piece => ({ ...side.piece, world: Array.from(side.rest) });
 
-/** One frame's two counts, or `null` when the two drawings share no cell at the setup pose. See the module comment. */
-function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant): { gap: Cells; ghost: Cells } | null {
+/** One frame's counts, or `null` when the two drawings share no cell at the setup pose. See the module comment. */
+function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells } | null {
   // One grid over both drawings at the setup pose and at the frame, on multiples of the cell from the world origin.
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
   for (const xy of [A.rest, B.rest, A.piece.world, B.piece.world]) {
@@ -401,6 +407,8 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant): { gap: Cel
   const composite = (p: [number, number] | null): boolean => drawnAtRest(p, restA, A.page) || drawnAtRest(p, restB, B.page);
   const gap: Cells = { px: 0, box: null };
   const ghost: Cells = { px: 0, box: null };
+  const ghostA: Cells = { px: 0, box: null };
+  const ghostB: Cells = { px: 0, box: null };
   const take = (into: Cells, qx: number, qy: number): void => {
     into.px++;
     const h = cell / 2;
@@ -410,7 +418,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant): { gap: Cel
     into.box[2] = Math.max(into.box[2], qx + h);
     into.box[3] = Math.max(into.box[3], qy + h);
   };
-  if (plant.never) return { gap, ghost };
+  if (plant.never) return { gap, ghost, ghostA, ghostB };
   const inBand = (p: [number, number] | null): boolean => p !== null && p[0] >= bx0 - cell / 2 && p[0] <= bx1 + cell / 2 && p[1] >= by0 - cell / 2 && p[1] <= by1 + cell / 2;
   for (let py = 0; py < height; py++) {
     for (let px = 0; px < width; px++) {
@@ -432,10 +440,13 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant): { gap: Cel
       const otherRest = a ? restB : restA;
       const p = back(mine, myIds, k, qx, qy);
       if (!plant.ghostAnyArt && !(inBand(p) && drawnAtRest(p, myRest, mine.page) && drawnAtRest(p, otherRest, other.page))) continue;
-      if (!composite(back(other, otherIds, k, qx, qy))) take(ghost, qx, qy);
+      if (!composite(back(other, otherIds, k, qx, qy))) {
+        take(ghost, qx, qy);
+        take(a || plant.ghostOnlyA ? ghostA : ghostB, qx, qy);
+      }
     }
   }
-  return { gap, ghost };
+  return { gap, ghost, ghostA, ghostB };
 }
 
 const restKey = (slot: string, attachment: string): string => `${slot}\u0000${attachment}`;
@@ -494,6 +505,8 @@ export function seamsOf(
     let banded = 0;
     const gaps: SeamHit[] = [];
     const ghosts: SeamHit[] = [];
+    const ghostsA: SeamHit[] = [];
+    const ghostsB: SeamHit[] = [];
     for (const frame of frames) {
       const A = sideOf(frame, a);
       const B = sideOf(frame, b);
@@ -507,7 +520,7 @@ export function seamsOf(
       const read = readFrame(A, B, cell, plant);
       if (read === null) continue;
       banded++;
-      for (const [cells, into] of [[read.gap, gaps], [read.ghost, ghosts]] as const) {
+      for (const [cells, into] of [[read.gap, gaps], [read.ghost, ghosts], [read.ghostA, ghostsA], [read.ghostB, ghostsB]] as const) {
         if (cells.px > 0 && cells.box !== null) into.push({ index: frame.index, time: frame.time, px: cells.px, cell, area: cells.px * cell * cell, box: cells.box });
       }
     }
@@ -516,7 +529,7 @@ export function seamsOf(
     const opens = [...new Set([...gaps, ...ghosts].map((f) => f.index))].sort((x, y) => x - y);
     const maxPx = Math.max(0, ...gaps.map((f) => f.px), ...ghosts.map((f) => f.px));
     const status = banded === 0 && !plant.skipAsRead ? 'skip' : 'read';
-    return { a, b, drawn, banded, status, opens, maxPx, gap, ghost };
+    return { a, b, drawn, banded, status, opens, maxPx, gap, ghost, ghostA: kindOf(ghostsA), ghostB: kindOf(ghostsB) };
   });
 }
 
@@ -532,6 +545,8 @@ export const SEAM_READING: SeamFile['reading'] = {
   ghost: "a ghost cell is drawn at the frame by one piece and not the other; the drawing piece, carrying it back, lands it in the band, and the other piece, carrying it back, finds neither drawing there at the setup pose",
   box: "a frame's box is [minX, minY, maxX, maxY] in world units (y up) over the whole squares of that kind's counted cells",
   status: 'a pair is skip when no frame is read — the two never draw together, or never share a cell at the setup pose — which is nothing measured, not a seam that held',
+  ghostA: 'the ghost cells drawn by a only, with the same frames, spans and worst shape as ghost; ghostA and ghostB partition ghost on every frame',
+  ghostB: 'the ghost cells drawn by b only; a and b are the named pair order, not which piece is in front — reversing the pair exchanges ghostA and ghostB',
 };
 
 /** The file for one frame set. */

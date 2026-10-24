@@ -141071,7 +141071,7 @@ function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slo
 // seam — where two slots that meet stop meeting (issue #1456)
 // ---------------------------------------------------------------------------
 
-import { SEAM_FILE, type SeamFile, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
+import { SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
 
 /**
  * How far the seam probe turns the skirt, in degrees: the issue's figure, past
@@ -141222,6 +141222,57 @@ function seamShiftFaults(readings: SeamReadings, fps: number): string[] {
 }
 
 /** SE05's reading: two drawings that share no cell at the setup pose are a SKIP on every set — nothing measured, never a pass. */
+/** Owner hits partition the union exactly, including its box, and retain the kind's sparse summaries. */
+function seamOwnerFaults(readings: SeamReadings): string[] {
+  const faults: string[] = [];
+  for (const [set, pairs] of readings) for (const p of pairs) {
+    const where = `${set} ${p.a}|${p.b}`;
+    for (const key of ['ghostA', 'ghostB'] as const) {
+      const kind = p[key];
+      const spans: SeamKindReading['spans'] = [];
+      for (const f of kind.frames) {
+        const union = p.ghost.frames.find((u) => u.index === f.index);
+        if (union === undefined || f.time !== union.time || f.cell !== union.cell || f.px <= 0 || f.area !== f.px * f.cell * f.cell || !seamBoxInside(f.box, union.box)) faults.push(`${where} ${key} frame ${f.index}: invalid owner hit`);
+        if (spans.length > 0 && f.index <= spans[spans.length - 1].frames[1]) faults.push(`${where} ${key}: hits not strictly ordered`);
+        const previous = spans[spans.length - 1];
+        if (previous !== undefined && previous.frames[1] + 1 === f.index) {
+          previous.frames[1] = f.index;
+          previous.times[1] = f.time;
+          previous.maxPx = Math.max(previous.maxPx, f.px);
+        } else spans.push({ frames: [f.index, f.index], times: [f.time, f.time], maxPx: f.px });
+      }
+      const peak = Math.max(0, ...kind.frames.map((f) => f.px));
+      const firstPeak = kind.frames.find((f) => f.px === peak) ?? null;
+      if (JSON.stringify(kind.spans) !== JSON.stringify(spans) || JSON.stringify(kind.worst) !== JSON.stringify(firstPeak)) faults.push(`${where} ${key}: spans or earliest worst differs from hits`);
+    }
+    for (const union of p.ghost.frames) {
+      const owners = [p.ghostA, p.ghostB].flatMap((kind) => kind.frames.filter((f) => f.index === union.index));
+      if (owners.reduce((n, f) => n + f.px, 0) !== union.px) faults.push(`${where} frame ${union.index}: owner counts do not sum to ghost`);
+      if (owners.length > 0) {
+        const box = [Math.min(...owners.map((f) => f.box[0])), Math.min(...owners.map((f) => f.box[1])), Math.max(...owners.map((f) => f.box[2])), Math.max(...owners.map((f) => f.box[3]))];
+        if (JSON.stringify(box) !== JSON.stringify(union.box)) faults.push(`${where} frame ${union.index}: owner boxes do not bound ghost exactly`);
+      }
+    }
+  }
+  return faults;
+}
+
+/** Reversing the actual input pair must exchange complete owner readings; the derived strip anchors their names. */
+function seamOwnerSwapFaults(forward: SeamReadings, reverse: SeamReadings, fps: number): string[] {
+  const faults = [...seamOwnerFaults(forward), ...seamOwnerFaults(reverse), ...seamShiftFaults(forward, fps)];
+  const empty: SeamKindReading = { frames: [], spans: [], worst: null };
+  for (const [set, pairs] of forward) for (const p of pairs) {
+    const q = seamPairOf(reverse, set, p.b, p.a);
+    if (q === undefined) { faults.push(`${set}: no reversed ${p.b}|${p.a}`); continue; }
+    for (const key of ['gap', 'ghost', 'drawn', 'banded', 'status', 'opens', 'maxPx'] as const) {
+      if (JSON.stringify(p[key]) !== JSON.stringify(q[key])) faults.push(`${set} ${p.a}|${p.b}: reversal changed ${key}`);
+    }
+    if (JSON.stringify(p.ghostA) !== JSON.stringify(q.ghostB) || JSON.stringify(p.ghostB) !== JSON.stringify(q.ghostA)) faults.push(`${set} ${p.a}|${p.b}: reversal did not exchange owners`);
+    if (set === 'shift' && p.a === 'skirt' && p.b === 'leg' && (JSON.stringify(p.ghostA) !== JSON.stringify(empty) || JSON.stringify(p.ghostB) !== JSON.stringify(p.ghost))) faults.push('shift: the derived strip is drawn by leg/B only');
+  }
+  return faults;
+}
+
 function seamSkipFaults(readings: SeamReadings, fps: number): string[] {
   const faults: string[] = [];
   if (readings.size === 0) faults.push('no set read');
@@ -141485,6 +141536,64 @@ function runSeamSuite(): number {
       probeDetail(ok, probes, 'an unknown slot (with the slots there are), an entry with no ":" or two, an empty entry, an empty name, a slot with itself, a pair named twice the other way round and --hide beside the flag each exit 2 naming the entry, and write nothing'),
       'issue #1456: a pair the reading cannot read is an input error, not a finding — a typo would otherwise print a clean bill for a slot nobody asked about',
     );
+  }
+
+  // SE17–SE21 — owner attribution is additive; a sum alone cannot tell whose cells were counted.
+  const reversedPairs = SEAM_PROBE_PAIRS.map(({ a, b }) => ({ a: b, b: a }));
+  const reversed = library(built, reversedPairs);
+  {
+    const faults = [...pre, ...seamOwnerFaults(cli), ...seamOwnerFaults(cliSkip)];
+    const ok = faults.length === 0;
+    say('SE17_GHOST_OWNERS_PARTITION_EVERY_UNION_HIT', ok, probeDetail(ok, faults, 'every owner count, box, cell, area, sparse span and earliest worst partitions ghost; closed and SKIP pairs retain empty owner readings'), 'issue #1555: ghostA and ghostB are the existing ghost cells, partitioned by their drawing piece');
+  }
+  {
+    const faults = [...pre, ...seamOwnerSwapFaults(clean, reversed, fps)];
+    const ok = faults.length === 0;
+    say('SE18_REVERSING_THE_PAIR_EXCHANGES_GHOST_OWNERS', ok, probeDetail(ok, faults, 'actual reversed pairs exchange complete owner readings; the independently derived shifted strip is leg/B only, and becomes A only'), 'issue #1555: a and b are input roles, independent of the pieces\' draw order');
+  }
+  {
+    const mutant = library(built, SEAM_PROBE_PAIRS, { ghostOnlyA: true });
+    const inverse = new Map([...clean].map(([set, pairs]) => [set, pairs.map((p) => ({ ...p, ghostA: p.ghostB, ghostB: p.ghostA }))]));
+    const inverseReverse = new Map([...reversed].map(([set, pairs]) => [set, pairs.map((p) => ({ ...p, ghostA: p.ghostB, ghostB: p.ghostA }))]));
+    const cleanFaults = [...pre, ...seamOwnerSwapFaults(clean, reversed, fps)];
+    const fixedFaults = seamOwnerSwapFaults(mutant, reversed, fps);
+    const inverseFaults = seamOwnerSwapFaults(inverse, inverseReverse, fps);
+    const ok = cleanFaults.length === 0 && seamOwnerFaults(mutant).length === 0 && fixedFaults.length > 0 && inverseFaults.length > 0;
+    say('SE19_WRONG_OWNER_MUTANTS_ARE_RED_WHILE_THE_SUM_STAYS_GREEN', ok, cleanFaults.length > 0 ? cleanFaults[0] : `all-to-A mutant: ${fixedFaults[0] ?? 'NOT CAUGHT'}; inverted labels on both pair orders: ${inverseFaults[0] ?? 'NOT CAUGHT'}`, 'issue #1555: partition alone admits an arbitrary owner, and swap alone admits two consistently inverted labels; the derived strip rejects both');
+  }
+  {
+    const faults = [...pre];
+    if (pre.length === 0) {
+      const posable = posableFromText(readFileSync(join(built, 'skeleton.json'), 'utf8'), readFileSync(join(built, 'skeleton.atlas'), 'utf8'), built);
+      const poser = spinePoser(posable.data);
+      const sampled = sampleAnimation(poser, 'shift', fps, { geometry: true });
+      const rest = poser.rest(undefined, sampled.map((f) => f.attachments ?? []));
+      const frame = sampled[0];
+      const sparse = [0, 2, 3, 5].map((index) => ({ index, time: index / fps, pieces: frame.pieces, attachments: frame.attachments ?? [] }));
+      const pair = seamsOf([SEAM_PROBE_PAIRS[0]], rest, sparse, posable.pages)[0];
+      faults.push(...seamOwnerFaults(new Map([['sparse', [pair]]])));
+      if (JSON.stringify(pair.ghostB.spans.map((s) => s.frames)) !== JSON.stringify([[0, 0], [2, 3], [5, 5]]) || pair.ghostB.worst?.index !== 0) faults.push('sparse: missing spans or first tied maximum');
+      for (const frames of [[], sparse.map((f) => ({ ...f, pieces: f.pieces.filter((p) => p.slot !== 'leg') }))]) {
+        const p = seamsOf([SEAM_PROBE_PAIRS[0]], rest, frames, posable.pages)[0];
+        if (p.status !== 'skip' || p.drawn !== 0 || p.ghostA.frames.length !== 0 || p.ghostB.frames.length !== 0) faults.push('empty or absent slot: owner reading is not empty SKIP');
+        faults.push(...seamOwnerFaults(new Map([['empty', [p]]])));
+      }
+    }
+    const ok = faults.length === 0;
+    say('SE20_OWNER_READINGS_KEEP_EMPTY_SPARSE_AND_TIED_FRAMES', ok, probeDetail(ok, faults, 'indices 0,2,3,5 retain three spans and the first tied maximum; no frames or an absent slot has empty owner readings and SKIP'), 'issue #1555: owners have exactly the same frames/spans/worst contract as gap and ghost');
+  }
+  {
+    const wide = library(built, SEAM_PROBE_PAIRS, { ghostAnyArt: true });
+    const wideReverse = library(built, reversedPairs, { ghostAnyArt: true });
+    // The band-only strip expectation deliberately does not apply to this existing mutant.
+    const faults = [...pre, ...seamOwnerFaults(wide), ...seamOwnerFaults(wideReverse)];
+    for (const [set, pairs] of wide) for (const p of pairs) {
+      const q = seamPairOf(wideReverse, set, p.b, p.a);
+      if (q === undefined || JSON.stringify(p.ghost) !== JSON.stringify(q.ghost) || JSON.stringify(p.ghostA) !== JSON.stringify(q.ghostB) || JSON.stringify(p.ghostB) !== JSON.stringify(q.ghostA)) faults.push(`${set}: ghostAnyArt does not exchange owner readings`);
+    }
+    if (seamShiftFaults(wide, fps).length === 0) faults.push('ghostAnyArt no longer widens the existing ghost predicate');
+    const ok = faults.length === 0;
+    say('SE21_GHOST_ANY_ART_PARTITIONS_THE_SAME_WIDENED_PREDICATE', ok, probeDetail(ok, faults, 'the existing ghostAnyArt mutant still widens ghost and both owner readings partition it and exchange on reversal'), 'issue #1555: ownership is counted only after the unchanged ghost predicate, including its existing mutant');
   }
 
   // SE11–SE16 — each planted wrong reading goes red, by the control that reads it.

@@ -8949,8 +8949,15 @@ table's vertices, and the atlas alpha:
   the drawing piece, carrying it back, lands in the band, and which the other,
   carrying it back, finds neither drawing at at the setup pose: the overlap swung
   clear of its partner.
+- **ghostA**, **ghostB** — that same ghost partitioned by the piece drawing the
+  cell: `a` only or `b` only, respectively, in the flag's named pair order. On
+  each frame `ghost.px = ghostA.px + ghostB.px` (an absent hit contributes 0),
+  and each owner's box lies inside the union's. Reversing the pair exchanges
+  the complete owner readings and preserves `gap` and `ghost`.
 
 Draw order does not enter: a cell is covered or bare whichever piece is in front.
+An owner says which piece drew a ghost cell; it does not say which piece is over
+or under the other, or whether that exposure should fail a consumer's policy.
 
 **Its reach, stated.** A piece folded right back over its partner carries the band
 across the region it vacated, so a hull that wide reads the vacated cells its
@@ -8970,7 +8977,7 @@ block carries the definitions above in words.
 | `animation` | string or `null` | — | the set's animation; `null` for a skeleton with none (its one frame is the setup pose) |
 | `skin` | string | — | the skin asked for; **absent** when none was |
 | `fps` | number | frames per second | the rate the set was sampled at |
-| `reading` | object | — | `read`, `cell`, `drawn`, `band`, `carried`, `gap`, `ghost`, `box`, `status`: the definitions, in words |
+| `reading` | object | — | `read`, `cell`, `drawn`, `band`, `carried`, `gap`, `ghost`, `box`, `status`, `ghostA`, `ghostB`: the definitions, in words |
 | `pairs[]` | array | — | one per pair, in the flag's order |
 | `pairs[].a`, `pairs[].b` | string | — | the two slots, as the flag names them |
 | `pairs[].drawn` | integer | frames | frames on which both slots draw |
@@ -8979,6 +8986,7 @@ block carries the definitions above in words.
 | `pairs[].opens` | integer[] | frame indices | every frame with a gap or a ghost, ascending |
 | `pairs[].maxPx` | integer | px (cells) | the most cells of either kind on any frame; 0 when none opens |
 | `pairs[].gap`, `pairs[].ghost` | object | — | one per kind, each `{ frames, spans, worst }` |
+| `pairs[].ghostA`, `pairs[].ghostB` | object | — | the same `{ frames, spans, worst }` shape for ghost cells drawn by `a` only and `b` only; an empty owner has `frames: []`, `spans: []`, `worst: null` |
 | `<kind>.frames[]` | hit[] | — | only the frames with a cell of that kind, in frame order |
 | `<kind>.spans[]` | array | — | `<kind>.frames` as runs of consecutive indices: `{ frames: [first, last], times: [first, last], maxPx }` — frame indices, seconds, px |
 | `<kind>.worst` | hit or `null` | — | the frame with the most cells, the earliest on a tie; `null` when none |
@@ -8994,6 +9002,12 @@ one span of one kind is `{ pair: "<a>|<b>", frames: span.frames, times:
 span.times, maxPx: span.maxPx, kind }`, and one pair over one animation is
 `opens.length` frame(s) `[opens]`, max `maxPx` px — with `status: "skip"` the case
 to say SKIP for.
+
+The owner keys and their two legend entries are additive in `rigc-seam/1`.
+Removing just those four keys leaves the previous file's bytes after the same
+two-space JSON serialization and newline. The union, its spans and worst, and
+the printed summary retain their existing meanings; an owner may have different
+spans or a different worst frame from the union.
 
 **Refused, nothing written:** a slot the skeleton does not have (with the slots it
 does), an entry without exactly one `:`, an empty entry or name, a slot paired with

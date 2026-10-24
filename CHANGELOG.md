@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.68.0](https://github.com/rig-c/core/compare/v2.67.2...v2.68.0) (2026-10-24)
+
+
+### Features
+
+* **seam:** attribute ghost cells to each pair member ([#1557](https://github.com/rig-c/core/issues/1557)) ([3cc77b5](https://github.com/rig-c/core/commit/3cc77b5ff09db81859a159adc71fac2e9efdbf66)), closes [#1555](https://github.com/rig-c/core/issues/1555)
+* **seam:** split gap readings by rendered coverage ([#1559](https://github.com/rig-c/core/issues/1559)) ([17979a4](https://github.com/rig-c/core/commit/17979a41ed43bfe06f5e6163017017b889172092)), closes [#1556](https://github.com/rig-c/core/issues/1556)
+
 ## [2.67.2](https://github.com/rig-c/core/compare/v2.67.1...v2.67.2) (2026-10-21)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.69.0](https://github.com/rig-c/core/compare/v2.68.0...v2.69.0) (2026-10-24)
+
+
+### Features
+
+* **render:** promise runtime-free renderer read entry ([#1562](https://github.com/rig-c/core/issues/1562)) ([b140f2b](https://github.com/rig-c/core/commit/b140f2be341425c5daf5ff3385a0153b0135d52d)), closes [#1561](https://github.com/rig-c/core/issues/1561)
+
 ## [2.68.0](https://github.com/rig-c/core/compare/v2.67.2...v2.68.0) (2026-10-24)
 
 

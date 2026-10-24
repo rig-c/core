@@ -290,7 +290,7 @@ function weightsIn(triangles: readonly number[], xy: ArrayLike<number>, t: numbe
  * the triangle the point is least outside of (the largest smallest weight, the
  * lowest index on a tie). `null` when every triangle has collapsed in `from`.
  */
-function carry(triangles: readonly number[], from: ArrayLike<number>, to: ArrayLike<number>, id: number, qx: number, qy: number): [number, number] | null {
+export function carry(triangles: readonly number[], from: ArrayLike<number>, to: ArrayLike<number>, id: number, qx: number, qy: number): [number, number] | null {
   let best = id;
   let w = id >= 0 ? weightsIn(triangles, from, id, qx, qy) : null;
   if (w === null) {
@@ -309,7 +309,11 @@ function carry(triangles: readonly number[], from: ArrayLike<number>, to: ArrayL
   }
   if (w === null || best < 0) return null;
   const [a, b, c] = [triangles[3 * best], triangles[3 * best + 1], triangles[3 * best + 2]];
-  return [w[0] * to[2 * a] + w[1] * to[2 * b] + w[2] * to[2 * c], w[0] * to[2 * a + 1] + w[1] * to[2 * b + 1] + w[2] * to[2 * c + 1]];
+  // #1568: stationary and translated pieces must carry without barycentric round-trip drift.
+  const dxa = to[2 * a] - from[2 * a], dya = to[2 * a + 1] - from[2 * a + 1];
+  const dxb = to[2 * b] - from[2 * b], dyb = to[2 * b + 1] - from[2 * b + 1];
+  const dxc = to[2 * c] - from[2 * c], dyc = to[2 * c + 1] - from[2 * c + 1];
+  return [qx + dxc + w[0] * (dxa - dxc) + w[1] * (dxb - dxc), qy + dyc + w[0] * (dya - dyc) + w[1] * (dyb - dyc)];
 }
 
 /** The convex hull of `points`, counter-clockwise, collinear points dropped (Andrew's monotone chain). */

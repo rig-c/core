@@ -141209,7 +141209,7 @@ function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slo
 // seam — where two slots that meet stop meeting (issue #1456)
 // ---------------------------------------------------------------------------
 
-import { SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
+import { carry, SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
 
 /**
  * How far the seam probe turns the skirt, in degrees: the issue's figure, past
@@ -141638,6 +141638,50 @@ function runSeamSuite(): number {
     const faults = [...pre, ...[...cli.values(), ...cliSkip.values()].flatMap((pairs) => pairs.flatMap(seamGapPartitionFaults))];
     const ok = faults.length === 0;
     say('SE28_EVERY_PUBLIC_PROBE_GAP_IS_EXACTLY_PARTITIONED', ok, probeDetail(ok, faults, 'all sampled public-probe sets, including closed and no-band SKIP pairs, retain exact gap partitions and summaries'), 'issue #1556: sparse coverage hits partition the unchanged gap on every frame');
+  }
+  {
+    // Issue #1568: the portable 96x128 contact fixtures (upper 64, lower 64, white 512 at t = 1) and stationary carry(q) = q.
+    const faults: string[] = [];
+    const body = new Plate(34, 82);
+    for (let y = 1; y < 81; y++) for (let x = 1; x < 33; x++) body.set(x, y, [40, 100, 180, 255]);
+    body.writePng(join(work, 'contact_topwear.png'));
+    const skeleton = JSON.stringify({
+      skeleton: { spine: '4.3.13', width: 96, height: 128 },
+      bones: [{ name: 'root' }, { name: 'chest', parent: 'root', x: 0, y: 0 }, { name: 'sleeve_r0', parent: 'chest', x: 64, y: 104 }],
+      slots: [{ name: 'topwear', bone: 'chest', attachment: 'topwear' }, { name: 'upperarm_r', bone: 'sleeve_r0', attachment: 'upperarm_r' }],
+      skins: [{ name: 'default', attachments: { topwear: { topwear: { x: 40, y: 72, width: 34, height: 82 } }, upperarm_r: { upperarm_r: { x: -2, y: -32, width: 22, height: 66 } } } }],
+      animations: { hold: { bones: { sleeve_r0: { translate: [{ time: 0 }, { time: 1 }] } } }, open: { bones: { sleeve_r0: { translate: [{ time: 0 }, { time: 1, x: 12 }] } } } },
+    });
+    for (const [variant, y0, y1, wantOpen] of [['upper', 1, 9, 64], ['lower', 57, 65, 64], ['white', 1, 65, 512]] as const) {
+      const arm = new Plate(22, 66);
+      for (let y = 1; y < 65; y++) for (let x = 1; x < 21; x++) if (x >= 9 || (y >= y0 && y < y1)) arm.set(x, y, [255, 255, 255, 255]);
+      const armFile = `contact_arm_${variant}.png`;
+      arm.writePng(join(work, armFile));
+      const atlas = `contact_topwear.png\nsize: 34,82\nfilter: Linear,Linear\ntopwear\nbounds: 0,0,34,82\n\n${armFile}\nsize: 22,66\nfilter: Linear,Linear\nupperarm_r\nbounds: 0,0,22,66\n`;
+      const posable = posableFromText(skeleton, atlas, work), poser = spinePoser(posable.data);
+      const openFrames = sampleAnimation(poser, 'open', PROTOCOL_FPS, { geometry: true });
+      const rest = poser.rest(undefined, openFrames.map((f) => f.attachments ?? []));
+      const openPair = seamsOf([{ a: 'topwear', b: 'upperarm_r' }], rest, openFrames.map((f) => ({ ...f, attachments: f.attachments ?? [] })), posable.pages)[0];
+      const holdFrames = sampleAnimation(poser, 'hold', PROTOCOL_FPS, { geometry: true });
+      const holdPair = seamsOf([{ a: 'topwear', b: 'upperarm_r' }], rest, holdFrames.map((f) => ({ ...f, attachments: f.attachments ?? [] })), posable.pages)[0];
+      faults.push(...seamGapPartitionFaults(openPair), ...seamGapPartitionFaults(holdPair));
+      if (holdPair.opens.length !== 0 || openPair.ghost.frames.length !== 0 || openPair.gapCovered.frames.length !== 0) faults.push(`${variant}: unexpected hold opens or ghost/covered hits`);
+      const t1 = openPair.gapOpen.frames.find((f) => f.index === 12);
+      if (t1?.px !== wantOpen) faults.push(`${variant} open t=1 gapOpen reads ${t1?.px ?? 0} px, required ${wantOpen}`);
+      if (variant === 'upper') {
+        const topwearRest = rest.find((r) => r.slot === 'topwear')!.vertices;
+        const cell = t1?.cell ?? (1 - 3 * Number.EPSILON);
+        const minX = (Math.floor(Math.min(topwearRest[0], topwearRest[2]) / cell) - 1) * cell;
+        const maxY = (Math.ceil(Math.max(topwearRest[1], topwearRest[3]) / cell) + 1) * cell;
+        for (let px = 31; px <= 34; px++) {
+          const qx = minX + (px + 0.5) * cell, qy = maxY - (17 + 0.5) * cell;
+          const carried = carry([0, 1, 2, 2, 3, 0], topwearRest, topwearRest, 1, qx, qy);
+          if (carried === null || carried[0] !== qx || carried[1] !== qy) faults.push(`stationary carry(${qx}, ${qy}) returned ${JSON.stringify(carried)}, required exact [${qx}, ${qy}]`);
+        }
+      }
+    }
+    const ok = faults.length === 0;
+    say('SE29_STATIONARY_AND_TRANSLATED_CARRY_READS_THE_PORTABLE_CONTACT_FIXTURES_EXACTLY', ok, probeDetail(ok, faults, 'portable contact fixtures read 64/64/512 open GAP cells at t = 1 with 0 on hold, and stationary carry(q) = q is exact on every band cell'), 'issue #1568: carry must apply vertex displacements from (qx, qy) so stationary and translated pieces do not drift the carried hull');
   }
 
   // SE01 — the positive control: what does not move, and what moves together, reads closed on every frame.

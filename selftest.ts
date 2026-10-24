@@ -188,6 +188,8 @@ import { deflateSync } from 'node:zlib';
 // Dev-only — `selftest.ts` ships in no package, and `bunx tsc` already makes
 // this a first-class dependency of the tree.
 import ts from 'typescript';
+import * as rendererReads from './src/render_read.ts';
+import * as rendererImplementation from './src/render_shared.ts';
 import {
   AlphaTimeline,
   AnimationState,
@@ -81853,6 +81855,47 @@ function runCurrencySuite(): number {
       ),
       'issue #1061: the owner settled 2.0.0 as one package whose install carries no runtime — the round trip stays what a clone and CI run, so the dependency moves to devDependencies, and the launcher is the one place that decides which entry an install runs; a choice anything but resolution could flip would be a bypass of the 🔒 invariant spelled as a variable',
     );
+
+    // The checked consumer gets one explicit entry, not the implementation's wider namespace (#1561).
+    {
+      const functions = ['loadCandidate', 'throughPoser', 'sampleAnimation', 'sampleSetupPose', 'pageFor', 'projector', 'rasterisePiece', 'renderFrame'] as const;
+      const failures = ['CandidateAtlasError', 'CandidatePairError', 'PoserChoiceError', 'SlotSubsetError', 'SpineRuntimeError', 'CoreInputError'];
+      const expected = [...functions, ...failures].sort();
+      const exportsMap = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { exports: Record<string, string> }).exports;
+      const target = exportsMap['./render-shared'];
+      const entry = (target ?? '').replace(/^\.\//, '');
+      const population = entryPopulation(root);
+      const text = population.get(entry) ?? '';
+      const namesFaults = (source: string): string[] => {
+        const file = ts.createSourceFile('read-entry.ts', source, ts.ScriptTarget.Latest, true);
+        const names: string[] = [];
+        const faults: string[] = [];
+        for (const node of file.statements) {
+          if (ts.isExportDeclaration(node) && !node.isTypeOnly) {
+            if (node.exportClause === undefined || !ts.isNamedExports(node.exportClause)) faults.push('wildcard value export');
+            else for (const item of node.exportClause.elements) if (!item.isTypeOnly) names.push(item.name.text);
+          }
+        }
+        if (JSON.stringify(names.sort()) !== JSON.stringify(expected)) faults.push('value exports differ from the agreed reads and failures');
+        return faults;
+      };
+      const live = namesFaults(text);
+      const faults = [...live];
+      if (target !== './src/render_read.ts') faults.push(`./render-shared maps to ${JSON.stringify(target)}`);
+      if (JSON.stringify(Object.keys(rendererReads).sort()) !== JSON.stringify(expected)) faults.push('actual namespace differs');
+      for (const name of functions) if (rendererReads[name] !== rendererImplementation[name]) faults.push(`${name} is not the official implementation`);
+      const closure = coreClosureFrom(population, [entry]);
+      faults.push(...closure.problems, ...closure.linkers.map((l) => `runtime reached: ${l.chain.join(' > ')}`));
+      if (namesFaults(text + "\nexport * from './render_shared.ts';").length === 0) faults.push('wildcard export plant escaped');
+      if (namesFaults(text + "\nexport { fill } from './render_shared.ts';").length === 0) faults.push('extra export plant escaped');
+      if (namesFaults(text + "\nexport type { Frame as ReadFrame } from './render_shared.ts';").length !== 0) faults.push('type-only edge refused');
+      const valuePlant = coreClosureFrom(plantedInto(population, entry, "import { Skeleton } from '@esotericsoftware/spine-core';"), [entry]);
+      const typePlant = coreClosureFrom(plantedInto(population, entry, "import type { Skeleton } from '@esotericsoftware/spine-core';"), [entry]);
+      if (valuePlant.linkers.length === 0 || typePlant.linkers.length !== 0) faults.push('runtime value/type edge was not distinguished');
+      say('CUR135_RENDER_SHARED_PROMISE_IS_EXPLICIT_AND_USES_THE_OFFICIAL_RUNTIME_FREE_READS', faults.length === 0,
+        probeDetail(faults.length === 0, faults, `./render-shared names exactly eight reads and their failure classes; ${closure.modules.length} value modules reach no Spine import; wildcard/extra-export/runtime plants caught, type-only edge accepted; installed calls are held by stock smoke`),
+        'issue #1561: transport courtesy does not promise an API; the checked consumer needs the official chooser, samplers and raster reads without eagerly importing the optional runtime');
+    }
 
     // CUR123 — the entry a browser player links reaches only the core (issue #1275).
     //

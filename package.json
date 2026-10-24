@@ -11,6 +11,7 @@
     "./font5x7": "./tools/font5x7.ts",
     "./transform": "./src/transform.ts",
     "./render": "./src/render.ts",
+    "./render-shared": "./src/render_read.ts",
     "./png": "./src/png.ts",
     "./compile": "./src/compile.ts",
     "./rig": "./src/rig.ts",

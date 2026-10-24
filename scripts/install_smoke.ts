@@ -105,6 +105,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:pa
 import { fileURLToPath } from 'node:url';
 
 import { AliasTarballError, compareTarballs } from './alias_tarball.ts';
+import { RENDER_SHARED_PROBE_SOURCE } from './render_shared_probe.ts';
 
 /** The repository this script packs — it is the subject, and nothing else reaches the fixture. */
 const ROOT = resolve(import.meta.dir, '..');
@@ -312,6 +313,7 @@ const NAMED_EXPORTS: Record<string, string> = {
   './font5x7': 'tools/font5x7.ts',
   './transform': 'src/transform.ts',
   './render': 'src/render.ts',
+  './render-shared': 'src/render_read.ts',
   './png': 'src/png.ts',
   './compile': 'src/compile.ts',
   './rig': 'src/rig.ts',
@@ -461,6 +463,19 @@ const REQUESTED_IN_1541 = 'rig-play live named physics parameters, requested on 
 const AGREED_IN_1450 = 'parts#378 segments preflight, agreed on issue #1450';
 
 const OBSERVED_SYMBOLS: ObservedEntry[] = [
+  {
+    entry: './render-shared', observed: 'parts#713 checked renderer reads, agreed on core#1561', needsRuntime: false,
+    values: {
+      loadCandidate: 'function', throughPoser: 'function', sampleAnimation: 'function', sampleSetupPose: 'function',
+      pageFor: 'function', projector: 'function', rasterisePiece: 'function', renderFrame: 'function',
+      CandidateAtlasError: 'function', CandidatePairError: 'function', PoserChoiceError: 'function',
+      SlotSubsetError: 'function', SpineRuntimeError: 'function', CoreInputError: 'function',
+    },
+    types: ['Candidate', 'SkeletonFacts', 'PoserChoice', 'PoserName', 'MakeCorePoser', 'Poser', 'Posed', 'PoseSource',
+      'PoseOptions', 'DrawOptions', 'SkinRoster', 'SlotSubset', 'Frame', 'BoneSnapshot', 'AttachmentPose', 'AttachmentRest',
+      'Piece', 'PieceCommon', 'PieceTexture', 'UvWindow', 'Quad', 'Mesh', 'ClipSource', 'Viewport', 'EmitPixel',
+      'Plate', 'RGBA', 'EnvironmentStep', 'EnvironmentChange'],
+  },
   {
     entry: './mesh', observed: AGREED_IN_1450, needsRuntime: false,
     values: { buildSegmentsLattice: 'function', segmentDistance: 'function', influenceShares: 'function' },
@@ -662,10 +677,11 @@ const RENAME_PLANT = { entry: './render', symbol: 'loadPosable', renamed: 'loadP
  * entry, because each is a different dependant's import that has to go red by
  * its own name.
  */
-type DropPlant = 'drop-named-entry' | 'drop-rig-entry' | 'drop-mesh-entry' | 'drop-errors-entry' | 'drop-meshcompare-entry' | 'drop-core-named-entry';
+type DropPlant = 'drop-render-shared-entry' | 'drop-named-entry' | 'drop-rig-entry' | 'drop-mesh-entry' | 'drop-errors-entry' | 'drop-meshcompare-entry' | 'drop-core-named-entry';
 // ⚠️ `./core`'s plant is `drop-core-named-entry`, not `drop-core-entry`: that name was
 // taken by #1061 for `cli_core.ts` leaving `files`, a different fault at a different step.
 const DROPPED_ENTRIES: Record<DropPlant, string> = {
+  'drop-render-shared-entry': './render-shared',
   'drop-named-entry': './render',
   'drop-rig-entry': './rig',
   'drop-mesh-entry': './mesh',
@@ -1765,6 +1781,8 @@ function waitForRegistry(spec: string, minutes: number, cwd: string, into: strin
 
 type Plant =
   | 'none'
+  | 'drop-render-shared-entry'
+  | 'stub-render-shared-sampler'
   | 'drop-plate'
   | 'drop-src-module'
   | 'add-dependency'
@@ -1868,15 +1886,21 @@ function droppedEntryPlant(plant: Exclude<DropPlant, 'drop-named-entry'>, issue 
   // The core's two steps import `rig-c/core` by its bare name — the call from the install and the browser bundle — so
   // taking the entry away reddens both of them too, by the entry's name (issue #1275).
   const poses = entry === './core';
+  const readsRenderer = entry === './render-shared';
   return {
     names: [`${NAME}${entry.slice(1)}`, ...(entry === './mesh' ? ['buildSegmentsLattice', 'segmentDistance', 'influenceShares'] : [])],
-    steps: ['exports', 'exports-without-runtime', ...(compares ? [MESHCOMPARE_STEP] : []), ...(poses ? [CORE_POSE_STEP, CORE_BROWSER_STEP] : [])],
+    steps: ['exports', 'exports-without-runtime', ...(compares ? [MESHCOMPARE_STEP] : []), ...(poses ? [CORE_POSE_STEP, CORE_BROWSER_STEP] : []), ...(readsRenderer ? ['render-shared'] : [])],
     alone: true,
     what: `the named entry \`${entry}\` removed from \`exports\` (issue ${issue}), which the patterns do not rescue — \`./*\` maps it to a file at the package root that does not exist — so a dependant importing \`${NAME}${entry.slice(1)}\` is the one who finds out: both import probes${compares ? ' and the comparison from the install' : ''}${poses ? ', the pose from the install and the browser bundle' : ''} have to go red naming the entry, and nothing else`,
   };
 }
 
 const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]; what: string; alone?: true }> = {
+  'drop-render-shared-entry': droppedEntryPlant('drop-render-shared-entry', '#1561'),
+  'stub-render-shared-sampler': {
+    names: [`${NAME}/render-shared`, 'sampleSetupPose'], steps: ['render-shared'], alone: true,
+    what: 'the packed renderer read entry keeps sampleSetupPose callable but returns no frames; only the installed read calls must go red (issue #1561)',
+  },
   'drop-plate': {
     names: ['tools/plate.ts'],
     steps: ['fixture', 'build'],
@@ -2031,6 +2055,15 @@ function tarballFor(
   } else if (isDropPlant(plant)) {
     pkg.exports = Object.fromEntries(Object.entries(pkg.exports ?? {}).filter(([key]) => key !== DROPPED_ENTRIES[plant]));
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  } else if (plant === 'stub-render-shared-sampler') {
+    const victim = join(pkgDir, NAMED_EXPORTS['./render-shared']);
+    const text = readFileSync(victim, 'utf8');
+    const line = '  sampleSetupPose,';
+    if (text.split(line).length !== 2) {
+      faults.push('SMOKE_PLANT_APPLIED: the renderer read entry has no unique sampleSetupPose re-export');
+      return { tgz: '', faults, paths: [], evidence: '' };
+    }
+    writeFileSync(victim, text.replace(line, '') + '\nexport function sampleSetupPose() { return []; }\n');
   } else if (plant === 'rename-symbol') {
     // The export renamed and the function kept, so every call inside the
     // defining module still reaches it: `export function X(` becomes
@@ -2132,6 +2165,11 @@ function tarballFor(
     } else {
       evidence = `the packed ${FORK_ERROR_MODULE} declares a CompileError of its own rather than importing the one ./errors.ts exports`;
     }
+  } else if (plant === 'stub-render-shared-sampler') {
+    const shipped = run('tar', ['-xzOf', second, `package/${NAMED_EXPORTS['./render-shared']}`], work);
+    if (shipped.status !== 0 || !shipped.out.includes('export function sampleSetupPose() { return []; }')) {
+      faults.push('SMOKE_PLANT_APPLIED: the packed read entry does not carry the sampleSetupPose stub');
+    } else evidence = 'the packed read entry exports a callable sampleSetupPose returning no frames';
   } else if (plant === 'rename-symbol') {
     const file = NAMED_EXPORTS[RENAME_PLANT.entry];
     const shipped = run('tar', ['-xzOf', second, `package/${file}`], work);
@@ -2412,6 +2450,23 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
     else notes.push(`the core entry's build wrote ${CORE_REPORT}: ${BUILD_REPORT_SPEC_SEEN}, supplier "model", its gates' summaries the printed ones`);
   }
 
+  // Calls from the actual empty install, before any optional runtime is added.
+  // A failed core build already owns its refusal; phase two also probes the independent full build.
+  const probeRenderer = (buildDir: string, phase: 'without-runtime' | 'runtime-present'): void => {
+    writeFileSync(join(home, 'render_shared_probe.json'), JSON.stringify({ name: NAME, runtime: RUNTIME, build: buildDir,
+      bones: RIG_SPEC.bones.map((b) => b.name), slots: RIG_SPEC.slots.map((s) => s.name) }) + '\n');
+    writeFileSync(join(home, 'render_shared_probe.mjs'), RENDER_SHARED_PROBE_SOURCE);
+    const read = run('bun', [join(home, 'render_shared_probe.mjs'), phase], home);
+    output += read.out;
+    const bad = read.out.split('\n').filter((line) => line.startsWith('RENDER_SHARED_BAD '));
+    const receipt = /^RENDER_SHARED_OK (.+)$/m.exec(read.out)?.[1];
+    for (const line of bad) fault('render-shared', `SMOKE_RENDER_SHARED_READS_THE_INSTALLED_BUILD: ${line.slice('RENDER_SHARED_BAD '.length)}`);
+    if (read.status !== 0 || receipt === undefined) {
+      if (bad.length === 0) fault('render-shared', `SMOKE_RENDER_SHARED_READS_THE_INSTALLED_BUILD: ${NAME}/render-shared ${phase} exited ${read.status} without a verdict: ${read.out.trim().slice(0, 1500)}`);
+    } else notes.push(`renderer reads: ${receipt}`);
+  };
+  if (coreBuilt) probeRenderer(coreDir, 'without-runtime');
+
   // 🔒 Phase two: the runtime installed beside the package, by the version the
   // package declares — and the SAME `rigc` now runs cli.ts and the round trip.
   // The emitted skeleton names that version back, and those two have to be the
@@ -2528,6 +2583,8 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   if (validate.status !== 0) {
     fault('validate', `SMOKE_VALIDATE_READS_BACK: \`node_modules/.bin/rigc validate build\` exited ${validate.status}. ${validate.out.trim().slice(0, 4000)}`);
   }
+
+  if (build.status === 0) probeRenderer(outDir, 'runtime-present');
 
   // The import surface (issue #859), from the install: every `exports` entry
   // rigc names, the deep paths a dependant was seen importing, and every path
@@ -2857,6 +2914,8 @@ cases:
   drop-meshcompare-entry  ${DROPPED_ENTRIES['drop-meshcompare-entry']} out of \`exports\` — importing ${NAME}${DROPPED_ENTRIES['drop-meshcompare-entry'].slice(1)} and the comparison from the install have to go RED naming it, and nothing else
   drop-core-named-entry  ${DROPPED_ENTRIES['drop-core-named-entry']} out of \`exports\` — importing ${NAME}${DROPPED_ENTRIES['drop-core-named-entry'].slice(1)}, the pose from the install and the browser bundle have to go RED naming it, and nothing else
   import-node-in-core    an import of node:fs at the top of the packed ${NODE_PLANT_MODULE} — the browser bundle, and only it, has to go RED naming the module
+  drop-render-shared-entry  ./render-shared out of exports — the imports and installed read calls must go RED naming the entry
+  stub-render-shared-sampler  callable sampleSetupPose returning no frames — only the installed read calls must go RED
   rename-symbol      ${RENAME_PLANT.symbol} exported under another name — the symbol read through ${NAME}${RENAME_PLANT.entry.slice(1)} has to go RED naming both
   fork-compile-error ${FORK_ERROR_MODULE} given a CompileError of its own — the parser's refusal, caught by the class ${NAME}/errors exports, has to go RED alone naming both
   refuse-core-build  the core entry's build body made to refuse — the core-build step, and only it, has to go RED naming SMOKE_CORE_ENTRY_BUILDS
@@ -2989,6 +3048,8 @@ function main(): number {
 
   const battery: CaseSpec[] = [
     { name: 'clean', source, installer, plant: 'none', dirName: 'empty' },
+    { name: 'drop-render-shared-entry', source, installer, plant: 'drop-render-shared-entry', dirName: 'planted-render-shared-entry' },
+    { name: 'stub-render-shared-sampler', source, installer, plant: 'stub-render-shared-sampler', dirName: 'planted-render-shared-sampler' },
     // The negative control the card asks for: a CORRECT package at a path
     // nothing in the tree has ever seen, so a pass here is not a pass about
     // this machine's tidy temp directory.

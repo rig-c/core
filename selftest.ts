@@ -141221,7 +141221,6 @@ function seamShiftFaults(readings: SeamReadings, fps: number): string[] {
   return faults;
 }
 
-/** SE05's reading: two drawings that share no cell at the setup pose are a SKIP on every set — nothing measured, never a pass. */
 /** Owner hits partition the union exactly, including its box, and retain the kind's sparse summaries. */
 function seamOwnerFaults(readings: SeamReadings): string[] {
   const faults: string[] = [];
@@ -141273,6 +141272,7 @@ function seamOwnerSwapFaults(forward: SeamReadings, reverse: SeamReadings, fps: 
   return faults;
 }
 
+/** SE05's reading: two drawings that share no cell at the setup pose are a SKIP on every set — nothing measured, never a pass. */
 function seamSkipFaults(readings: SeamReadings, fps: number): string[] {
   const faults: string[] = [];
   if (readings.size === 0) faults.push('no set read');
@@ -141284,6 +141284,137 @@ function seamSkipFaults(readings: SeamReadings, fps: number): string[] {
     }
   }
   return faults;
+}
+
+/** Each new kind retains sparse hits/summaries and the two kinds bound the unchanged gap exactly. */
+function seamGapPartitionFaults(p: SeamPairReading): string[] {
+  const faults: string[] = [];
+  for (const kind of [p.gapOpen, p.gapCovered]) {
+    let worst: typeof kind.worst = null;
+    const spans: typeof kind.spans = [];
+    for (const f of kind.frames) {
+      const u = p.gap.frames.find((hit) => hit.index === f.index);
+      if (u === undefined || f.px <= 0 || f.time !== u.time || f.cell !== u.cell || f.area !== f.px * f.cell * f.cell || !seamBoxInside(f.box, u.box)) faults.push(`frame ${f.index}: bad gap partition hit`);
+      if (worst === null || f.px > worst.px) worst = f;
+      const last = spans[spans.length - 1];
+      if (last !== undefined && f.index <= last.frames[1]) faults.push('gap partition hits not ordered');
+      if (last !== undefined && last.frames[1] + 1 === f.index) {
+        last.frames[1] = f.index; last.times[1] = f.time; last.maxPx = Math.max(last.maxPx, f.px);
+      } else spans.push({ frames: [f.index, f.index], times: [f.time, f.time], maxPx: f.px });
+    }
+    if (JSON.stringify(kind.worst) !== JSON.stringify(worst) || JSON.stringify(kind.spans) !== JSON.stringify(spans)) faults.push('gap partition summaries differ from hits');
+  }
+  for (const u of p.gap.frames) {
+    const hits = [p.gapOpen, p.gapCovered].flatMap((kind) => kind.frames.filter((f) => f.index === u.index));
+    if (hits.reduce((n, f) => n + f.px, 0) !== u.px) faults.push(`frame ${u.index}: gap partitions do not sum`);
+    if (hits.length > 0 && JSON.stringify([Math.min(...hits.map((f) => f.box[0])), Math.min(...hits.map((f) => f.box[1])), Math.max(...hits.map((f) => f.box[2])), Math.max(...hits.map((f) => f.box[3]))]) !== JSON.stringify(u.box)) faults.push(`frame ${u.index}: gap partition boxes do not bound union`);
+  }
+  return faults;
+}
+
+/** An eight-cell hole derived from two rectangles, read against the actual transparent renderer as well. */
+function runSeamCoverageControls(work: string): number {
+  let bad = 0;
+  const say = (name: string, faults: string[], clean: string): void => {
+    bad += reportCase(name, faults.length === 0, probeDetail(faults.length === 0, faults, clean), 'issue #1556: gap is the pair reading; its partition asks for zero versus positive rendered alpha from every skeleton drawing');
+  };
+  const rect = (slot: string, x: number, width: number, page = slot): Piece => ({ kind: 'region', slot, page, world: [x, 0, x, 4, x + width, 4, x + width, 0], uvs: [0, 1, 0, 0, 1, 0, 1, 1], tint: [1, 1, 1, 1] });
+  const plate = (width: number): Plate => { const p = new Plate(width, 4); for (let y = 0; y < 4; y++) for (let x = 0; x < width; x++) p.set(x, y, [255, 255, 255, 255]); return p; };
+  const a = rect('a', 0, 4), b = rect('b', 6, 4), cover = rect('cover', 4, 2);
+  const rest = [a, rect('b', 2, 4)].map((p) => ({ slot: p.slot, attachment: p.slot, kind: 'region' as const, vertices: p.world, triangles: [0, 1, 2, 2, 3, 0] }));
+  const pages = new Map([['a', plate(4)], ['b', plate(4)], ['cover', plate(2)]]);
+  const frameOf = (pieces: Piece[], index = 0): Frame => ({ index, time: index / PROTOCOL_FPS, pieces, attachments: pieces.map((p) => ({ slot: p.slot, attachment: p.slot, vertices: p.world, color: p.tint })) });
+  const read = (pieces: Piece[], plant: SeamPlant = {}, art = pages): SeamPairReading => seamsOf([{ a: 'a', b: 'b' }], rest, [{ ...frameOf(pieces), attachments: frameOf(pieces).attachments ?? [] }], art, plant)[0];
+  const viewport: Viewport = { minX: 0, minY: 0, maxX: 10, maxY: 4, width: 10, height: 4, scale: 1 };
+  // Independent geometry: A=[0,4], B(rest)=[2,6], B(frame)=[6,10]; the carried band spans x=2.5..7.5.
+  const expected = (p: SeamPairReading, open: number, covered: number): string[] => {
+    const faults = seamGapPartitionFaults(p);
+    const box = p.gap.worst?.box;
+    // The actual poser carries float transforms (cell 0.9999999999999999); only the
+    // independently derived geometry uses the existing corner epsilon, never counts or partition identity.
+    if (p.gap.worst?.px !== 8 || box === undefined || !seamBoxInside(box, [4, 0, 6, 4]) || !seamBoxInside([4, 0, 6, 4], box)) faults.push(`two rectangles do not read the derived eight-cell hole: ${JSON.stringify(p.gap.worst)}`);
+    if ((p.gapOpen.worst?.px ?? 0) !== open || (p.gapCovered.worst?.px ?? 0) !== covered) faults.push(`gapOpen/gapCovered ${(p.gapOpen.worst?.px ?? 0)}/${(p.gapCovered.worst?.px ?? 0)}, required ${open}/${covered}`);
+    return faults;
+  };
+  const oracle = (pieces: Piece[], open: number, art = pages): string[] => {
+    const image = renderFrame(frameOf(pieces), art, viewport, [0, 0, 0, 0]);
+    let zero = 0;
+    for (let y = 0; y < 4; y++) for (const x of [4, 5]) if (image.get(x, y)[3] === 0) zero++;
+    return zero === open ? [] : [`transparent renderFrame has ${zero} zero-alpha hole cells, required ${open}`];
+  };
+  {
+    const faults = [...expected(read([a, b]), 8, 0), ...oracle([a, b], 8), ...expected(read([a, b, cover]), 0, 8), ...oracle([a, b, cover], 0), ...expected(read([cover, a, b]), 0, 8)];
+    const half = rect('cover', 4, 1);
+    faults.push(...expected(read([a, b, half]), 4, 4), ...oracle([a, b, half], 4));
+    const p = read([a, b, half]);
+    if (JSON.stringify(p.gapCovered.worst?.box) !== '[4,0,5,4]' || JSON.stringify(p.gapOpen.worst?.box) !== '[5,0,6,4]') faults.push('partial cover boxes are not the two derived columns');
+    say('SE22_A_THIRD_DRAWING_PARTITIONS_AN_EIGHT_CELL_HOLE_PER_CELL', faults, 'derived hole: 8 open without art, 8 covered by an earlier or later third drawing, 4/4 under a one-column cover; actual transparent renderer agrees');
+  }
+  {
+    const faults: string[] = [];
+    for (const [alpha, open] of [[0, 8], [0.5 / 255, 8], [0.51 / 255, 0], [1 / 255, 0], [64 / 255, 0], [127 / 255, 0]] as const) {
+      const faint: Piece = { ...cover, tint: [1, 1, 1, alpha] };
+      faults.push(...expected(read([a, b, faint]), open, 8 - open), ...oracle([a, b, faint], open));
+    }
+    const transparent = new Map(pages); transparent.set('cover', new Plate(2, 4));
+    faults.push(...expected(read([a, b, cover], {}, transparent), 8, 0), ...oracle([a, b, cover], 8, transparent));
+    const holed = plate(2); for (let y = 0; y < 4; y++) holed.set(1, y, [255, 255, 255, 0]);
+    const holes = new Map(pages); holes.set('cover', holed);
+    faults.push(...expected(read([a, b, cover], {}, holes), 4, 4), ...oracle([a, b, cover], 4, holes));
+    say('SE23_ANY_RENDERED_ALPHA_COVERS_BUT_ZERO_ALPHA_AND_TEXTURE_HOLES_DO_NOT', faults, '1..127 alpha covers; the renderer’s existing byte-zero boundary, zero tint and transparent texels remain open; texture holes are read per cell');
+  }
+  {
+    // A faint last texel column still contributes alpha at x=5.5 after A stretches to width 6;
+    // the rest band still has its opaque x=2.5 column. B's inverse map finds the opaque rest A.
+    const faint = plate(4); for (let y = 0; y < 4; y++) faint.set(3, y, [255, 255, 255, 1]);
+    const art = new Map(pages); art.set('a', faint);
+    const stretched = rect('a', 0, 6);
+    const p = read([stretched, b], {}, art);
+    const faults = seamGapPartitionFaults(p);
+    if (p.gap.worst?.px !== 4 || p.gapCovered.worst?.px !== 4 || p.gapOpen.worst !== null || JSON.stringify(p.gap.worst.box) !== '[5,0,6,4]') faults.push('the faint pair member did not cover the derived four-cell column');
+    const image = renderFrame(frameOf([stretched, b]), art, viewport, [0, 0, 0, 0]);
+    for (let y = 0; y < 4; y++) if (image.get(5, y)[3] !== 1) faults.push('faint pair member does not render alpha 1');
+    say('SE24_A_PAIR_MEMBER_BELOW_HALF_OPACITY_CAN_COVER_ITS_OWN_GAP', faults, 'four cells below the pair’s outline threshold still have rendered alpha 1 from that pair member, with no third drawing');
+  }
+  {
+    const page = join(work, 'coverage.png'); plate(4).writePng(page);
+    const atlas = 'coverage.png\nsize: 4,4\nfilter: Linear,Linear\na\nbounds: 0,0,4,4\nb\nbounds: 0,0,4,4\ncover\nbounds: 0,0,4,4\n';
+    const skeleton = { skeleton: { spine: '4.3.13' }, bones: [{ name: 'root' }, { name: 'b', parent: 'root', x: 2 }, { name: 'cover', parent: 'root', x: 4 }], slots: [{ name: 'a', bone: 'root', attachment: 'a' }, { name: 'b', bone: 'b', attachment: 'b' }, { name: 'mask', bone: 'cover', attachment: 'mask' }, { name: 'cover', bone: 'cover', attachment: 'cover' }], skins: [{ name: 'default', attachments: { a: { a: { x: 2, y: 2, width: 4, height: 4 } }, b: { b: { x: 2, y: 2, width: 4, height: 4 } }, mask: { mask: { type: 'clipping', end: 'cover', vertexCount: 4, vertices: [0, 0, 1, 0, 1, 4, 0, 4] } }, cover: { cover: { x: 1, y: 2, width: 2, height: 4 } } } }], animations: { apart: { bones: { b: { translate: [{ x: 4 }] } } } } };
+    const posable = posableFromText(JSON.stringify(skeleton), atlas, work), poser = spinePoser(posable.data);
+    const frames = sampleAnimation(poser, 'apart', PROTOCOL_FPS, { geometry: true });
+    const posed = frames[0];
+    const p = seamsOf([{ a: 'a', b: 'b' }], poser.rest(undefined, frames.map((f) => f.attachments ?? [])), frames.map((f) => ({ ...f, attachments: f.attachments ?? [] })), posable.pages)[0];
+    const faults = [...expected(p, 4, 4), ...oracle(posed.pieces, 4, posable.pages)];
+    if (!posed.pieces.some((q) => q.slot === 'cover' && q.kind === 'mesh' && q.source !== undefined)) faults.push('the actual poser did not hand over a clipped source mesh');
+    if (raisedBy(expected(read([a, b, cover]), 4, 4), { at: 'gapOpen/gapCovered 0/8, required 4/4' }).length !== 1) faults.push('whole-unclipped-third mutant was not caught');
+    say('SE25_A_CLIPPED_THIRD_DRAWING_COVERS_ONLY_WHAT_THE_POSER_RENDERS', faults, 'actual spine poser clips a region to one hole column and hands over a source-UV mesh: 4 covered/4 open; whole attachment would incorrectly cover 8');
+  }
+  {
+    const faults: string[] = [];
+    const faint: Piece = { ...cover, tint: [1, 1, 1, 1 / 255] };
+    for (const [pieces, plant, open, covered] of [
+      [[a, b, faint], { gapCoverage: 'half' }, 0, 8], [[a, b, cover], { gapCoverage: 'pair' }, 0, 8],
+      [[a, b, cover], { gapCoverage: 'open' }, 0, 8], [[a, b], { gapCoverage: 'covered' }, 8, 0],
+    ] as const) {
+      const normal = expected(read([...pieces]), open, covered), planted = expected(read([...pieces], plant), open, covered);
+      faults.push(...normal);
+      if (raisedBy(planted, { was: normal, at: `gapOpen/gapCovered ${covered}/${open}, required ${open}/${covered}` }).length !== 1) faults.push(`${JSON.stringify(plant)} was not caught by its coverage counts: ${planted.join('; ')}`);
+    }
+    say('SE26_WRONG_ALPHA_PAIR_ONLY_AND_CONSTANT_COVERAGE_MUTANTS_ARE_RED', faults, 'half-opacity, pair-only, all-open and all-covered mutants retain a sum but fail the independently derived counts');
+  }
+  {
+    const sparse = [0, 2, 3, 5].map((index) => ({ ...frameOf([a, b, cover], index), attachments: frameOf([a, b, cover], index).attachments ?? [] }));
+    const p = seamsOf([{ a: 'a', b: 'b' }], rest, sparse, pages)[0], q = seamsOf([{ a: 'b', b: 'a' }], rest, sparse, pages)[0];
+    const faults = seamGapPartitionFaults(p);
+    if (JSON.stringify(p.gapCovered.spans.map((s) => s.frames)) !== '[[0,0],[2,3],[5,5]]' || p.gapCovered.worst?.index !== 0) faults.push('sparse/tied coverage summaries differ');
+    if (JSON.stringify(p.gapOpen) !== JSON.stringify(q.gapOpen) || JSON.stringify(p.gapCovered) !== JSON.stringify(q.gapCovered)) faults.push('pair reversal changed coverage');
+    for (const frames of [[], sparse.map((f) => ({ ...f, pieces: [] }))]) {
+      const empty = seamsOf([{ a: 'a', b: 'b' }], rest, frames, pages)[0];
+      faults.push(...seamGapPartitionFaults(empty)); if (empty.status !== 'skip' || empty.gapOpen.worst !== null || empty.gapCovered.worst !== null) faults.push('empty coverage is not SKIP');
+    }
+    say('SE27_COVERAGE_KEEPS_SPARSE_TIED_EMPTY_AND_REVERSED_READINGS', faults, 'sparse indices keep three spans and the earliest tied maximum; empty frames remain SKIP; pair reversal preserves both coverage kinds');
+  }
+  return bad;
 }
 
 function runSeamSuite(): number {
@@ -141364,6 +141495,12 @@ function runSeamSuite(): number {
   };
   const clean = library(built, SEAM_PROBE_PAIRS);
   const cleanSkip = library(apartBuilt, [{ a: 'skirt', b: 'leg' }]);
+  bad += runSeamCoverageControls(work);
+  {
+    const faults = [...pre, ...[...cli.values(), ...cliSkip.values()].flatMap((pairs) => pairs.flatMap(seamGapPartitionFaults))];
+    const ok = faults.length === 0;
+    say('SE28_EVERY_PUBLIC_PROBE_GAP_IS_EXACTLY_PARTITIONED', ok, probeDetail(ok, faults, 'all sampled public-probe sets, including closed and no-band SKIP pairs, retain exact gap partitions and summaries'), 'issue #1556: sparse coverage hits partition the unchanged gap on every frame');
+  }
 
   // SE01 — the positive control: what does not move, and what moves together, reads closed on every frame.
   {

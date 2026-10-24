@@ -735,6 +735,7 @@ an install of an alias carries the same map, so `spine-rigc/plate` and
 | `rig-c/font5x7` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
 | `rig-c/transform` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
 | `rig-c/render` | [#1167](https://github.com/rig-c/core/issues/1167) | `@esotericsoftware/spine-core` |
+| `rig-c/render-shared` | [#1561](https://github.com/rig-c/core/issues/1561), agreed for parts#713 | nothing; Spine inputs require the explicitly registered `rig-c/render` side |
 | `rig-c/png` | [#1167](https://github.com/rig-c/core/issues/1167) | nothing |
 | `rig-c/compile` | [#1167](https://github.com/rig-c/core/issues/1167) | nothing |
 | `rig-c/rig` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
@@ -1236,6 +1237,45 @@ packed `src/rig.ts` a `CompileError` of its own — same name, same message,
 every build still green — and the probe has to go red alone, naming the
 entry and the class.
 
+The renderer read entry is promised by agreement before parts#713 consumes it
+([#1561](https://github.com/rig-c/core/issues/1561)). It is an explicit facade,
+not the implementation module's whole namespace:
+
+| entry | values held | types recorded |
+| --- | --- | --- |
+| `rig-c/render-shared` | `loadCandidate`, `throughPoser`, `sampleAnimation`, `sampleSetupPose`, `pageFor`, `projector`, `rasterisePiece`, `renderFrame`; failure classes `CandidateAtlasError`, `CandidatePairError`, `PoserChoiceError`, `SlotSubsetError`, `SpineRuntimeError`, `CoreInputError` | `Candidate`, `SkeletonFacts`, `PoserChoice`, `PoserName`, `MakeCorePoser`, `Poser`, `Posed`, `PoseSource`, `PoseOptions`, `DrawOptions`, `SkinRoster`, `SlotSubset`, `Frame`, `BoneSnapshot`, `AttachmentPose`, `AttachmentRest`, `Piece`, `PieceCommon`, `PieceTexture`, `UvWindow`, `Quad`, `Mesh`, `ClipSource`, `Viewport`, `EmitPixel`, `Plate`, `RGBA`, `EnvironmentStep`, `EnvironmentChange` |
+
+These are the existing official functions and classes, with their existing
+arguments and results. Importing the entry registers no Spine side, even if the
+optional runtime is installed. A valid rigc build chooses the core after the
+model, skeleton digest, atlas placement and rosters agree; missing or mismatched
+inputs retain the named refusal and its reason. A /3 build can use its own page
+placement without an atlas. Spine inputs, explicit Spine choice and a core
+fallback require the registered side: a consumer asking for those explicitly
+imports `rig-c/render`, which still eagerly imports the optional runtime.
+`throughPoser` reports the chosen poser and reason beside its value; its callback
+must write nothing, since the existing registered fallback can rerun it.
+`loadCandidate` retains its deferred forced-core refusal order; callers must not
+interpret the flag alone as proof that `choice.core` exists.
+
+`SMOKE_RENDER_SHARED_READS_THE_INSTALLED_BUILD` calls the eight reads in a fresh
+process against the gated stock fixture **before installing the runtime** and
+again with the runtime beside the package. It reads setup and animation region
+and mesh geometry, page selection, projected and rasterised pixels, and the skin
+roster. Missing model/page/atlas, digest/atlas/roster mismatch, unknown
+animation/skin/slot/page and an unregistered Spine side are refused by name.
+Runtime-present calls explicitly load `rig-c/render` and compare core and Spine
+poses and pixels. `drop-render-shared-entry` removes the named key;
+`stub-render-shared-sampler` keeps `sampleSetupPose` callable but makes it return
+no frames, which only the installed call probe must catch. `CUR135` holds the
+facade's exact values, original function identity and runtime-free value closure;
+types remain recorded rather than runtime-checked, under the rule below.
+
+This additive entry is a **minor** release contract. It is not available in
+2.68.0; the next minor, 2.69.0, is the planned first version. Consumers must wait
+for the cut and its measured artifact before pinning `>=2.69.0 <3.0.0`. A source
+or packed-candidate result is not a postcut registry confirmation.
+
 What is **not** promised, so nobody reads more into an entry than is there:
 
 - **Any other export of an entry's module.** An entry exposes the whole file
@@ -1289,11 +1329,12 @@ that change to the same bytes, and is that dependant's to land.
 spelled in full and **1 of the 42** shipped modules spelled without its
 extension, where the package with no map resolved all 42. Bun does not try an
 array of targets either, so the fallback is spelled per extension instead.
-`bun run smoke` resolves every shipped path both ways from the install, two
-of its plants take the named entries and the patterns away in turn, six
-more take one named entry away each, one renames a listed symbol, one
-forks the parser's error class from the one its entry exports, and one puts a
-node import in the core's closure, which only the browser bundle can see.
+`bun run smoke` resolves every shipped path both ways from the install. Its
+battery removes the map and its patterns, drops each protected named entry,
+renames a listed symbol, forks the parser's error class from its entry's,
+stubs the renderer read sampler while keeping it callable, and puts a node
+import in the core's closure, which only the browser bundle can see. The
+battery in `scripts/install_smoke.ts` is the checked list.
 
 ### Whether the tarball runs
 
@@ -1378,9 +1419,10 @@ broken on purpose — `tools/plate.ts` out of `files`, `src/validate.ts` out of 
 packed tree, `@esotericsoftware/spine-core` put back in `dependencies` (the
 install then has the runtime, which is not the package this tree packs),
 `cli_core.ts` out of `files` (the install's `rigc --version` dies), the skills
-plant, ten on the import surface (the map removed, the map cut to its
-named entries, each of six named entries removed in turn, one listed symbol
-renamed, the parser's error class forked from its entry's), one in the core's
+plant, the import-surface controls (the map removed, the map cut to its
+named entries, each protected named entry removed in turn, one listed symbol
+renamed, the parser's error class forked from its entry's), the renderer read
+sampler stub (callable but returning no setup frame), one in the core's
 closure (an import of `node:fs` that Bun loads and only the browser bundle
 refuses), and two on
 the core entry's build — its body made to refuse, and one byte appended to the

@@ -1617,6 +1617,68 @@ written`, followed by `rigc repack: nothing was written to <out>; the work direc
 
 ---
 
+### 0.5 Reading a build from code
+
+The named `rig-c/render-shared` entry promises the official renderer reads for
+checked consumers (issue #1561). It is planned for the next minor, 2.69.0; wait
+for the measured release before using `>=2.69.0 <3.0.0`. It requires Bun and the
+candidate's real files, but imports no optional Spine runtime. The existing
+`rig-c/render` entry still eagerly imports that runtime.
+
+```ts
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  loadCandidate, throughPoser, sampleSetupPose, sampleAnimation,
+  pageFor, projector, rasterisePiece, renderFrame,
+  type Viewport,
+} from 'rig-c/render-shared';
+
+const dir = 'build';
+const skeleton = join(dir, 'skeleton.json');
+const atlas = join(dir, 'skeleton.atlas');
+const candidate = loadCandidate({
+  skeletonText: readFileSync(skeleton, 'utf8'),
+  atlasText: readFileSync(atlas, 'utf8'),
+  atlasDir: dir, label: skeleton,
+}, { skeleton, atlas }, undefined);
+const read = throughPoser(candidate.choice, (poser, roster) => ({
+  setup: sampleSetupPose(poser, { bones: true, geometry: true })[0],
+  frames: sampleAnimation(poser, 'wave', 12),
+  skins: roster.skins,
+}));
+// The consumer supplies the world box and pixel grid it intends to measure.
+const viewport: Viewport = {
+  minX: 0, minY: 0, maxX: 256, maxY: 256,
+  scale: 1, width: 256, height: 256,
+};
+const project = projector(viewport);
+for (const piece of read.value.setup.pieces) {
+  rasterisePiece(pageFor(candidate.pages, piece), piece, project, viewport,
+    (x, y, r, g, b, a) => { /* read each covered sample */ });
+}
+const image = renderFrame(read.value.setup, candidate.pages, viewport, [0, 0, 0, 0]);
+```
+
+The animation name and viewport above belong to the consumer; the loader does
+not invent them. The chooser checks the model document beside the skeleton,
+its `spine.sha256`, atlas placement, page files and bone/slot/animation rosters.
+A /3 document can be loaded with `atlasText: null` when its atlas is absent.
+`throughPoser` returns `poser` and `note` with its value. Keep its callback free
+of writes: an explicitly registered runtime fallback can rerun it.
+
+The entry also exports the original `CandidateAtlasError` (missing required
+atlas), `CandidatePairError` (unloadable pair or missing page),
+`SpineRuntimeError` (input needs an unregistered or unusable Spine side),
+`PoserChoiceError` (a forced-core pose refusal), `SlotSubsetError` (invalid
+slot subset) and `CoreInputError` (core input/pose refusal). The chooser's
+mismatch reason remains in the refusal: no silent substitute is selected by
+this entry. Unknown animation and missing `pageFor` page are `Error`s naming
+the requested name and available names. A forced-core flag keeps the existing
+deferred choice check; it alone does not prove `candidate.choice.core` exists.
+To use a Spine export or `forced: 'spine'`, install the runtime and explicitly
+import `rig-c/render` first; importing `render-shared` never registers it.
+
 ## 1. The two files
 
 ### 1.1 A complete minimal rig spec

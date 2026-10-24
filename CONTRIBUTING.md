@@ -125,8 +125,8 @@ platform and Bun release line (major.minor — a run on Bun 1.4.9 is held to the
 times `MEMORY_MARGIN`, and one children's figure per suite with the `--jobs`
 they were read at (`TY40`), each suite's heaviest child held under its own
 figure times `CHILDREN_MARGIN`. The row is the runtime's because the figure is
-the allocator's: on linux the same tree peaked at 1,870 MB on Bun 1.2.0, the
-declared minimum, against 1,451–1,699 MB over nine runs on 1.4.2. A runtime
+the allocator's: on linux the same tree peaked at 1,870 MB on Bun 1.2.0 (then
+the declared minimum) against 1,451–1,699 MB over nine runs on 1.4.2. A runtime
 with no row is a `SKIP` and a HOLE line naming the platform, the Bun and the
 command that writes the row (`TY48`) — never a pass and never a `FAIL`: `bun
 selftest.ts --memory-base` on a green one-process full run at `--jobs 2` or

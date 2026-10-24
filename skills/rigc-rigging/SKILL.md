@@ -2,7 +2,7 @@
 name: rigc-rigging
 description: Decide a Spine rig's hierarchy with rigc — how many bones, where each pivot sits, what hangs off what, offsets, chains and what a chain can reach, siblings versus chains, constraints as structure — and which of those decisions the reference frames can check. Use when the request is a skeleton from loose part PNGs, such as "rig these parts", "make a Spine skeleton" or "where do the joints go", before any motion is authored. Not for Live2D, cutting an illustration into parts, or VTuber-style tracking.
 license: MIT
-compatibility: Requires Bun 1.2 or later and the npm package rig-c.
+compatibility: Requires Bun 1.4 or later and the npm package rig-c.
 ---
 
 # Rigging — the hierarchy itself

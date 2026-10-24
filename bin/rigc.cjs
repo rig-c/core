@@ -56,8 +56,8 @@ const entry = present === null ? 'cli_core.ts' : 'cli.ts';
 const args = process.argv.slice(2);
 const result = spawnSync('bun', [path.join(root, entry), ...args], { stdio: 'inherit' });
 
-// ⚠️ The exit and the signal are read before `error` (issue #1488): Bun 1.2.0 —
-// the declared minimum, and what runs this file as `bun bin/rigc.cjs` — sets
+// ⚠️ The exit and the signal are read before `error` (issue #1488): Bun 1.2.0
+// (then the declared minimum, and what ran this file as `bun bin/rigc.cjs`) sets
 // `error` on every child that exits non-zero, so reading it first answered the
 // CLI's own refusal (exit 2) with "could not launch bun" and exit 1. `error` is
 // a launch that failed only where the child left neither a status nor a signal.

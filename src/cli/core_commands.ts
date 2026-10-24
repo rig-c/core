@@ -2313,7 +2313,7 @@ function resolveDelegate(name: string): string | null {
 
 /**
  * Whether the Bun running this hands an empty argument to a process it starts
- * (issue #1465). Bun 1.2.0 — the declared minimum — does not: `["a", "", "b"]`
+ * (issue #1465). Bun 1.2.0 (then the declared minimum) does not: `["a", "", "b"]`
  * reaches the child as `["a", "b"]`, through `spawnSync` and `Bun.spawnSync`
  * alike and whatever the child is; 1.4.2 hands it over. That is measured here
  * rather than read off a version number, by starting this Bun twice with
@@ -2466,7 +2466,7 @@ function cmdDelegate(command: string, raw: readonly string[]): void {
   // `rigc review -- <dir>` reached the bin as `<dir>` (measured, issue #1486). One given here is the one dropped, and
   // the arguments after it arrive as they were.
   const ran = spawnSync(process.execPath, [bin, '--', ...argv], { stdio: 'inherit' });
-  // ⚠️ The exit and the signal are read before `error`: Bun 1.2.0 — the declared minimum — sets `error` on every
+  // ⚠️ The exit and the signal are read before `error`: Bun 1.2.0 (then the declared minimum) sets `error` on every
   // child that exits non-zero, so reading it first refused review's own exit 7 as "could not run". `error` is a
   // launch that failed only where the child left neither a status nor a signal.
   if (typeof ran.status === 'number') process.exit(ran.status);

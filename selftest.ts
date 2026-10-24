@@ -1769,8 +1769,8 @@ const SPAWN_MAX_BUFFER = 1024 * 1024;
 
 /**
  * The argument every `bun -e <source>` call here that hands its program
- * arguments passes first, before them (issue #1482). Bun 1.2.0 — the declared
- * minimum — puts `[eval]` in `process.argv[1]` and so loses the first argument
+ * arguments passes first, before them (issue #1482). Bun 1.2.0 (then the declared
+ * minimum) puts `[eval]` in `process.argv[1]` and so loses the first argument
  * after the source (measured: `bun -e … a b` reads `[bun, …/[eval], b]` there and
  * `[bun, a, b]` on the current Bun). With this one first, the arguments the
  * program reads sit from `process.argv[2]` on both, so every such program reads
@@ -1780,7 +1780,7 @@ const EVAL_ARGV_SLOT = '[eval]';
 
 /**
  * `process.resourceUsage`, or `null` on a Bun that has none (issue #1482):
- * measured absent on Bun 1.2.0, the declared minimum, where a child's
+ * measured absent on Bun 1.2.0 (then the declared minimum), where a child's
  * `resourceUsage()` from `Bun.spawn` is there. A process that cannot read its
  * own peak reports none (`null`) rather than a figure, and a control that has
  * to read it says it did not (`TY40`).
@@ -16032,7 +16032,7 @@ function ruleRowOf(line: string, code: string): boolean {
 
 /**
  * Whether a `node:child_process` spawn really failed, rather than ran and exited
- * non-zero (issue #1482). Bun 1.2.0 — the declared minimum — sets `error` on
+ * non-zero (issue #1482). Bun 1.2.0 (then the declared minimum) sets `error` on
  * every child that exits non-zero: an error with an empty message whose `code`
  * is the exit status (measured: `sh -c 'exit 1'` → `code` 1, `errno` -1). Read
  * as a failed spawn, that turns every control that accepts a non-zero exit as
@@ -70908,8 +70908,8 @@ function runLauncherSuite(): number | null {
   }
 
   // Issue #1488: the bin run under Bun rather than node. `bun bin/rigc.cjs` is a
-  // real way in — the file is plain CommonJS — and under Bun 1.2.0, the declared
-  // minimum, `spawnSync` sets `error` on every child that exits non-zero
+  // real way in — the file is plain CommonJS — and under Bun 1.2.0 (then the
+  // declared minimum), `spawnSync` sets `error` on every child that exits non-zero
   // ({ code: <the status>, errno: -1 }), so a launcher that read `error` before
   // `status` answered the CLI's own refusal with "could not launch bun" and exit
   // 1. The Bun that runs this file (CI's, current) does not set it, so on its own
@@ -77231,8 +77231,8 @@ function closureByDirectory(modules: readonly string[]): string {
 /**
  * The runtime's YAML reader, or `null` on a Bun that has none (issue #1482).
  *
- * `Bun.YAML` is newer than the declared minimum: measured absent on Bun 1.2.0
- * (`typeof Bun.YAML` is `undefined`) and present on the Bun this tree is
+ * `Bun.YAML` was measured absent on Bun 1.2.0 (then the declared minimum,
+ * `typeof Bun.YAML` is `undefined`) and present on the Bun this tree is
  * developed on. No YAML reader is in the dependency tree to fall back to, and a
  * second parser would change what the workflow controls read — so a control
  * that reads a workflow as YAML asks `BUN_YAML` first and, without it, prints a
@@ -78317,7 +78317,7 @@ function runCurrencySuite(): number {
         : null;
     const tracked = treeFault === null ? listed.stdout.toString('utf8').split('\u0000').filter((entry) => entry !== '') : [];
     // `^` and not the empty pattern (issue #1477): both match every line, so they list the same files, but Bun
-    // 1.2.0 — the declared minimum — drops an empty argument when it starts a process, and `-e ''` reached git
+    // 1.2.0 (then the declared minimum) drops an empty argument when it starts a process, and `-e ''` reached git
     // as a bare `-e` (exit 129, 0 files). A pattern no Bun can drop is the only one this scan can rely on.
     const liveScan = scanDir(root, tracked, ['grep', '-I', '-l', '-z', '-e', '^']);
 
@@ -129538,8 +129538,8 @@ interface MemoryBaseEntry {
  * not its own Bun's.
  *
  * ⚖️ Keyed by major.minor, not the full version and not the platform alone,
- * because both of those were measured wrong. The platform alone: Bun 1.2.0,
- * the declared minimum, peaked at 1,870 MB on linux against the 1,853 MB bound
+ * because both of those were measured wrong. The platform alone: Bun 1.2.0
+ * (then the declared minimum) peaked at 1,870 MB on linux against the 1,853 MB bound
  * of a base written on 1.4.2, where nine 1.4.2 runs of one day read
  * 1,451–1,699 MB — red on the runtime alone. The full version: every patch
  * release would be a row nobody has written, and the control a SKIP on it.
@@ -133419,8 +133419,8 @@ function runRunTallySuite(live: RunTally): number {
 
     // --- TY47–TY49: the memory base is a runtime's, row by row (issue #1490) --
     //
-    // On linux the same tree peaked at 1,870 MB on Bun 1.2.0, the declared
-    // minimum, against a 1,853 MB bound written on 1.4.2, whose own nine runs
+    // On linux the same tree peaked at 1,870 MB on Bun 1.2.0 (then the declared
+    // minimum) against a 1,853 MB bound written on 1.4.2, whose own nine runs
     // of one day read 1,451–1,699 MB: red on the runtime alone. So a row is one
     // platform's AND one Bun release line's, and `TY26`, `TY40` and the ceiling
     // after the tables hold a run to the row of its own runtime. The three
@@ -133528,7 +133528,7 @@ function runRunTallySuite(live: RunTally): number {
           name,
           held,
           probeDetail(held, probes, `under ${huge} MB, each of these is a SKIP line and a HOLE line, and the ceilings after the tables no verdict: ${read.join('; ')}; a runtime with its row is no HOLE`),
-          'issue #1490: on Bun 1.2.0, the declared minimum, TY26 and TY40 were red against a base written on 1.4.2 — a gate nobody can keep there; ' +
+          'issue #1490: on Bun 1.2.0 (then the declared minimum), TY26 and TY40 were red against a base written on 1.4.2 — a gate nobody can keep there; ' +
             'with no row for the runtime the honest verdict is that nothing was measured, which a PASS would hide and a FAIL would blame on the tree',
         );
       }

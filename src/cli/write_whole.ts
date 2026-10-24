@@ -3,7 +3,7 @@
  * refusal — the writer a command uses for a document too large to trust to
  * `console.log` (issue #1487).
  *
- * ⚖️ Why not `console.log`: on Bun 1.2.0, the declared minimum, one ~322 KB
+ * ⚖️ Why not `console.log`: on Bun 1.2.0 (then the declared minimum), one ~322 KB
  * line with non-ASCII in it came out 330,634 bytes for 330,632, a stray
  * `\xe2\x00` at a 64 KiB chunk boundary — to a file, a pipe and a slow pipe
  * alike. And on a stdout whose pipe is non-blocking (a parent set `O_NONBLOCK`

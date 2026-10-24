@@ -2,7 +2,7 @@
 name: rigc
 description: Author, build and validate Spine 4.3 skeleton data (skeleton.json plus its .atlas) from loose part PNGs with rigc, the rig compiler that verifies its own output with named assertions before writing it. Use for any request to make a Spine rig or Spine animation from PNG parts, or where the source is a Live2D, Unity or video model whose pictures you can render, to run or read rigc build, validate, render, preview, check or vote, or to write or fix a *.rig.json or *.motion.json spec; it says which shipped guide to open for the need at hand. Not for Live2D conversion, cutting an illustration into parts, or real-time face tracking.
 license: MIT
-compatibility: Requires Bun 1.2 or later. The tool is the npm package rig-c (bunx rig-c, or bun add -d rig-c); the command it installs is rigc.
+compatibility: Requires Bun 1.4 or later. The tool is the npm package rig-c (bunx rig-c, or bun add -d rig-c); the command it installs is rigc.
 ---
 
 # rigc — a rig compiler for agents

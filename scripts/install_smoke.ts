@@ -1563,7 +1563,7 @@ interface Ran {
    * The two streams on their own, for a step that asserts on what was written where (issue #1457). ⚠️ Not `out`:
    * Bun 1.2.0's `spawnSync` hands back an `error` whose message is the child's stderr whenever a child exits
    * non-zero having written to it (measured: `node -e` writing one line to stderr and exiting 2 — Bun 1.4.2 sets no
-   * `error`), so on the declared minimum Bun `out` carries that stderr twice.
+   * `error`), so on Bun 1.2.0 (then the declared minimum) `out` carries that stderr twice.
    */
   stdout: string;
   stderr: string;

@@ -2,7 +2,7 @@
 name: rigc-face
 description: Author a face on plain Spine data with rigc — a blink, a gaze shift, a breathing portrait and a head turn a few degrees off axis, built from deform timelines and per-part parallax. Use when the request is a talking or living portrait, a standing character, an expression or a head turn, such as "rig this face", "make the portrait blink and look around" or "turn the head". Not for Live2D file conversion, cutting a face illustration into parts, or VTuber-style real-time face tracking.
 license: MIT
-compatibility: Requires Bun 1.2 or later and the npm package rig-c.
+compatibility: Requires Bun 1.4 or later and the npm package rig-c.
 ---
 
 # Face — a turn, a gaze and a blink

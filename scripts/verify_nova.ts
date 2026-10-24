@@ -52,7 +52,7 @@ type ReleaseFetch = (url: string, init: { method: 'GET' | 'HEAD'; signal: AbortS
 /** Resolve the exact official release BEFORE calling the runner (which uploads). */
 export async function resolveVerifyNovaBun(version: string, request: ReleaseFetch = fetch): Promise<VerifyNovaBun | string> {
   const refusal = (why: string): string => `--bun ${JSON.stringify(version)}: ${why}`;
-  if (!BUN_VERSION.test(version)) return refusal('expected an exact stable version X.Y.Z, e.g. --bun 1.2.0 (no alias, prefix or range)');
+  if (!BUN_VERSION.test(version)) return refusal('expected an exact stable version X.Y.Z, e.g. --bun 1.4.0 (no alias, prefix or range)');
   const base = `https://github.com/oven-sh/bun/releases/download/bun-v${version}/`;
   try {
     const manifest = await request(`${base}SHASUMS256.txt`, { method: 'GET', signal: AbortSignal.timeout(30_000) });
@@ -101,7 +101,7 @@ export function readVerifyNovaArgs(argv: readonly string[]): VerifyNovaArgs | st
     if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) return `--${field} needs a value`;
     if (field === 'bun' && got.bun !== undefined) return '--bun was given more than once — name one exact stable Bun version';
     got[field] = argv[++i];
-    if (field === 'bun' && !BUN_VERSION.test(got.bun)) return `--bun ${JSON.stringify(got.bun)}: expected an exact stable version X.Y.Z, e.g. --bun 1.2.0 (no alias, prefix or range)`;
+    if (field === 'bun' && !BUN_VERSION.test(got.bun)) return `--bun ${JSON.stringify(got.bun)}: expected an exact stable version X.Y.Z, e.g. --bun 1.4.0 (no alias, prefix or range)`;
   }
   const missing = FIELDS.filter((f) => got[f] === undefined || got[f].trim() === '' || got[f].trim() === 'unknown');
   if (missing.length > 0) {

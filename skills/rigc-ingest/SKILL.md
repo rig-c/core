@@ -2,7 +2,7 @@
 name: rigc-ingest
 description: Work with a Spine skeleton.json somebody else authored — exported from the Spine editor or another tool — using rigc. Read and validate it, understand a complaint rigc raised about it, decompile it into rigc specs with `rigc ingest`, normalise, re-pivot or rename it, and extend it with an animation it does not have. Use when the input is an existing skeleton.json with its .atlas and page images rather than loose part PNGs. Not for Live2D file conversion or runtime tracking.
 license: MIT
-compatibility: Requires Bun 1.2 or later and the npm package rig-c.
+compatibility: Requires Bun 1.4 or later and the npm package rig-c.
 ---
 
 # Ingest — a skeleton you did not author

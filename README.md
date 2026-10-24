@@ -137,25 +137,26 @@ writes them into `--out`; `--atlas-in` builds against a pack somebody else made.
 Both are opt-in and both are narrow — no trimming, no rotation, no scaling — and
 [AUTHORING §0.1–§0.2](docs/AUTHORING.md) states the limits before you hit them.
 
-rigc runs on [Bun](https://bun.sh). The package ships its TypeScript sources and
-Bun runs them, so there is no build step and no `dist/` that can drift from the
-repository it was cut from. What is measured is the install itself — pack,
-install into an empty directory, build, render — on Linux, macOS and Windows
-runners and on Linux at the declared minimum, Bun 1.2.0 (the `installs` and
-`installs-matrix` jobs in
+rigc runs on [Bun](https://bun.sh) (`engines.bun` declares `>=1.4.0`). The
+package ships its TypeScript sources and Bun runs them, so there is no build step
+and no `dist/` that can drift from the repository it was cut from. What is
+measured is the install itself — pack, install into an empty directory, build,
+render — on Linux, macOS and Windows runners on the Bun `setup-bun` resolves that
+day (the `installs` and `installs-matrix` jobs in
 [`ci.yml`](https://github.com/rig-c/core/blob/main/.github/workflows/ci.yml),
-repository material, not in the npm package); a platform
-whose leg is red there is not one the package is known to run on.
+repository material, not in the npm package); a platform whose leg is red there
+is not one the package is known to run on. The declared `>=1.4.0` floor itself is
+not pinned in CI — older `1.4.x` releases are untested until a report arrives.
 
 From a source checkout, `bun run verify:nova -- --label "<issue + purpose>"
 --owner "<who>" --session "<session id>" [--bun <version>]` sends the full
 selftest to the Nova pool (`NOVA_RUN` names the runner, or `nova-run.sh` is on
-PATH). `--bun 1.2.0` selects that exact stable release. Before upload, the hand
+PATH). `--bun 1.4.0` selects that exact stable release. Before upload, the hand
 fetches Bun's official `SHASUMS256.txt` and checks that the Linux x64 baseline
 archive is available; on the pool it downloads the pinned archive, verifies its
 SHA-256, checks its executable's version, and puts that private Bun first on PATH
 for corpus fetch and selftest. The remote command's first line is
-`verify:nova: Bun 1.2.0`. The temporary runtime is removed on exit. Without
+`verify:nova: Bun 1.4.0`. The temporary runtime is removed on exit. Without
 `--bun`, the pool's Bun and existing command are unchanged; dependency installation
 still uses the pool runner's installation step. The selftest's exit is returned
 unchanged: selecting a runtime does not promise a green run. Memory ceilings

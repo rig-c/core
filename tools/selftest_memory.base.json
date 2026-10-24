@@ -36,23 +36,6 @@
     },
     {
       "platform": "linux",
-      "bunLine": "1.2",
-      "highWater": 1996,
-      "suites": 88,
-      "bun": "1.2.0",
-      "children": {
-        "jobs": 4,
-        "suites": {
-          "core": 680,
-          "mesh-compare": 556,
-          "packer": 557,
-          "render-hashes": 242,
-          "run-tally": 42
-        }
-      }
-    },
-    {
-      "platform": "linux",
       "bunLine": "1.4",
       "highWater": 1324,
       "suites": 69,

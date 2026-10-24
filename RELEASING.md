@@ -1480,14 +1480,13 @@ question and not this one; and a green run is one platform's answer, the runner'
 
 🖥️ **Which platforms answer.** The `installs` gate is one Linux runner on the
 Bun the action resolves that day. Beside it, the `installs-matrix` job in
-[`ci.yml`](.github/workflows/ci.yml) runs the same `bun run smoke` on three
-operating systems and the declared minimum Bun: a macOS runner, a Windows
-runner, and Linux on the Bun `engines.bun` states — 1.2.0, on which the whole
-battery, plants included, was measured green on macOS before the job existed
-([#1214](https://github.com/rig-c/core/issues/1214)). It is not a required
-check. A red macOS or Windows leg names a platform the package does not yet
-install and run on; a red minimum leg means something in the tree now needs a
-newer Bun than `engines` promises, and either that call or the floor moves.
+[`ci.yml`](.github/workflows/ci.yml) runs the same `bun run smoke` across a
+macOS runner and a Windows runner ([#1214](https://github.com/rig-c/core/issues/1214)),
+each on the Bun the action resolves that day. It is not a required check. A red
+macOS or Windows leg names a platform the package does not yet install and run
+on. `package.json` declares `engines.bun` (`>=1.4.0`), and that floor is
+declared rather than tested in CI: older `1.4.x` releases are untested until an
+issue reports one ([#1570](https://github.com/rig-c/core/issues/1570)).
 
 ⚖️ **The registry half is a confirmation, not the gate**, and it is the last step
 of [`release.yml`](.github/workflows/release.yml): after the publish it waits for

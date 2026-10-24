@@ -198,16 +198,14 @@ jobs:
         run: bun run smoke
 
   # The same smoke where the `installs` job above does not reach (issue #1214):
-  # a macOS runner, a Windows runner, and Linux at the Bun `package.json`
-  # declares in `engines` — the floor a user is promised, where `installs` runs
-  # whatever Bun the action resolves today. The smoke only, as `installs` is:
+  # a macOS runner and a Windows runner, each on the Bun `oven-sh/setup-bun`
+  # resolves today, as `installs` is on Linux. The smoke only, as `installs` is:
   # the selftest is the tree's question and this is the install's.
   #
-  # ⚖️ The floor below is the one `engines.bun` states, and it was measured
-  # rather than copied: the whole battery, plants included, came back green on
-  # Bun 1.2.0 on macOS with that Bun alone on PATH, before this job existed.
-  # `bun-version` and `engines.bun` are two spellings of one fact, so a change
-  # to either changes the other in the same pull request.
+  # ⚖️ `package.json` declares `engines.bun` (`>=1.4.0`), and that floor is
+  # declared rather than tested in CI: every leg here runs the Bun the action
+  # resolves, and older-version compatibility on the 1.4 line is handled as an
+  # issue when a report arrives (issue #1570).
   #
   # 🪟 Windows needed repairs in `scripts/install_smoke.ts`, each named where
   # it is made: `command -v` through cmd.exe, the `.bin/rigc` shell-script
@@ -228,15 +226,9 @@ jobs:
         include:
           - os: macos-latest
           - os: windows-latest
-          - os: ubuntu-latest
-            bun: 1.2.0
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-        with:
-          # Empty where the matrix names none, which is the action's own
-          # default — the same Bun `installs` gets.
-          bun-version: ${{ matrix.bun }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

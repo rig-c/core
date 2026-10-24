@@ -40,6 +40,7 @@ import { outsideLine, outsideViewport, pinnedRecord, readViewportBox, viewportOf
 import { PASS_THROUGH_FILE, passFrameLine, type PassPair, passSummaryLine, passThroughFileOf, passThroughOf, passThroughText, PassThroughError, readPassPairs } from '../passthrough.ts';
 import type { Plate } from '../../tools/plate.ts';
 import { OVERLAPS_FILE, OverlapError, overlapLine, overlapPlate, overlapsFileOf, overlapsOf, overlapsPlateFile, overlapsText, plateParticipants, staticLine } from '../overlaps.ts';
+import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError, sheetRigNameOf, sheetSidecarRecord, sheetSourceOf } from '../sheet.ts';
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
@@ -49,7 +50,7 @@ import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
 import { writeWhole } from './write_whole.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
-import { ATLAS_ABSENT, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPoserFlag, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
+import { ATLAS_ABSENT, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -656,6 +657,18 @@ export function cmdRender(flags: Record<string, string>): void {
   const maxSide = readPositiveNumber(flags, 'max', 256, 16);
   // A box given rather than fitted (issue #1414), read before a line is printed, so a malformed one is refused first.
   const given = readGivenViewport(flags);
+  const wantsSheet = flags.sheet !== undefined;
+  if (flags['sheet-format'] !== undefined && !wantsSheet) {
+    throw new UsageError('--sheet-format takes --sheet: pass --sheet alongside --sheet-format <format>, or drop --sheet-format');
+  }
+  if (flags['page-edges'] !== undefined && !wantsSheet) {
+    throw new UsageError(
+      '--page-edges on render takes --sheet: without --sheet, render writes loose f####.png frames and contact.png, ' +
+        'which have no packed atlas pages. Pass --sheet or drop --page-edges',
+    );
+  }
+  const sheetFormat = wantsSheet ? readSheetFormat(flags) : undefined;
+  const sheetPageEdges = wantsSheet ? readPageEdges(flags) : undefined;
   const outRoot = resolve(flags.out ?? 'render');
   const geometry = flags.geometry !== undefined;
   // The fold reading (issue #1383) is its own flag rather than a part of --geometry, so a caller that asked for
@@ -953,9 +966,45 @@ export function cmdRender(flags: Record<string, string>): void {
         }
       }
     }
-    return { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings };
+    const sheetPacks = new Map<string, SheetSetPack>();
+    if (wantsSheet) {
+      const modelDocText = modelTextBeside(skeletonPath, skeletonText) ?? null;
+      const rigName = sheetRigNameOf(skeletonPath, modelDocText, skeletonText);
+      const source = sheetSourceOf(skeletonPath, skeletonText, modelDocText);
+      const pinned = given === undefined ? undefined : pinnedRecord(given.by, outsideViewport(sampled, viewport));
+      for (const [name, frames] of sampled) {
+        const animation = name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name;
+        const setName = frameSetDir(name, fps);
+        try {
+          sheetPacks.set(
+            name,
+            buildSheetSet({
+              rigName,
+              setName,
+              animation,
+              fps,
+              maxSide,
+              viewport,
+              frames,
+              atlasPages: pages,
+              source,
+              format: sheetFormat,
+              pageEdges: sheetPageEdges,
+              skin,
+              subset,
+              environment: environment?.steps,
+              pinned,
+            }),
+          );
+        } catch (err) {
+          if (err instanceof SheetUsageError) throw new UsageError(err.message);
+          throw err;
+        }
+      }
+    }
+    return { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks };
   });
-  const { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings } = posed.value;
+  const { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks } = posed.value;
   console.log(`  ..    poser    ${posed.note}`);
   if (environment !== undefined) {
     const response = environmentResponse(skeletonText);
@@ -1014,6 +1063,14 @@ export function cmdRender(flags: Record<string, string>): void {
       writeFileSync(join(dir, OVERLAPS_FILE), overlapsText(overlapReading.file));
       for (const [index, plate] of overlapReading.plates) plate.writePng(join(dir, overlapsPlateFile(index)));
     }
+    const sheetPack = sheetPacks.get(name);
+    if (sheetPack !== undefined) {
+      for (const page of sheetPack.pages) {
+        page.plate.writePng(join(dir, page.image));
+        writeFileSync(join(dir, page.table), page.jsonText);
+      }
+      writeFileSync(join(dir, SHEET_MANIFEST_FILE), sheetPack.manifestText);
+    }
     const duration = frames[frames.length - 1].time;
     const physics = physicsDeclared.length === 0 ? undefined : physicsSteppedOf(frames, fps);
     sets.push({
@@ -1026,6 +1083,7 @@ export function cmdRender(flags: Record<string, string>): void {
       duration,
       ...(physics === undefined ? {} : { physics: { stepped: physics.stepped.length, fps } }),
       ...(overlapReading === undefined ? {} : { overlaps: overlapsRecord(overlapReading.file, overlapReading.plates.size) }),
+      ...(sheetPack === undefined ? {} : { sheet: sheetSidecarRecord(sheetPack) }),
     });
     const how = frames.length === 1 ? 'a single pose' : `${duration.toFixed(3)}s`;
     const folding = foldReading?.meshes.filter((m) => m.worst !== null).length ?? 0;
@@ -1038,7 +1096,11 @@ export function cmdRender(flags: Record<string, string>): void {
       overlapReading === undefined
         ? ''
         : ` + ${OVERLAPS_FILE} (${overlapReading.file.pairs.filter((p) => p.varies).length} moving pair(s), ${overlapReading.plates.size} outline plate(s))`;
-    const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}${seamNote}${overlapNote}`;
+    const sheetNote =
+      sheetPack === undefined
+        ? ''
+        : ` + ${sheetPack.pages.map((p) => `${p.image} + ${p.table}`).join(' + ')} + ${SHEET_MANIFEST_FILE} (${sheetPack.pages.length} page(s), ${sheetPack.pageEdges})`;
+    const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${sheetNote}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}${seamNote}${overlapNote}`;
     console.log(`  ..    ${name.padEnd(16)} ${frames.length} frame(s), ${how}${extras} -> ${dir}`);
     if (physics !== undefined) console.log(`  ..    ${physicsLine(physics.stepped, physicsDeclared, fps, frames.length)}`);
     for (const mesh of foldReading?.meshes ?? []) {

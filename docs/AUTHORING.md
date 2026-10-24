@@ -266,7 +266,7 @@ What the flags mean:
 | `--pack` | `build` only: arrange every part onto **shared** atlas page(s), written into `--out` as real PNGs, instead of one page per part. Lossless — nothing is resampled, trimmed or rotated. The default is one page per part — **§0.1** |
 | `--page-size` | `build --pack` only: the largest page edge (default `2048`). A ceiling, not the size: page edges are powers of two and the one written is the smallest that holds the pack — **§0.1**. `repack` takes it with the same meaning — **§0.4** |
 | `--padding` | `build --pack` only: the gutter each region reserves on every side (default `2`), filled by extending the region's own edge pixels outwards. `0` is not a legal-but-tight choice, it is bleed — **§0.1**. `repack` takes it with the same meaning — **§0.4** |
-| `--page-edges` | `build --pack` only: `pot` (default) or `free`. `pot` keeps both page edges powers of two; `free` sizes the page to the parts — a smaller page, at the cost of region attachments sampling within one least significant bit of the loose build instead of exactly. Any other value is refused by name — **§0.1**. `repack` takes it with the same meaning — **§0.4** |
+| `--page-edges` | `build --pack` only: `pot` (default) or `free`. `pot` keeps both page edges powers of two; `free` sizes the page to the parts — a smaller page, at the cost of region attachments sampling within one least significant bit of the loose build instead of exactly. Any other value is refused by name — **§0.1**. `repack` takes it with the same meaning — **§0.4**. `render --sheet` also takes `pot` (default) or `free` to size the packed sheet pages (`pot` power-of-two edges up to `2048` vs `free` tight edges up to `2048`), and is refused on `render` without `--sheet` — **§8.10** |
 | `--pack-shape` | `build --pack` only: `rect` (default) or `polygon`. `rect` keeps every region's cell apart; `polygon` packs a region that only meshes draw by its emitted hull, so a neighbour may sit inside its rectangle where the hull is not, with the padding kept between footprints. A region attachment's footprint stays its rectangle. Any other value is refused by name, and so is the flag without `--pack` — **§0.1**. `repack` takes it with the same meaning, and always packs — **§0.4** |
 | `--atlas-in` | `build` and `explain`: resolve every part against the **regions of a pre-packed `.atlas`** instead of against loose PNGs. Region geometry is read from the file and sizes are descaled by the page's `scale:`; `build` re-emits the atlas into `--out`, re-anchored, and `explain` writes nothing and poses through it — **§0.2**. On `explain` it is the flag that makes a **size-only** spec readable at all (`ingest --art none`), because posing resolves every attachment against an atlas; without it that pair is refused by name rather than thrown through (§5.1) |
 | `--images` | where the rig spec's `image` names resolve (overrides the rig's own `images` field, and is relative to your working directory). For `pose` it is the directory of **loose part PNGs to place** — every `.png` in it is a part, in name order. For `chainfit` it is only where each attachment's image name **resolves**: the candidate decides what the parts are, so extra PNGs are unused and a missing name is refused by name (§12.3) |
@@ -284,6 +284,8 @@ What the flags mean:
 | `--seam` | `render` only: `<slot>:<slot>[,<slot>:<slot>…]` — also read, for each pair, where the two drawings **stop meeting**, and write a `seam.json` into each frame directory: per pair, the frames with a **gap** (background inside the joint, where the two covered together at the setup pose) and the frames with a **ghost** (the overlap band of one showing where, from its partner's point of view, nothing was drawn), each with its cell count, area and world box, and as runs of frames with their times. One printed line per pair; a pair whose drawings share no cell at the setup pose is a **SKIP**. A reading, not a gate: the exit status never moves. Every other file is byte for byte what the render writes without it. An unknown slot, a slot with itself, a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name, and so is `--slot`/`--hide` beside it — **§8.8** |
 | `--overlaps` | `render` only: also read **which slot each frame drew over which**, and write an `overlaps.json` into each frame directory: per frame, every pair of slots where the slot drawn later covers pixels the earlier one drew (drawn at 128 of 255 or more, on the frames' own pixels), with the pixel count and the pixel box. One `OVERLAP` line per pair that covers anything — its frames as runs, how many of the set, and the most pixels and the frame of them — and one line counting the pairs that are layering the motion does not move. Each frame with a moving pair also gets an **outline plate**, `overlaps-f<NNNN>.png`: every slot in a moving pair as its contour in its own colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Every other file is byte for byte what the render writes without it, and `frames.json` gains each set's `overlaps` record. Refused beside `--slot`/`--hide` — **§8.9** |
 | `--angle-range` | `render` only: `<bone>:<relative-to>[,<bone>:<relative-to>…]` — also read, for each pair, the range of the first bone's world direction against the second's over each set's frames, and print one line per pair per set: the lowest and the highest angle in degrees, the span, and the frame each was first reached on. A reading, not a gate: nothing is written, and every file is the bytes the render writes without it. An unknown bone (with the bones there are), a bone against itself, a malformed list and a pair named twice are refused by name, and so is a bone with no direction on a frame — **§8.7** |
+| `--sheet` | `render` only: also pack each rendered animation set as a straight-alpha transparent sprite sheet (`sheet.png` + `sheet.json`, plus `sheet2.png` / `sheet2.json` on multi-page spill, and `sheet-manifest.json` (`rigc-sheet/1`)) inside its set directory, and record `sheet` on each set in `frames.json`. Diagnostic `f####.png` and `contact.png` stay byte for byte what the render writes without it — **§8.10** |
+| `--sheet-format` | `render --sheet` only: `json-hash` (default, TexturePacker JSON Hash with `frames`, `animations` and `meta`). Refused without `--sheet` or on an unknown value, exit 2, nothing written — **§8.10** |
 | `--viewport`, `--viewport-from` | `render`: give the box every frame is drawn over instead of fitting one — `--viewport <x,y,w,h>`, a world box, y up, `x,y` its bottom-left corner, at the pixel size `--max` gives; or `--viewport-from <frames.json \| dir>`, an earlier render's grid exactly (its box, scale and pixel size), so two candidates land on one pixel grid. A slot that reaches past the box is named by set and frame, and `frames.json` records the box was given under `pinned`. The two together are refused, and so is `--max` beside `--viewport-from` — **§8.6**. On `check` and `inspect`, `--viewport` pins the box those commands draw over instead |
 | `--environment` | `render` only: the wind and gravity the rig's physics constraints answer, in time — a schedule file `{ "spec": "rigc-environment/1", "steps": [{ "t": <seconds>, "wind"?: [x, y], "gravity"?: [x, y] }, …] }`, x right and **y down**, each step holding from its `t` until the next. Both posers set each change before the step that poses the first frame at or after its `t`, and draw the same frames, `geometry.json` and `frames.json` (`RE01`). `frames.json` and `geometry.json` record it, and the framing reads it. A malformed file, a half no physics constraint answers, two steps on one frame and a step after every set's last frame are refused by name, exit 2, nothing written; `check` refuses a frame set drawn under one as a reference. Without it every file is the bytes it always was. An inspection of the response the rig states, not a scene — **§8.4** |
 | `--poser` | `render`, `inspect`, `check` and `explain`: `core` or `spine` — on `render`, `inspect` and `check`, which implementation poses the frames (on `check`, the candidate's; the reference side is pixels either way). By default a **rigc build** (the `skeleton.model.json` `build` writes; its atlas, when one is named or present, the one beside it) is posed by rigc's own core and a **Spine export** by spine-core; the render prints a `poser` line saying which and why, and so does the check report (`check.json`'s `poser`, and the pictures' `frames.json` under `--out`; `bench --frames` prints the same line). A concave or an inverse clip is posed by the core, and so is a build rendered with no `--skin` whose default skin names a skin-required bone or constraint, or whose skins name no `default` one — posed as a fresh skeleton is, no skin's bones or constraints applied (the default skin's included) and every slot resolved through the default skin alone, so the second draws nothing and stops at `there is nothing to draw` (exit 2) under either poser (issue #1051). Where the input cannot carry the core, or the core refuses it, the render poses it through spine-core and the `poser` line says why, in one of these words: `no skeleton.model.json beside` (a Spine export) · `is not beside` (`--atlas` names an atlas outside the build's directory) · `does not describe` (a model document whose bones, slots or animations are not the skeleton's) · `is not the skeleton.json` (a `skeleton.json` whose SHA-256 is not the `spine.sha256` its model document records — edited or replaced after the build — both digests named) · `the polygon is not simple` (a clip polygon two of whose edges cross or touch, the slot named) · `depends on the runtime's previous pass` (a constraint moves a posed bone from a bone that a constraint writes into while that bone is inactive, all four named) · `--poser spine` (asked for). Any other refusal of the core's — an unreadable model document among them — reads `the core refused` and then the core's own words. `--poser core` on an input that cannot carry it is refused in the same words (exit 2, nothing written); `--poser spine` forces the runtime. A fallback whose pair the runtime cannot load — another build's `skeleton.json` or atlas beside this build's document, or an export beside an atlas it was not exported with — is not drawn: it is refused `… does not load against <the atlas>: spine-core draws this pair (<why>) and could not resolve it — "<the runtime's own words>"` — or, where the atlas names a page that is not there, `nothing at <the page>: …` — exit 2, nothing written, on `render`, `render --geometry`, `check` and `bench --frames` alike; under `--poser core` the same pair is that flag's refusal, in the words above (`RC18`; the `--candidate` row says what to change). The repository's selftest renders one probe per reason above and holds this list to the lines they print (`RC09`). Both posers draw the same frames, geometry and framing box to the bit on every corpus (issue #968), and `check` through either writes the same report, `check.json` and pictures but for the poser it names on every tree row. A rigc build the core poses reads nothing through spine-core on `render`, `render --geometry` and `check`, `--texture-from` included (and the check `bench --frames` folds in; `bench`'s own `validate`, like `build`'s, is the runtime's round trip by design): its bone tree, slot list and slot roster come off its model document; so do the order its animations and skins are listed in, its stage and its pages' `scale:` lines, on a `rigc-compiled/3` document (`editorOrder`, `stage`, `pages`) — a `/2` or `/1` document states none of those, so they come off its own `skeleton.json` and atlas, and the `poser` line then says `a rigc-compiled/2 document, which does not state the order its skins and animations are listed in or its stage, read from` and names both files; where each region sits and the page images it draws off the document's `pages` (a `rigc-compiled/1` document's off the atlas beside it, and the `poser` line then says `a rigc-compiled/1 document, which does not state where each region sits on its page: that is read from` and names the atlas); and a `--texture-from` atlas off rigc's own atlas reader. The runtime is loaded for a Spine export, `--poser spine` and a fallback the `poser` line names; a run that cannot load it there is refused naming the input and why it needs the runtime (exit 1; `RC11`, `RC13`, `RC34`). On the entry that links none of spine-core — the installed `rigc` without the runtime beside it, `bun cli_core.ts` in a clone — that refusal ends on the route to the entry that does (``the entry that links it runs them — installed, the same `rigc` once @esotericsoftware/spine-core is installed beside the package; from a source checkout, `bun cli.ts` ``); a runtime that is installed and fails to load is refused without it, since installing it is not what that reader has to do. On `explain` the flag chooses the `DEFORM` block's survey (§4.11.2): `core`, the default, reads the skeleton's structure — its deform timelines and their keys, curves and slots, the skin each is keyed under, the sliders — off the model document the compile writes and poses it through the core, and spine-core is not touched (`RC15`); `spine` parses and poses the Spine skeleton through spine-core. The two are the same survey to the byte on every corpus row (`DM12`). Where the core refuses the document, the survey falls back to spine-core and the block says so on a line of its own (`read and posed through spine-core: …`); `--poser core` there is refused instead (exit 2), and a run that cannot load the runtime where it needs it is refused naming the survey and why (exit 1), ending on the same route where the entry links none of it |
@@ -9229,6 +9231,105 @@ and plates (`OX04`).
 is a defect is yours; when it is, the remedy is a `drawOrder` key in the motion
 spec (or the slot's place in the rig's `slots`), and the next render says whether
 the line moved.
+
+### 8.10 Sprite sheets from a render — `render --sheet`
+
+```bash
+bun cli.ts render --candidate path/to/build --sheet [--sheet-format json-hash] [--page-edges pot|free] [--animation idle] [--fps 12] [--max 256]
+```
+
+Packs each rendered animation set into a deterministic, transparent sprite sheet
+beside the diagnostic frames, with a TexturePacker JSON Hash descriptor per page
+and a rigc manifest stating the source identities, provenance, and coordinate
+contract.
+
+**What it writes per set (`<out>/<set>/`):**
+
+- `sheet.png` and `sheet.json` (plus `sheet2.png`, `sheet2.json`, … when a set
+  spills across `2048 × 2048` pages) — RGBA PNG pages rendered over transparent
+  `[0, 0, 0, 0]` (`alphaMode: "straight"`), packed through `packAtlas` with a
+  fixed `2048` page ceiling and `2`-px clamped edge extrusion around every cell.
+  `--page-edges pot` (the default) rounds each page edge up to a power of two;
+  `--page-edges free` sizes each page tightly to the packed cells plus their
+  `2`-px border.
+- `sheet-manifest.json` (`spec: "rigc-sheet/1"`) — the set's machine-readable
+  provenance and coordinate contract: `format` (`"json-hash"`), `namespace`,
+  `source` (`{ skeleton: { file, sha256 }, model: { file, sha256 } | null }`,
+  recording the relative filenames and SHA-256 digests of the `skeleton.json`
+  and `skeleton.model.json` the sheet was rendered from, with no paths),
+  `animation` (`null` on a setup-pose set), optional `skin` / `slots` / `hidden` /
+  `environment` / `pinned`, `fps`, `duration`, `sampled`, `endpointPolicy`
+  (`"inclusive-grid"`), `alphaMode` (`"straight"`), `filterPolicy`
+  (`{ recommended: "linear", paddingPx: 2, extrusion: "clamp-edge" }`),
+  `pageEdges`, `pageSize` (`2048`), `padding` (`2`), `sourceSize` (`{ w, h }`),
+  `viewport`, `pivot` (`{ world: [0, 0], canvasPx: { x, y }, anchor: { x, y } }`),
+  `pages[]` (`{ index, image, table, width, height, occupancy, frames }`),
+  and `frames[]` in chronological `0 .. N - 1` order (`{ index, key, time, page, image, table, empty, frame, spriteSourceSize, sourceSize, anchor }`).
+- `frames.json` gains `sheet` on each set entry (`manifest`, `format`,
+  `pageEdges`, `pages`, `frames`, `emptyFrames`).
+
+**What does not move.** The diagnostic `f####.png` frames and `contact.png` stay
+drawn over `BACKGROUND` (`[232, 232, 232, 255]`) and are byte for byte what `render`
+writes without `--sheet`; stripping `sheet` from each set in `frames.json`
+leaves the plain render's `frames.json` to the byte (`SH02`). Two runs and both
+posers (`--poser core` and `--poser spine`) write the same `sheet*.png`,
+`sheet*.json`, and `sheet-manifest.json` byte for byte (`SH03`), with no
+timestamps, host strings, or absolute paths.
+
+**Trimming, empty frames, and `alpha > 0`.** Every frame is rendered at the
+set's full canvas (`sourceSize: { w: viewport.width, h: viewport.height }`) over
+straight-alpha `[0, 0, 0, 0]` and trimmed to the minimal bounding box of pixels
+with `alpha > 0` (`alpha >= 1`), preserving `alpha === 1` feather edges (`SH13`)
+and un-premultiplied RGB channels (`SH14`). When every pixel on a frame has
+`alpha === 0` (for instance, when `--hide` or `--slot` hides every visible slot
+on that step), the frame is emitted as a `1 × 1` transparent `[0, 0, 0, 0]`
+sentinel cell (`empty: true`, `trimmed: true`,
+`spriteSourceSize: { x: 0, y: 0, w: 1, h: 1 }`, `sourceSize` preserved) so the
+animation's frame count and timing stay intact and reconstructing the frame
+yields an all-zero full canvas (`SH12`).
+
+**Shared world `(0, 0)` anchor and multi-page layout.**
+
+- Each entry in `frames` carries `"anchor": { "x": ax, "y": ay }`, where
+  `canvasPx = projector(viewport)(0, 0)` projects Spine world `(0, 0)` into
+  untrimmed canvas pixel coordinates and `ax = canvasPx.x / viewport.width`,
+  `ay = canvasPx.y / viewport.height`. When a pinned `--viewport` excludes world
+  `(0, 0)`, `ax` and `ay` are preserved un-clamped outside `[0, 1]` so placing a
+  sprite at `(worldOriginX, worldOriginY)` still lands every pixel at its exact
+  world coordinate (`SH15`).
+- Each `sheet*.json` carries `frames`, `animations`, and `meta` (`app: "rig-c"`,
+  `format: "RGBA8888"`, `image`, `size: { w, h }` as a single object and never an
+  array, and `scale: "1"`). When a set spills across multiple pages, `packAtlas`
+  assigns trimmed cells to pages by descending area rather than by frame time:
+  each page's `frames` and `animations[<namespace>]` list only the frames that
+  landed on that page (ordered chronologically within that page), `meta.related_multi_packs`
+  names the sibling descriptor files (`SH16`), and the full set's playback order
+  across all pages comes from `sheet-manifest.json`'s `frames[]` (`0 .. N - 1`).
+
+**Collision-free frame keys and sampling policy.** Frame keys are
+`<rig>/<set>[/<variants>]/f<NNNN>` (for example, `squash/bounce/f0000` at the
+default `12` fps or `squash/bounce@24fps/skin=alt/f0000` at `24` fps under
+`--skin alt`), where `<rig>` is derived from `rig.archetype` in
+`skeleton.model.json` (the rig spec's `name`, never the build output folder) and
+`<set>` is `frameSetDir(animation, fps)`, so rendering one animation at different
+rates or copying a build into differently named folders never collides or moves
+a byte (`SH04`, `SH17`, `SH19`, `SH20`). Sampling follows `render`'s closed grid
+(`[0, duration]` at `Math.round(duration * fps) + 1` frames, recorded as
+`endpointPolicy: "inclusive-grid"`): whether a looping playback drops the
+closing endpoint frame or plays the full grid is a scene playback decision left
+to the consumer.
+
+**Self-check and refusals.** Before any file is written, `verifySheetPack`
+reconstructs every frame from the packed `sheet*.png` pages and `sheet*.json`
+descriptors onto a blank `sourceSize.w × sourceSize.h` canvas and checks that
+every reconstructed canvas is byte-identical (`0` differing RGBA bytes) to the
+untrimmed transparent render (`SH05`), that every cell's `2`-px border is
+clamped edge extrusion (`SH06`), that no two padded cells overlap (`SH07`–`SH11`),
+and that `source` records relative filenames and valid 64-hex SHA-256 digests (`SH21`).
+`--sheet-format` with an unknown value or without `--sheet`, `--page-edges` on
+`render` without `--sheet` or with an unknown value, and any frame whose trimmed
+bounds plus its `2`-px border on each side exceed `2048` (`w + 4 > 2048` or
+`h + 4 > 2048`) are refused by name, exit 2, with nothing written (`SH17`).
 
 ---
 

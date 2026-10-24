@@ -97,6 +97,8 @@ export { choosePosers, pairRefusal, regionKey };
 
 /** Opaque, and light: both of rung 3's parts are dark slate, so is every ground. */
 export const BACKGROUND: RGBA = [232, 232, 232, 255];
+/** Transparent canvas for `render --sheet`, leaving diagnostic `f####.png` and `contact.png` on `BACKGROUND`. */
+export const TRANSPARENT_BACKGROUND: RGBA = [0, 0, 0, 0];
 /** Padding around the union bounding box, as a fraction of its long side. */
 export const PAD = 0.04;
 /**
@@ -220,6 +222,23 @@ export interface FrameSet {
     static: number;
     plates: number;
     moving: Array<{ under: string; over: string; frames: number; most: { index: number; px: number } }>;
+  };
+  /**
+   * The spritesheet export, when `render --sheet` asked for it (issue #1560):
+   * the set's manifest file, the table format, the page-edge policy, how many
+   * pages were written, how many frames were packed, and how many of them were
+   * empty (`1x1` transparent sentinel).
+   *
+   * ⭐ Absent unless asked for, for `skin`'s reason in `FramesSidecar`: a render
+   * without the flag stays the bytes it always was.
+   */
+  sheet?: {
+    manifest: string;
+    format: 'json-hash';
+    pageEdges: 'pot' | 'free';
+    pages: number;
+    frames: number;
+    emptyFrames: number;
   };
 }
 

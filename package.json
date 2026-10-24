@@ -106,6 +106,8 @@
     "@esotericsoftware/spine-core": "4.3.13",
     "@types/bun": "^1.4.0",
     "eslint": "^10.9.0",
+    "phaser": "3.90.0",
+    "pixi.js": "8.22.0",
     "spine-html": "^0.4.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.67.0",

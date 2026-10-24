@@ -8933,7 +8933,8 @@ table's vertices, and the atlas alpha:
 - **Drawn** is the renderer painting a cell's centre at **128 of 255** or more —
   the half-opacity line `--pass-through` draws outlines at, the frame's tint
   included, the setup pose drawn at the same tint (so a slot faded out is not a
-  tear: it is faded in both). No other alpha enters.
+  tear: it is faded in both). This threshold defines the pair's band, gap and
+  ghost; the composite coverage partition below asks a different question.
 - **The band** is the cells both drawings draw at the setup pose — where the two
   were painted to overlap. It has **no width of its own**: it is the overlap the
   art states, dilated by nothing. A frame whose band is empty is not read; a pair
@@ -8954,6 +8955,21 @@ table's vertices, and the atlas alpha:
   each frame `ghost.px = ghostA.px + ghostB.px` (an absent hit contributes 0),
   and each owner's box lies inside the union's. Reversing the pair exchanges
   the complete owner readings and preserves `gap` and `ghost`.
+- **gapOpen**, **gapCovered** — the same gap cells partitioned by the actual
+  skeleton composite at their centres, on the same cell grid, over a transparent
+  background: alpha **0** is open; alpha **>0** is covered. Every skeleton drawing
+  enters, including the pair itself, with the frame's tint, UVs and clipping.
+  Alpha **1..127 covers too**: this is not the pair's half-opacity outline test.
+  The renderer's existing byte quantization remains in force: it emits rounded
+  alpha only when the sampled, tinted value exceeds 0.5 on the 0..255 scale;
+  a value that produces no rendered alpha byte is open. No display background
+  enters. Source-over cannot erase positive alpha, so the renderer's positive
+  emissions give exactly the nonzero alpha of its transparent composite.
+
+On every frame `gap.px = gapOpen.px + gapCovered.px` (missing hit means 0).
+Each partition's box lies in the union's. A gap in the pair can be covered by a
+third drawing and need not be a visible opening. Reversing the pair preserves
+both gap coverage readings.
 
 Draw order does not enter: a cell is covered or bare whichever piece is in front.
 An owner says which piece drew a ghost cell; it does not say which piece is over
@@ -8977,7 +8993,7 @@ block carries the definitions above in words.
 | `animation` | string or `null` | — | the set's animation; `null` for a skeleton with none (its one frame is the setup pose) |
 | `skin` | string | — | the skin asked for; **absent** when none was |
 | `fps` | number | frames per second | the rate the set was sampled at |
-| `reading` | object | — | `read`, `cell`, `drawn`, `band`, `carried`, `gap`, `ghost`, `box`, `status`, `ghostA`, `ghostB`: the definitions, in words |
+| `reading` | object | — | `read`, `cell`, `drawn`, `band`, `carried`, `gap`, `ghost`, `box`, `status`, `ghostA`, `ghostB`, `gapOpen`, `gapCovered`: the definitions, in words |
 | `pairs[]` | array | — | one per pair, in the flag's order |
 | `pairs[].a`, `pairs[].b` | string | — | the two slots, as the flag names them |
 | `pairs[].drawn` | integer | frames | frames on which both slots draw |
@@ -8987,6 +9003,7 @@ block carries the definitions above in words.
 | `pairs[].maxPx` | integer | px (cells) | the most cells of either kind on any frame; 0 when none opens |
 | `pairs[].gap`, `pairs[].ghost` | object | — | one per kind, each `{ frames, spans, worst }` |
 | `pairs[].ghostA`, `pairs[].ghostB` | object | — | the same `{ frames, spans, worst }` shape for ghost cells drawn by `a` only and `b` only; an empty owner has `frames: []`, `spans: []`, `worst: null` |
+| `pairs[].gapOpen`, `pairs[].gapCovered` | object | — | the same `{ frames, spans, worst }` shape for gap cells with zero or positive rendered skeleton-composite alpha, respectively; an empty kind has `frames: []`, `spans: []`, `worst: null` |
 | `<kind>.frames[]` | hit[] | — | only the frames with a cell of that kind, in frame order |
 | `<kind>.spans[]` | array | — | `<kind>.frames` as runs of consecutive indices: `{ frames: [first, last], times: [first, last], maxPx }` — frame indices, seconds, px |
 | `<kind>.worst` | hit or `null` | — | the frame with the most cells, the earliest on a tie; `null` when none |
@@ -9008,6 +9025,10 @@ Removing just those four keys leaves the previous file's bytes after the same
 two-space JSON serialization and newline. The union, its spans and worst, and
 the printed summary retain their existing meanings; an owner may have different
 spans or a different worst frame from the union.
+Likewise `gapOpen`, `gapCovered` and their two legend entries are additive:
+removing only those entries leaves the previous file's bytes after the same
+serialization, including `gap`, `ghostA` and `ghostB`. The coverage partition may
+have different spans and worst frames from the union; it changes no seam policy.
 
 **Refused, nothing written:** a slot the skeleton does not have (with the slots it
 does), an entry without exactly one `:`, an empty entry or name, a slot paired with

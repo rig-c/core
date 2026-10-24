@@ -122090,6 +122090,902 @@ function runRenderPhysicsSuite(): number {
   return bad;
 }
 
+// ---------------------------------------------------------------------------
+// sheet — deterministic sprite sheets from core render (issue #1560)
+// ---------------------------------------------------------------------------
+
+import {
+  buildSheetSet,
+  reconstructSheetFrame,
+  SHEET_MANIFEST_FILE,
+  SHEET_MANIFEST_SPEC,
+  SHEET_PADDING,
+  SHEET_PAGE_SIZE,
+  sheetFrameKey,
+  type SheetJsonHashDocument,
+  type SheetManifest,
+  sheetNamespaceOf,
+  type SheetPackedPage,
+  sheetPackFaults,
+  sheetPivotOf,
+  SheetUsageError,
+  trimTransparentFrame,
+} from './src/sheet.ts';
+import { TRANSPARENT_BACKGROUND } from './src/render_shared.ts';
+
+function runSheetSuite(): number {
+  console.log('\n── render --sheet: deterministic sprite sheets, shared JSON Hash & manifest (issue #1560) ──');
+  let bad = 0;
+  const say = (name: string, ok: boolean, detail: string, why: string): void => {
+    bad += reportCase(name, ok, detail, why);
+  };
+  const ORIGIN =
+    'issue #1560: a consumer without a skeletal runtime needs a deterministic sprite sheet and shared JSON Hash descriptor whose trimmed frames and world-origin anchor reconstruct the untrimmed render byte for byte';
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-sheet-'));
+  try {
+    const stretchOut = join(work, 'squash-build');
+    const stretchBuild = runCli([
+      'build',
+      '--rig',
+      join(import.meta.dir, 'gallery', 'squash', 'rig.json'),
+      '--motion',
+      join(import.meta.dir, 'gallery', 'squash', 'motion.json'),
+      '--out',
+      stretchOut,
+    ]);
+    if (stretchBuild.status !== 0) {
+      say(
+        'SH01_RENDER_SHEET_EMITS_JSON_HASH_AND_MANIFEST_UNDER_POT_AND_FREE',
+        false,
+        `gallery/squash did not build (exit ${String(stretchBuild.status)}): ${stretchBuild.stderr.trim()}`,
+        ORIGIN,
+      );
+      return bad;
+    }
+
+    const potRenderDir = join(work, 'render-pot');
+    const freeRenderDir = join(work, 'render-free');
+    const plainRenderDir = join(work, 'render-plain');
+    const potAgainDir = join(work, 'render-pot-again');
+    const potSpineDir = join(work, 'render-pot-spine');
+
+    const potRun = runCli(['render', '--candidate', stretchOut, '--sheet', '--out', potRenderDir]);
+    const freeRun = runCli(['render', '--candidate', stretchOut, '--sheet', '--page-edges', 'free', '--out', freeRenderDir]);
+    const plainRun = runCli(['render', '--candidate', stretchOut, '--out', plainRenderDir]);
+    const potAgainRun = runCli(['render', '--candidate', stretchOut, '--sheet', '--out', potAgainDir]);
+    const potSpineRun = runCli(['render', '--candidate', stretchOut, '--sheet', '--poser', 'spine', '--out', potSpineDir]);
+
+    const loadBuildCandidate = (dir: string): { posable: ReturnType<typeof loadCandidate>; poser: Poser } => {
+      const modelPath = join(dir, MODEL_DOCUMENT_FILE);
+      const modelText = readFileSync(modelPath, 'utf8');
+      const atlasPath = join(dir, 'skeleton.atlas');
+      const atlasText = readFileSync(atlasPath, 'utf8');
+      const skeletonPath = join(dir, 'skeleton.json');
+      const skeletonBytes = readFileSync(skeletonPath);
+      const skeletonText = skeletonBytes.toString('utf8');
+      const posable = loadCandidate(
+        { skeletonText, atlasText, atlasDir: dir, label: skeletonPath },
+        { skeleton: skeletonPath, atlas: atlasPath },
+        undefined,
+      );
+      const poser = corePoser(
+        modelText,
+        atlasText,
+        modelPath,
+        { path: skeletonPath, bytes: skeletonBytes },
+        undefined,
+      );
+      return { posable, poser };
+    };
+
+    const fitFramesViewport = (frames: readonly Frame[], maxSide: number): Viewport => {
+      const b = unionBounds([[...frames]])!;
+      return viewportFor(b.minX, b.minY, b.maxX, b.maxY, maxSide);
+    };
+
+    const { posable: stretchPosable, poser: stretchPoser } = loadBuildCandidate(stretchOut);
+    const stretchFrames = sampleAnimation(stretchPoser, 'bounce', PROTOCOL_FPS);
+    const stretchViewport = framingViewport(stretchPoser, 256)!;
+    const stretchUntrimmed = stretchFrames.map((f) => renderFrame(f, stretchPosable.pages, stretchViewport, TRANSPARENT_BACKGROUND));
+
+    const clonePlate = (src: Plate): Plate => {
+      const dst = new Plate(src.width, src.height);
+      dst.data.set(src.data);
+      return dst;
+    };
+
+    const loadPackFromDisk = (setDir: string): { pages: SheetPackedPage[]; manifest: SheetManifest } => {
+      const manifestText = readFileSync(join(setDir, SHEET_MANIFEST_FILE), 'utf8');
+      const manifest = JSON.parse(manifestText) as SheetManifest;
+      const pages: SheetPackedPage[] = manifest.pages.map((p) => {
+        const pngBytes = readFileSync(join(setDir, p.image));
+        const plate = decodePng(pngBytes);
+        const jsonText = readFileSync(join(setDir, p.table), 'utf8');
+        const json = JSON.parse(jsonText) as SheetJsonHashDocument;
+        return {
+          index: p.index,
+          image: p.image,
+          table: p.table,
+          plate,
+          json,
+          jsonText,
+          occupancy: p.occupancy,
+        };
+      });
+      return { pages, manifest };
+    };
+
+    // --- SH01: positive control under pot and free ----------------------------
+    {
+      const probes: string[] = [];
+      let potArea = 0;
+      let freeArea = 0;
+      if (potRun.status !== 0) probes.push(`render --sheet (pot) exited ${String(potRun.status)}: ${potRun.stderr.trim()}`);
+      if (freeRun.status !== 0) probes.push(`render --sheet --page-edges free exited ${String(freeRun.status)}: ${freeRun.stderr.trim()}`);
+      if (probes.length === 0) {
+        const potPack = loadPackFromDisk(join(potRenderDir, 'bounce'));
+        const freePack = loadPackFromDisk(join(freeRenderDir, 'bounce'));
+        probes.push(...sheetPackFaults(potPack.pages, potPack.manifest, stretchUntrimmed));
+        probes.push(...sheetPackFaults(freePack.pages, freePack.manifest, stretchUntrimmed));
+        for (const p of potPack.pages) {
+          const pw = p.plate.width;
+          const ph = p.plate.height;
+          potArea += pw * ph;
+          if ((pw & (pw - 1)) !== 0 || (ph & (ph - 1)) !== 0) {
+            probes.push(`pot page ${p.image} is ${pw}x${ph}, not power-of-two`);
+          }
+        }
+        for (const p of freePack.pages) {
+          freeArea += p.plate.width * p.plate.height;
+        }
+        if (freeArea > potArea) {
+          probes.push(`free area ${freeArea} exceeds pot area ${potArea}`);
+        }
+        const potSidecar = JSON.parse(readFileSync(join(potRenderDir, FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
+        if (potSidecar.sets[0]?.sheet?.manifest !== SHEET_MANIFEST_FILE || potSidecar.sets[0]?.sheet?.pageEdges !== 'pot') {
+          probes.push(`frames.json under pot carries unexpected sheet summary: ${JSON.stringify(potSidecar.sets[0]?.sheet ?? null)}`);
+        }
+        const freeSidecar = JSON.parse(readFileSync(join(freeRenderDir, FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
+        if (freeSidecar.sets[0]?.sheet?.pageEdges !== 'free') {
+          probes.push(`frames.json under free carries unexpected pageEdges: ${JSON.stringify(freeSidecar.sets[0]?.sheet?.pageEdges ?? null)}`);
+        }
+      }
+      const ok = probes.length === 0;
+      say(
+        'SH01_RENDER_SHEET_EMITS_JSON_HASH_AND_MANIFEST_UNDER_POT_AND_FREE',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `gallery/squash rendered with --sheet under pot (${potArea} px²) and free (${freeArea} px², ${(100 * (1 - freeArea / Math.max(1, potArea))).toFixed(1)}% smaller): sheet.png, sheet.json, ${SHEET_MANIFEST_FILE} (${SHEET_MANIFEST_SPEC}) and ${FRAMES_SIDECAR} sets[].sheet all pass verifySheetPack`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH02: diagnostic files byte-identical to plain render ----------------
+    {
+      const probes: string[] = [];
+      let comparedFiles = 0;
+      let unstrippedDiffers = false;
+      if (plainRun.status !== 0) probes.push(`plain render exited ${String(plainRun.status)}`);
+      if (potRun.status !== 0) probes.push(`sheet render exited ${String(potRun.status)}`);
+      if (probes.length === 0) {
+        const plainSet = join(plainRenderDir, 'bounce');
+        const sheetSet = join(potRenderDir, 'bounce');
+        for (const f of readdirSync(plainSet).sort()) {
+          const a = readFileSync(join(plainSet, f));
+          const b = readFileSync(join(sheetSet, f));
+          comparedFiles++;
+          if (!a.equals(b)) probes.push(`bounce/${f} differs between plain render and render --sheet`);
+        }
+        const plainSidecarRaw = readFileSync(join(plainRenderDir, FRAMES_SIDECAR), 'utf8');
+        const sheetSidecarRaw = readFileSync(join(potRenderDir, FRAMES_SIDECAR), 'utf8');
+        unstrippedDiffers = plainSidecarRaw !== sheetSidecarRaw;
+        if (!unstrippedDiffers) probes.push(`${FRAMES_SIDECAR} did not gain sets[].sheet under --sheet`);
+        const strippedObj = JSON.parse(sheetSidecarRaw) as { sets: Array<Record<string, unknown>> };
+        for (const s of strippedObj.sets) delete s.sheet;
+        const strippedRaw = `${JSON.stringify(strippedObj, null, 2)}\n`;
+        if (strippedRaw !== plainSidecarRaw) {
+          probes.push(`${FRAMES_SIDECAR} with sets[].sheet removed still differs from plain render's ${FRAMES_SIDECAR}`);
+        }
+      }
+      const ok = probes.length === 0 && comparedFiles > 0 && unstrippedDiffers;
+      say(
+        'SH02_PLAIN_RENDER_DIAGNOSTIC_FILES_ARE_BYTE_IDENTICAL_WITH_AND_WITHOUT_SHEET',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `${comparedFiles} diagnostic file(s) (every f####.png and contact.png) and ${FRAMES_SIDECAR} (less sets[].sheet) are byte-identical between plain render and render --sheet; unstripped ${FRAMES_SIDECAR} differs by sets[].sheet alone`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH03: byte determinism across runs and posers ------------------------
+    {
+      const probes: string[] = [];
+      const files = ['sheet.png', 'sheet.json', SHEET_MANIFEST_FILE];
+      if (potRun.status !== 0 || potAgainRun.status !== 0 || potSpineRun.status !== 0) {
+        probes.push(`one of the three renders failed (${String(potRun.status)}, ${String(potAgainRun.status)}, ${String(potSpineRun.status)})`);
+      } else {
+        for (const f of files) {
+          const b1 = readFileSync(join(potRenderDir, 'bounce', f));
+          const b2 = readFileSync(join(potAgainDir, 'bounce', f));
+          const b3 = readFileSync(join(potSpineDir, 'bounce', f));
+          if (!b1.equals(b2)) probes.push(`${f} differs between two independent core runs`);
+          if (!b1.equals(b3)) probes.push(`${f} differs between --poser core and --poser spine`);
+          if (f.endsWith('.json')) {
+            const text = b1.toString('utf8');
+            if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) probes.push(`${f} contains an ISO timestamp`);
+            if (text.includes(work)) probes.push(`${f} contains the absolute work directory path`);
+          }
+        }
+      }
+      const ok = probes.length === 0;
+      say(
+        'SH03_SHEET_EMIT_IS_BYTE_DETERMINISTIC_ACROSS_RUNS_AND_POSERS_AND_CONTAINS_NO_CLOCK_OR_PATH',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `sheet.png, sheet.json and ${SHEET_MANIFEST_FILE} are byte-for-byte identical across two core runs and --poser spine, with no timestamp or absolute path`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH04: pack-input order invariance ------------------------------------
+    {
+      const probes: string[] = [];
+      const baseOpts = {
+        rigName: 'squash',
+        setName: 'bounce',
+        animation: 'bounce',
+        fps: PROTOCOL_FPS,
+        maxSide: 256,
+        viewport: stretchViewport,
+        frames: stretchFrames,
+        atlasPages: stretchPosable.pages,
+        format: 'json-hash' as const,
+        pageEdges: 'pot' as const,
+      };
+      const forward = buildSheetSet(baseOpts);
+      const reversed = buildSheetSet({ ...baseOpts, reversePackInputs: true });
+      const forwardPng = Buffer.from(encodePng(forward.pages[0].plate.width, forward.pages[0].plate.height, forward.pages[0].plate.data));
+      const reversedPng = Buffer.from(encodePng(reversed.pages[0].plate.width, reversed.pages[0].plate.height, reversed.pages[0].plate.data));
+      if (!forwardPng.equals(reversedPng)) {
+        probes.push('sheet.png bytes changed when pack inputs were reversed');
+      }
+      if (forward.pages[0].jsonText !== reversed.pages[0].jsonText) {
+        probes.push('sheet.json text changed when pack inputs were reversed');
+      }
+      if (forward.manifestText !== reversed.manifestText) {
+        probes.push(`${SHEET_MANIFEST_FILE} text changed when pack inputs were reversed`);
+      }
+      const keys = Object.keys(reversed.pages[0].json.frames);
+      const wantKeys = stretchFrames.map((_, i) => sheetFrameKey('squash/bounce', i));
+      if (keys.join(',') !== wantKeys.join(',')) {
+        probes.push(`reversed pack inputs emitted frame keys out of chronological order: ${keys.slice(0, 4).join(', ')}`);
+      }
+      const ok = probes.length === 0;
+      say(
+        'SH04_PACK_INPUT_ORDER_INVARIANCE_KEEPS_SHEET_BYTES_AND_CHRONOLOGICAL_FRAME_KEYS',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `buildSheetSet with reversePackInputs: true produces byte-identical sheet.png (${forwardPng.length} B), sheet.json and ${SHEET_MANIFEST_FILE}, with all ${keys.length} frame keys in chronological order (${keys[0]} .. ${keys[keys.length - 1]})`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH05: full-canvas RGBA reconstruction & pivot alignment --------------
+    {
+      const probes: string[] = [];
+      const pack = loadPackFromDisk(join(potRenderDir, 'bounce'));
+      let totalBytesChecked = 0;
+      let diffBytes = 0;
+      let maxPivotDrift = 0;
+      const wantPivot = sheetPivotOf(stretchViewport);
+      for (const mf of pack.manifest.frames) {
+        const page = pack.pages.find((p) => p.image === mf.image);
+        const entry = page?.json.frames[mf.key];
+        const expected = stretchUntrimmed[mf.index];
+        if (page === undefined || entry === undefined || expected === undefined) {
+          probes.push(`missing page or entry for ${mf.key}`);
+          continue;
+        }
+        const reconstructed = reconstructSheetFrame(page.plate, entry);
+        totalBytesChecked += expected.data.length;
+        for (let i = 0; i < expected.data.length; i++) {
+          if (reconstructed.data[i] !== expected.data[i]) diffBytes++;
+        }
+        const driftX = Math.abs(entry.anchor.x * entry.sourceSize.w - wantPivot.canvasPx.x);
+        const driftY = Math.abs(entry.anchor.y * entry.sourceSize.h - wantPivot.canvasPx.y);
+        maxPivotDrift = Math.max(maxPivotDrift, driftX, driftY);
+      }
+      if (diffBytes > 0) probes.push(`${diffBytes} differing RGBA byte(s) across reconstructed frames`);
+      if (maxPivotDrift > 0) probes.push(`max world (0,0) pivot drift ${maxPivotDrift} px`);
+      const ok = probes.length === 0 && totalBytesChecked > 0;
+      say(
+        'SH05_EVERY_FRAME_RECONSTRUCTS_FULL_CANVAS_RGBA_AT_ZERO_DIFFERING_BYTES_AND_ZERO_PIVOT_DRIFT',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `${pack.manifest.frames.length} frame(s), ${totalBytesChecked} RGBA byte(s) compared against untrimmed transparent renders: 0 differing bytes, world (0,0) anchor (${wantPivot.anchor.x.toFixed(6)}, ${wantPivot.anchor.y.toFixed(6)}) -> canvas (${wantPivot.canvasPx.x.toFixed(2)}, ${wantPivot.canvasPx.y.toFixed(2)}) px at 0 px drift`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH06: 2-px clamped edge extrusion around every cell ------------------
+    {
+      const pack = loadPackFromDisk(join(potRenderDir, 'bounce'));
+      const cleanFaults = sheetPackFaults(pack.pages, pack.manifest, stretchUntrimmed);
+      // Plant a corrupted extrusion pixel 1 px above frame 0's top edge
+      const mutatedPlate = clonePlate(pack.pages[0].plate);
+      const f0 = pack.manifest.frames[0].frame;
+      const borderIdx = ((f0.y - 1) * mutatedPlate.width + f0.x) * 4;
+      mutatedPlate.data[borderIdx] = (mutatedPlate.data[borderIdx] + 128) & 0xff;
+      const mutatedPages: SheetPackedPage[] = [{ ...pack.pages[0], plate: mutatedPlate }];
+      const plantedFaults = sheetPackFaults(mutatedPages, pack.manifest, stretchUntrimmed);
+      const extrusionFaults = plantedFaults.filter((f) => f.includes('extruded gutter pixel'));
+      const ok = cleanFaults.length === 0 && extrusionFaults.length > 0;
+      say(
+        'SH06_CLAMPED_2PX_EDGE_EXTRUSION_SURROUNDS_EVERY_TRIMMED_CELL',
+        ok,
+        cleanFaults.length > 0
+          ? `unplanted pack failed: ${cleanFaults[0]}`
+          : extrusionFaults.length === 0
+            ? 'corrupting a 2-px border pixel was not caught by sheetPackFaults'
+            : `every ${SHEET_PADDING}-px border pixel around all ${pack.manifest.frames.length} cell(s) matches its clamped cell edge; a corrupted border pixel is caught: ${extrusionFaults[0]}`,
+        ORIGIN,
+      );
+    }
+
+    // --- SH07..SH11: 5 planted defect mutants on sheetPackFaults --------------
+    const basePack = loadPackFromDisk(join(potRenderDir, 'bounce'));
+    const clonePack = (): { pages: SheetPackedPage[]; manifest: SheetManifest } => ({
+      pages: basePack.pages.map((p) => ({
+        ...p,
+        plate: clonePlate(p.plate),
+        json: JSON.parse(p.jsonText) as SheetJsonHashDocument,
+      })),
+      manifest: JSON.parse(JSON.stringify(basePack.manifest)) as SheetManifest,
+    });
+
+    // SH07: +1 px shift in spriteSourceSize.x
+    {
+      const m = clonePack();
+      const k0 = m.manifest.frames[0].key;
+      m.manifest.frames[0].spriteSourceSize.x += 1;
+      m.pages[0].json.frames[k0].spriteSourceSize.x += 1;
+      const faults = sheetPackFaults(m.pages, m.manifest, stretchUntrimmed);
+      const caught = faults.filter((f) => f.includes(k0) && f.includes('reconstruction mismatch'));
+      say(
+        'SH07_PLANTED_PLUS_1PX_SPRITE_SOURCE_SIZE_SHIFT_IS_CAUGHT_BY_NAME',
+        caught.length > 0,
+        caught.length > 0
+          ? `+1 px shift in ${k0} spriteSourceSize.x caught: ${caught[0]}`
+          : '+1 px shift in spriteSourceSize.x went uncaught',
+        ORIGIN,
+      );
+    }
+
+    // SH08: 1-LSB RGBA corruption on one interior pixel in sheet.png
+    {
+      const m = clonePack();
+      const f0 = m.manifest.frames[0];
+      const px = f0.frame.x + Math.floor(f0.frame.w / 2);
+      const py = f0.frame.y + Math.floor(f0.frame.h / 2);
+      const idx = (py * m.pages[0].plate.width + px) * 4;
+      m.pages[0].plate.data[idx] ^= 1;
+      const faults = sheetPackFaults(m.pages, m.manifest, stretchUntrimmed);
+      const caught = faults.filter((f) => f.includes(f0.key) && f.includes('reconstruction mismatch'));
+      say(
+        'SH08_PLANTED_1LSB_INTERIOR_PIXEL_CORRUPTION_IS_CAUGHT_BY_NAME',
+        caught.length > 0,
+        caught.length > 0
+          ? `1-LSB flip at sheet.png (${px}, ${py}) inside ${f0.key} caught: ${caught[0]}`
+          : '1-LSB interior pixel flip went uncaught',
+        ORIGIN,
+      );
+    }
+
+    // SH09: swapped frame key order (f0001 before f0000)
+    {
+      const m = clonePack();
+      const entries = Object.entries(m.pages[0].json.frames);
+      const swapped = [entries[1], entries[0], ...entries.slice(2)];
+      const swappedKeys = swapped.map(([k]) => k);
+      m.pages[0].json = {
+        ...m.pages[0].json,
+        frames: Object.fromEntries(swapped),
+        animations: { [m.manifest.namespace]: swappedKeys },
+      };
+      const faults = sheetPackFaults(m.pages, m.manifest, stretchUntrimmed);
+      const caught = faults.filter((f) => f.includes('out of chronological order'));
+      say(
+        'SH09_PLANTED_SWAPPED_FRAME_KEY_ORDER_IS_CAUGHT_BY_NAME',
+        caught.length > 0,
+        caught.length > 0
+          ? `swapped f0001/f0000 in sheet.json frames caught: ${caught[0]}`
+          : 'swapped frame key order went uncaught',
+        ORIGIN,
+      );
+    }
+
+    // SH10: overlapping cell placement (intruding into neighbour's 2-px padding)
+    {
+      const m = clonePack();
+      const f0 = m.manifest.frames[0];
+      const f1 = m.manifest.frames[1];
+      // Place f1 right next to f0 with only 1 px gap (violating 2-px padding on each cell)
+      const overlapX = f0.frame.x + f0.frame.w + 1;
+      const overlapY = f0.frame.y;
+      f1.frame.x = overlapX;
+      f1.frame.y = overlapY;
+      m.pages[0].json.frames[f1.key].frame.x = overlapX;
+      m.pages[0].json.frames[f1.key].frame.y = overlapY;
+      const faults = sheetPackFaults(m.pages, m.manifest, stretchUntrimmed);
+      const caught = faults.filter((f) => f.includes('padded cells overlap'));
+      say(
+        'SH10_PLANTED_OVERLAPPING_CELL_PLACEMENT_IS_CAUGHT_BY_NAME',
+        caught.length > 0,
+        caught.length > 0
+          ? `padded-cell overlap between ${f0.key} and ${f1.key} caught: ${caught[0]}`
+          : 'overlapping padded cells went uncaught',
+        ORIGIN,
+      );
+    }
+
+    // SH11: out-of-page rectangle
+    {
+      const m = clonePack();
+      const f0 = m.manifest.frames[0];
+      const outX = m.pages[0].plate.width - f0.frame.w - SHEET_PADDING + 1;
+      f0.frame.x = outX;
+      m.pages[0].json.frames[f0.key].frame.x = outX;
+      const faults = sheetPackFaults(m.pages, m.manifest, stretchUntrimmed);
+      const caught = faults.filter((f) => f.includes('lies outside'));
+      say(
+        'SH11_PLANTED_OUT_OF_PAGE_CELL_RECTANGLE_IS_CAUGHT_BY_NAME',
+        caught.length > 0,
+        caught.length > 0
+          ? `out-of-page cell on ${f0.key} caught: ${caught[0]}`
+          : 'out-of-page cell went uncaught',
+        ORIGIN,
+      );
+    }
+
+    // --- SH12: empty transparent frame 1x1 sentinel ---------------------------
+    {
+      const blankPlate = new Plate(64, 48);
+      const trimmed = trimTransparentFrame(blankPlate);
+      const emptyFrame: Frame = { index: 0, time: 0, pieces: [] };
+      const pack = buildSheetSet({
+        rigName: 'empty_probe',
+        setName: 'idle',
+        animation: 'idle',
+        fps: 12,
+        maxSide: 64,
+        viewport: viewportOfSize(-10, -10, 20, 20, 2, 64, 48),
+        frames: [emptyFrame],
+        atlasPages: new Map(),
+        format: 'json-hash',
+        pageEdges: 'pot',
+      });
+      const mf = pack.manifest.frames[0];
+      const entry = pack.pages[0].json.frames[mf.key];
+      const rec = reconstructSheetFrame(pack.pages[0].plate, entry);
+      let nonZero = 0;
+      for (let i = 0; i < rec.data.length; i++) if (rec.data[i] !== 0) nonZero++;
+      const ok =
+        trimmed.empty &&
+        trimmed.trimmed &&
+        mf.empty &&
+        entry.trimmed &&
+        mf.frame.w === 1 &&
+        mf.frame.h === 1 &&
+        mf.spriteSourceSize.x === 0 &&
+        mf.spriteSourceSize.y === 0 &&
+        mf.spriteSourceSize.w === 1 &&
+        mf.spriteSourceSize.h === 1 &&
+        mf.sourceSize.w === 64 &&
+        mf.sourceSize.h === 48 &&
+        nonZero === 0;
+      say(
+        'SH12_EMPTY_TRANSPARENT_FRAME_EMITS_1X1_SENTINEL_AND_RECONSTRUCTS_ALL_ZERO_CANVAS',
+        ok,
+        `all-zero 64x48 frame trims to 1x1 transparent sentinel (empty=${String(mf.empty)}, trimmed=${String(entry.trimmed)}, spriteSourceSize=${JSON.stringify(mf.spriteSourceSize)}, sourceSize=${JSON.stringify(mf.sourceSize)}) and reconstructs 64x48 with ${nonZero} non-zero byte(s)`,
+        ORIGIN,
+      );
+    }
+
+    // --- SH13: minimal non-zero alpha === 1 feather pixel preserved -----------
+    {
+      const src = new Plate(16, 16);
+      // Feather pixel at (3, 4) with alpha === 1, opaque pixel at (5, 5) with alpha === 255
+      const featherIdx = (4 * 16 + 3) * 4;
+      src.data[featherIdx] = 120;
+      src.data[featherIdx + 1] = 180;
+      src.data[featherIdx + 2] = 240;
+      src.data[featherIdx + 3] = 1;
+      const coreIdx = (5 * 16 + 5) * 4;
+      src.data[coreIdx] = 200;
+      src.data[coreIdx + 1] = 100;
+      src.data[coreIdx + 2] = 50;
+      src.data[coreIdx + 3] = 255;
+
+      const t = trimTransparentFrame(src);
+      const entry = {
+        frame: { x: 2, y: 2, w: t.width, h: t.height },
+        rotated: false as const,
+        trimmed: t.trimmed,
+        spriteSourceSize: { x: t.trimX, y: t.trimY, w: t.width, h: t.height },
+        sourceSize: { w: src.width, h: src.height },
+        anchor: { x: 0.5, y: 0.5 },
+      };
+      const pagePlate = new Plate(16, 16);
+      for (let y = 0; y < t.height; y++) {
+        for (let x = 0; x < t.width; x++) {
+          const si = (y * t.width + x) * 4;
+          const di = ((y + 2) * 16 + (x + 2)) * 4;
+          pagePlate.data[di] = t.plate.data[si];
+          pagePlate.data[di + 1] = t.plate.data[si + 1];
+          pagePlate.data[di + 2] = t.plate.data[si + 2];
+          pagePlate.data[di + 3] = t.plate.data[si + 3];
+        }
+      }
+      const rec = reconstructSheetFrame(pagePlate, entry);
+      let diff = 0;
+      for (let i = 0; i < src.data.length; i++) if (rec.data[i] !== src.data[i]) diff++;
+      // Planted alpha >= 2 threshold would clip (3, 4) and start at (5, 5)
+      const clippedEntry = {
+        ...entry,
+        frame: { x: 4, y: 3, w: 1, h: 1 },
+        spriteSourceSize: { x: 5, y: 5, w: 1, h: 1 },
+      };
+      const clippedRec = reconstructSheetFrame(pagePlate, clippedEntry);
+      let clippedDiff = 0;
+      for (let i = 0; i < src.data.length; i++) if (clippedRec.data[i] !== src.data[i]) clippedDiff++;
+      const ok = t.trimX === 3 && t.trimY === 4 && t.width === 3 && t.height === 2 && diff === 0 && clippedDiff > 0;
+      say(
+        'SH13_ALPHA_1_FEATHER_PIXEL_IS_PRESERVED_BY_ALPHA_GT_0_TRIM_RULE',
+        ok,
+        `alpha===1 feather pixel at (3,4) kept inside spriteSourceSize ${JSON.stringify(entry.spriteSourceSize)} (${diff} byte diff on reconstruction); clipping alpha<2 loses ${clippedDiff} byte(s) at (3,4)`,
+        ORIGIN,
+      );
+    }
+
+    // --- SH14: straight-alpha semitransparent RGB preserved -------------------
+    {
+      const src = new Plate(8, 8);
+      const idx = (2 * 8 + 3) * 4;
+      src.data[idx] = 200;
+      src.data[idx + 1] = 100;
+      src.data[idx + 2] = 50;
+      src.data[idx + 3] = 128;
+      const t = trimTransparentFrame(src);
+      const pngBytes = encodePng(t.plate.width, t.plate.height, t.plate.data);
+      const decoded = decodePng(pngBytes);
+      const preserved =
+        decoded.data[0] === 200 &&
+        decoded.data[1] === 100 &&
+        decoded.data[2] === 50 &&
+        decoded.data[3] === 128;
+      // Plant premultiplied RGB [100, 50, 25, 128] and verify reconstruction differs
+      const pmaPlate = new Plate(1, 1);
+      pmaPlate.data.set([100, 50, 25, 128]);
+      const entry = {
+        frame: { x: 0, y: 0, w: 1, h: 1 },
+        rotated: false as const,
+        trimmed: true,
+        spriteSourceSize: { x: t.trimX, y: t.trimY, w: t.width, h: t.height },
+        sourceSize: { w: src.width, h: src.height },
+        anchor: { x: 0.5, y: 0.5 },
+      };
+      const cleanRec = reconstructSheetFrame(decoded, entry);
+      const pmaRec = reconstructSheetFrame(pmaPlate, entry);
+      let cleanDiff = 0;
+      let pmaDiff = 0;
+      for (let i = 0; i < src.data.length; i++) {
+        if (cleanRec.data[i] !== src.data[i]) cleanDiff++;
+        if (pmaRec.data[i] !== src.data[i]) pmaDiff++;
+      }
+      const ok = preserved && cleanDiff === 0 && pmaDiff === 3;
+      say(
+        'SH14_STRAIGHT_ALPHA_SEMITRANSPARENT_RGB_IS_PRESERVED_WITHOUT_PREMULTIPLICATION',
+        ok,
+        `semitransparent pixel [200,100,50,128] round-trips through trim + PNG + reconstruct as [${decoded.data[0]},${decoded.data[1]},${decoded.data[2]},${decoded.data[3]}] (${cleanDiff} diff bytes); premultiplied [100,50,25,128] differs on ${pmaDiff} RGB channel(s)`,
+        ORIGIN,
+      );
+    }
+
+    // --- SH15: world (0,0) outside pinned viewport keeps unclamped anchor -----
+    {
+      const probes: string[] = [];
+      const pinnedDir = join(work, 'render-pinned-outside');
+      const pinnedRun = runCli([
+        'render',
+        '--candidate',
+        stretchOut,
+        '--sheet',
+        '--viewport',
+        '20,30,100,100',
+        '--out',
+        pinnedDir,
+      ]);
+      let anchorStr = '';
+      if (pinnedRun.status !== 0) {
+        probes.push(`render --sheet --viewport 20,30,100,100 exited ${String(pinnedRun.status)}: ${pinnedRun.stderr.trim()}`);
+      } else {
+        const pack = loadPackFromDisk(join(pinnedDir, 'bounce'));
+        const { x: ax, y: ay } = pack.manifest.pivot.anchor;
+        anchorStr = `(${ax.toFixed(4)}, ${ay.toFixed(4)})`;
+        if (ax >= 0 || ay <= 1) {
+          probes.push(`expected world (0,0) outside viewport 20,30,100,100 to produce ax < 0 and ay > 1, got ${anchorStr}`);
+        }
+        // Verify clamping anchor to [0, 1] in a frame entry is caught by sheetPackFaults
+        const clampedPages = pack.pages.map((p) => {
+          const j = JSON.parse(p.jsonText) as SheetJsonHashDocument;
+          for (const k of Object.keys(j.frames)) {
+            j.frames[k].anchor = { x: Math.max(0, Math.min(1, ax)), y: Math.max(0, Math.min(1, ay)) };
+          }
+          return { ...p, json: j };
+        });
+        const clampedManifest = JSON.parse(JSON.stringify(pack.manifest)) as SheetManifest;
+        for (const mf of clampedManifest.frames) {
+          mf.anchor = { x: Math.max(0, Math.min(1, ax)), y: Math.max(0, Math.min(1, ay)) };
+        }
+        const clampedFaults = sheetPackFaults(
+          clampedPages,
+          clampedManifest,
+          pack.manifest.frames.map((mf) => {
+            const p = pack.pages.find((pg) => pg.image === mf.image)!;
+            return reconstructSheetFrame(p.plate, p.json.frames[mf.key]);
+          }),
+        );
+        if (!clampedFaults.some((f) => f.includes('drifts from world-(0,0) canvasPx'))) {
+          probes.push('clamping out-of-box anchor to [0, 1] was not caught by sheetPackFaults');
+        }
+      }
+      const ok = probes.length === 0;
+      say(
+        'SH15_WORLD_ORIGIN_OUTSIDE_PINNED_VIEWPORT_KEEPS_UNCLAMPED_ANCHOR_AND_EXACT_ALIGNMENT',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `--viewport 20,30,100,100 places world (0,0) outside the box at unclamped anchor ${anchorStr}, and clamping it to [0,1] is caught by sheetPackFaults`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH16: multi-page spill emits numbered pages & related_multi_packs ----
+    {
+      const probes: string[] = [];
+      const bigViewport = fitFramesViewport(stretchFrames.slice(0, 6), 1800);
+      const spillPack = buildSheetSet({
+        rigName: 'squash',
+        setName: 'bounce',
+        animation: 'bounce',
+        fps: PROTOCOL_FPS,
+        maxSide: 1800,
+        viewport: bigViewport,
+        frames: stretchFrames.slice(0, 6),
+        atlasPages: stretchPosable.pages,
+        format: 'json-hash',
+        pageEdges: 'pot',
+      });
+      if (spillPack.pages.length < 2) {
+        probes.push(`expected multi-page spill at maxSide 1800, got ${spillPack.pages.length} page(s)`);
+      } else {
+        const expectedNames = spillPack.pages.map((_, i) => (i === 0 ? 'sheet.json' : `sheet${i + 1}.json`));
+        for (const p of spillPack.pages) {
+          const wantRelated = expectedNames.filter((n) => n !== p.table);
+          const gotRelated = p.json.meta.related_multi_packs ?? [];
+          if (gotRelated.join(',') !== wantRelated.join(',')) {
+            probes.push(`${p.table} related_multi_packs is ${JSON.stringify(gotRelated)}, expected ${JSON.stringify(wantRelated)}`);
+          }
+          if (Array.isArray(p.json.meta.size)) {
+            probes.push(`${p.table} meta.size is an array instead of a single { w, h } object`);
+          }
+        }
+      }
+      const ok = probes.length === 0;
+      say(
+        'SH16_MULTI_PAGE_SPILL_EMITS_NUMBERED_PAGES_AND_RELATED_MULTI_PACKS',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `multi-page spill wrote ${spillPack.pages.length} pages (${spillPack.pages.map((p) => `${p.image} ${p.plate.width}x${p.plate.height}`).join(', ')}) with single-object meta.size and reciprocal meta.related_multi_packs`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH17: collision-free variant namespaces and CLI/size refusals --------
+    {
+      const probes: string[] = [];
+      const namespaces = [
+        sheetNamespaceOf({ rigName: 'hero', setName: 'idle' }),
+        sheetNamespaceOf({ rigName: 'hero', setName: 'idle@24fps' }),
+        sheetNamespaceOf({ rigName: 'hero', setName: 'idle', skin: 'armor' }),
+        sheetNamespaceOf({ rigName: 'hero', setName: 'idle', subset: { mode: 'slots', names: ['cape', 'arm'] } }),
+        sheetNamespaceOf({ rigName: 'hero', setName: 'idle', subset: { mode: 'hidden', names: ['cape'] } }),
+        sheetNamespaceOf({ rigName: 'hero', setName: 'idle', environment: [{ t: 0, wind: [1, 0] }] }),
+      ];
+      if (new Set(namespaces).size !== namespaces.length) {
+        probes.push(`namespace collision among variants: ${JSON.stringify(namespaces)}`);
+      }
+
+      const refusalCases: Array<{ label: string; args: string[]; match: string }> = [
+        {
+          label: 'unknown --sheet-format',
+          args: ['render', '--candidate', stretchOut, '--sheet', '--sheet-format', 'xml', '--out', join(work, 'ref-fmt')],
+          match: '--sheet-format "xml"',
+        },
+        {
+          label: '--sheet-format without --sheet',
+          args: ['render', '--candidate', stretchOut, '--sheet-format', 'json-hash', '--out', join(work, 'ref-nosheet-fmt')],
+          match: '--sheet-format takes --sheet',
+        },
+        {
+          label: '--page-edges on render without --sheet',
+          args: ['render', '--candidate', stretchOut, '--page-edges', 'free', '--out', join(work, 'ref-nosheet-edges')],
+          match: '--page-edges on render takes --sheet',
+        },
+        {
+          label: 'unknown --page-edges on render --sheet',
+          args: ['render', '--candidate', stretchOut, '--sheet', '--page-edges', 'round', '--out', join(work, 'ref-edges')],
+          match: '--page-edges "round"',
+        },
+      ];
+      for (const rc of refusalCases) {
+        const outPath = rc.args[rc.args.length - 1];
+        const r = runCli(rc.args);
+        if (r.status !== 2) probes.push(`${rc.label}: exited ${String(r.status)}, expected 2`);
+        if (!r.stderr.includes(rc.match)) probes.push(`${rc.label}: stderr ${JSON.stringify(r.stderr.trim())} did not include ${JSON.stringify(rc.match)}`);
+        if (existsSync(outPath)) probes.push(`${rc.label}: created ${outPath} on refusal`);
+      }
+
+      // Oversized frame > 2048 - 2*2 = 2044 px trimmed edge refused by SheetUsageError
+      let oversizedCaught = '';
+      try {
+        const hugeViewport = fitFramesViewport(stretchFrames.slice(0, 1), 3200);
+        buildSheetSet({
+          rigName: 'squash',
+          setName: 'bounce',
+          animation: 'bounce',
+          fps: PROTOCOL_FPS,
+          maxSide: 3200,
+          viewport: hugeViewport,
+          frames: stretchFrames.slice(0, 1),
+          atlasPages: stretchPosable.pages,
+          format: 'json-hash',
+          pageEdges: 'pot',
+        });
+      } catch (e) {
+        if (e instanceof SheetUsageError && e.message.includes(String(SHEET_PAGE_SIZE))) {
+          oversizedCaught = e.message;
+        } else {
+          probes.push(`unexpected error on oversized frame: ${String(e)}`);
+        }
+      }
+      if (oversizedCaught === '') probes.push('oversized frame exceeding 2048 page ceiling was not refused with SheetUsageError');
+
+      const ok = probes.length === 0;
+      say(
+        'SH17_VARIANT_NAMESPACES_DO_NOT_COLLIDE_AND_INVALID_FLAGS_OR_OVERSIZED_FRAMES_ARE_REFUSED',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `${namespaces.length} variant namespaces distinct (${namespaces.join(', ')}); 4 CLI flag refusals exit 2 naming the flag with nothing written; oversized frame refused ("${oversizedCaught}")`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH18: all 28 in-tree gallery/* animation × rate combinations ---------
+    {
+      const probes: string[] = [];
+      const galleryRoot = join(import.meta.dir, 'gallery');
+      const rigNames = readdirSync(galleryRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && existsSync(join(galleryRoot, d.name, 'rig.json')))
+        .map((d) => d.name)
+        .sort();
+      let combos = 0;
+      let framesPerMode = 0;
+      let totalPotArea = 0;
+      let totalFreeArea = 0;
+
+      for (const rigName of rigNames) {
+        const outDir = rigName === 'squash' ? stretchOut : join(work, `gallery-${rigName}`);
+        if (rigName !== 'squash') {
+          const b = runCli([
+            'build',
+            '--rig',
+            join(galleryRoot, rigName, 'rig.json'),
+            '--motion',
+            join(galleryRoot, rigName, 'motion.json'),
+            '--out',
+            outDir,
+          ]);
+          if (b.status !== 0) {
+            probes.push(`gallery/${rigName} build failed (exit ${String(b.status)})`);
+            continue;
+          }
+        }
+        const { posable, poser } = loadBuildCandidate(outDir);
+        const viewport = framingViewport(poser, 256)!;
+
+        for (const anim of poser.animations) {
+          for (const fps of [12, 24] as const) {
+            combos++;
+            const frames = sampleAnimation(poser, anim.name, fps);
+            framesPerMode += frames.length;
+            const setName = frameSetDir(anim.name, fps);
+            try {
+              const potPack = buildSheetSet({
+                rigName,
+                setName,
+                animation: anim.name,
+                fps,
+                maxSide: 256,
+                viewport,
+                frames,
+                atlasPages: posable.pages,
+                format: 'json-hash',
+                pageEdges: 'pot',
+              });
+              const freePack = buildSheetSet({
+                rigName,
+                setName,
+                animation: anim.name,
+                fps,
+                maxSide: 256,
+                viewport,
+                frames,
+                atlasPages: posable.pages,
+                format: 'json-hash',
+                pageEdges: 'free',
+              });
+              for (const p of potPack.pages) totalPotArea += p.plate.width * p.plate.height;
+              for (const p of freePack.pages) totalFreeArea += p.plate.width * p.plate.height;
+            } catch (e) {
+              probes.push(`gallery/${rigName} ${setName}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        }
+      }
+      if (combos !== 28) probes.push(`expected 28 gallery animation×fps combinations, ran ${combos}`);
+      if (totalFreeArea >= totalPotArea) probes.push(`expected total free area (${totalFreeArea}) < total pot area (${totalPotArea})`);
+      const ok = probes.length === 0;
+      say(
+        'SH18_ALL_28_GALLERY_ANIMATION_RATE_COMBINATIONS_RECONSTRUCT_BYTE_EXACT_UNDER_POT_AND_FREE',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `${rigNames.length} gallery rigs, ${combos} animation×rate combinations (12 & 24 fps), ${framesPerMode} frames per mode (${framesPerMode * 2} frames total): 100% pass verifySheetPack with 0 differing RGBA bytes; total page area pot=${totalPotArea} px² vs free=${totalFreeArea} px² (${(100 * (1 - totalFreeArea / Math.max(1, totalPotArea))).toFixed(1)}% smaller)`,
+        ),
+        ORIGIN,
+      );
+    }
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  return bad;
+}
+
 function runLoopSeamSuite(): number {
   let bad = 0;
   console.log('\n── the loop-seam tool: sampling clause (issue #337) ──');
@@ -145334,6 +146230,7 @@ function main(): void {
   tally.of('loop-seam', runLoopSeamSuite);
   tally.of('render-environment', runRenderEnvironmentSuite);
   tally.of('render-physics', runRenderPhysicsSuite);
+  tally.of('sheet', runSheetSuite);
   tally.of('run-tally', () => runRunTallySuite(tally), { live: true, whole: true });
   tally.of('partial-run', () => runPartialRunSuite(tally));
   tally.of('gate-helper', runGateHelperSuite);
@@ -145653,6 +146550,7 @@ function main(): void {
   const gateHelpers =
     ', + ' + n('setup-mesh') + ' named setup mesh read controls (issue #1538)' +
     ', + ' + n('physics-parameters') + ' live named physics parameter override controls (issue #1541)' +
+    ', + ' + n('sheet') + ' sprite-sheet export controls (issue #1560)' +
     ', + ' + n('gate-helper') + ' controls over the helpers the gates themselves call (issue #499 — the guard ' +
     'inside the helper a control hands its verdict and its probe list to: a FALSE verdict over an EMPTY list is ' +
     'the signature of a detail derived from something other than the verdict, and the helper prints that by name ' +

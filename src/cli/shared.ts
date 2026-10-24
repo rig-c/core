@@ -41,6 +41,7 @@ import { FOLDS_FILE } from '../folds.ts';
 import { DRAWN_ALPHA, PASS_THROUGH_FILE, PASS_THROUGH_RUN } from '../passthrough.ts';
 import { SEAM_FILE } from '../seam.ts';
 import { OVERLAPS_FILE } from '../overlaps.ts';
+import { DEFAULT_SHEET_FORMAT, SHEET_FORMATS, SHEET_MANIFEST_FILE, SHEET_MANIFEST_SPEC, SHEET_PADDING, SHEET_PAGE_SIZE, type SheetFormat } from '../sheet.ts';
 import { readViewportBox, ViewportError } from '../viewportpin.ts';
 import { parseJsonWithPosition } from '../json-position.ts';
 import { RUNG_IDS } from '../ladder.ts';
@@ -151,7 +152,7 @@ export { PACKAGE_ROOT, readPackageMeta, readVersion };
  * needs a value` (issue #328). `CLI10`/`CLI11` in `selftest.ts` now hold the two
  * halves together by reading `--help` rather than by naming a flag.
  */
-const BOOLEAN_FLAGS = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'folds', 'overlaps', 'accept-skeleton-differences', 'keep-pages', 'dim']);
+const BOOLEAN_FLAGS = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'folds', 'overlaps', 'sheet', 'accept-skeleton-differences', 'keep-pages', 'dim']);
 
 /**
  * The flags a command is allowed to spell more than once.
@@ -1078,6 +1079,15 @@ const FLAG_MEANINGS: Record<string, string> = {
     'pair per set: the lowest and the highest angle in degrees, the span, and the frame each was first reached on. Read on the frames\' own ' +
     'grid, so a peak between two frames is not read. A reading, not a gate: nothing is written. An unknown bone, a bone against itself, ' +
     'a malformed list and a pair named twice are refused by name, and so is a bone with no direction on a frame (a world matrix of zero)',
+  sheet:
+    `also pack each rendered set's frames over a transparent [0, 0, 0, 0] canvas into deterministic RGBA8 sprite sheet page(s) ` +
+    `(\`sheet.png\`, \`sheet2.png\`, …; max edge ${SHEET_PAGE_SIZE}, padding ${SHEET_PADDING} with clamped edge extrusion, trimmed to alpha > 0 ` +
+    'with a 1x1 transparent sentinel for empty frames), a shared TexturePacker-style JSON-Hash table per page (`sheet.json`, `sheet2.json`, …; ' +
+    `\`anchor\` at world (0, 0) for PixiJS Spritesheet and Phaser 3 JSONHash), and \`${SHEET_MANIFEST_FILE}\` (\`${SHEET_MANIFEST_SPEC}\`) ` +
+    'in each set directory; diagnostic `f####.png` and `contact.png` stay over opaque `BACKGROUND` unchanged',
+  'sheet-format':
+    `the table format \`render --sheet\` writes beside each sheet page (default \`${DEFAULT_SHEET_FORMAT}\`; known formats: ${SHEET_FORMATS.join(', ')}). ` +
+    'Takes --sheet',
   'viewport-from':
     "draw on an earlier render's grid exactly — the box, the scale and the pixel size its frames.json records (the file, or the " +
     'directory `render --out` wrote it into) — so a world point lands on the same pixel in both renders. A slot that reaches past ' +
@@ -1285,6 +1295,7 @@ const FLAG_VALUES: Record<string, string> = {
   'pass-through': '<cloth>:<leg>[,<cloth>:<leg>…]',
   seam: '<slot>:<slot>[,<slot>:<slot>…]',
   'angle-range': '<bone>:<relative-to>[,…]',
+  'sheet-format': 'json-hash',
   'viewport-from': '<frames.json|dir>',
   reference: '<dir|skeleton.json>',
   'reference-atlas': '<path>',
@@ -1753,9 +1764,15 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --overlaps   (which slot each frame drew over which, by name, with an outline plate)',
       'rigc render … --angle-range <bone>:<relative-to>[,…]   (how far a bone turns against another, per animation)',
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
+      'rigc render … --sheet [--sheet-format json-hash] [--page-edges pot|free]   (deterministic sprite sheets + JSON hash table + sheet-manifest.json per set)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range', 'environment', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'poser', 'out'],
     overrides: {
+      'page-edges': {
+        meaning:
+          `what each sprite sheet page's edges may be, --sheet only (default ${DEFAULT_PAGE_EDGES}, max edge ${SHEET_PAGE_SIZE}, padding ${SHEET_PADDING}): ` +
+          'pot is a power of two on both; free chooses the smallest-area rectangle up to the max edge that holds the trimmed frames',
+      },
       out: {
         value: '<dir>',
         meaning:
@@ -2249,6 +2266,17 @@ export function readPageEdges(flags: Record<string, string>): PageEdges {
   if (raw === undefined) return DEFAULT_PAGE_EDGES;
   const found = PAGE_EDGES.find((e) => e === raw);
   if (!found) throw new UsageError(`--page-edges ${JSON.stringify(raw)}; known values: ${PAGE_EDGES.join(', ')}`);
+  return found;
+}
+
+/**
+ * Read `--sheet-format`, or its default — `json-hash` (issue #1560).
+ */
+export function readSheetFormat(flags: Record<string, string>): SheetFormat {
+  const raw = flags['sheet-format'];
+  if (raw === undefined) return DEFAULT_SHEET_FORMAT;
+  const found = SHEET_FORMATS.find((f) => f === raw);
+  if (!found) throw new UsageError(`--sheet-format ${JSON.stringify(raw)}; known formats: ${SHEET_FORMATS.join(', ')}`);
   return found;
 }
 

@@ -776,6 +776,11 @@ export interface PackInput {
   width: number;
   height: number;
   /**
+   * Already-drawn pixels (`render --sheet`), used in place of `readPlate(absPath)`
+   * when given so an in-memory crop is not written out only to be read back in.
+   */
+  plate?: Plate;
+  /**
    * What the region's attachments draw (`packFootprints`), read only under
    * `shape: 'polygon'`. Absent means the rectangle.
    */
@@ -2535,7 +2540,7 @@ export function packAtlas(inputs: PackInput[], opts: PackOptions = {}): PackResu
     const owners: Array<{ source: Plate; place: Placement; shape: CellShape }> = [];
     for (const place of onPage) {
       const input = byRegion.get(place.region)!;
-      const source = readPlate(input.absPath);
+      const source = input.plate ?? readPlate(input.absPath);
       if (source.width !== input.width || source.height !== input.height) {
         // The size in the atlas came from the PNG's IHDR (`readPngInfo`); this is
         // the decoded image. They disagreeing means the file changed between the

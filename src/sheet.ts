@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto';
-import { basename, dirname } from 'node:path';
+import { basename } from 'node:path';
 import { Plate, type RGBA } from '../tools/plate.ts';
 import {
   DEFAULT_PADDING,
   DEFAULT_PAGE_EDGES,
   DEFAULT_PAGE_SIZE,
-  PAGE_EDGES,
   packAtlas,
   type PackInput,
   type PageEdges,
 } from './atlas.ts';
 import type { EnvironmentStep } from './environment.ts';
+import { MODEL_DOCUMENT_FILE, spineFileSha256 } from './model.ts';
 import {
   projector,
   renderFrame,
@@ -101,11 +101,18 @@ export interface SheetManifestFrame {
   anchor: { x: number; y: number };
 }
 
+/** Source file identities recorded in `sheet-manifest.json` (`source`). */
+export interface SheetManifestSource {
+  skeleton: { file: string; sha256: string };
+  model: { file: string; sha256: string } | null;
+}
+
 /** The per-set `sheet-manifest.json` (`rigc-sheet/1`) document. */
 export interface SheetManifest {
   spec: typeof SHEET_MANIFEST_SPEC;
   format: SheetFormat;
   namespace: string;
+  source: SheetManifestSource;
   animation: string | null;
   skin?: string;
   slots?: string[];
@@ -169,6 +176,7 @@ export interface BuildSheetSetOptions {
   viewport: Viewport;
   frames: readonly Frame[];
   atlasPages: Map<string, Plate>;
+  source?: SheetManifestSource;
   format?: SheetFormat;
   pageEdges?: PageEdges;
   skin?: string;
@@ -185,25 +193,67 @@ function cleanZero(n: number): number {
 }
 
 /**
- * Derive the deterministic `<rig>` identifier for frame keys from the compiled
- * model document's `rig.skeleton.name` when present, or from the skeleton path's
- * stem/directory when rendering a foreign Spine export.
+ * Build the `source` identity block for `sheet-manifest.json`: relative filenames
+ * (no directory paths) and SHA-256 hex digests of the `skeleton.json` and
+ * `skeleton.model.json` the sheet was rendered from.
  */
-export function sheetRigNameOf(skeletonPath: string, modelText: string | null): string {
+export function sheetSourceOf(
+  skeletonPath: string,
+  skeletonText: string | Uint8Array,
+  modelText: string | Uint8Array | null,
+): SheetManifestSource {
+  return {
+    skeleton: {
+      file: basename(skeletonPath),
+      sha256: spineFileSha256(skeletonText),
+    },
+    model:
+      modelText === null
+        ? null
+        : {
+            file: MODEL_DOCUMENT_FILE,
+            sha256: spineFileSha256(modelText),
+          },
+  };
+}
+
+/**
+ * Derive the deterministic `<rig>` identifier for frame keys from the compiled
+ * model document's `rig.archetype` (`buildRigInfo` in `src/compile.ts` sets
+ * `archetype: rig.name` directly from the rig spec's `name` field, and `RIG_FIELDS`
+ * in `src/assertions/model/declared.ts` holds it as a required string on every
+ * model document). For a foreign Spine
+ * export without `skeleton.model.json`, uses the skeleton file's stem when it is
+ * not `"skeleton"`, or a content-deterministic digest of `skeletonText` — never
+ * the build's parent directory name, so moving or copying a build folder never
+ * changes frame keys or emitted sheet bytes.
+ */
+export function sheetRigNameOf(
+  skeletonPath: string,
+  modelText: string | null,
+  skeletonText?: string | Uint8Array,
+): string {
   if (modelText !== null) {
     try {
-      const parsed = JSON.parse(modelText) as { rig?: { name?: unknown; skeleton?: { name?: unknown } } };
-      const name = parsed.rig?.name ?? parsed.rig?.skeleton?.name;
+      const parsed = JSON.parse(modelText) as {
+        rig?: { archetype?: unknown; name?: unknown; skeleton?: { name?: unknown } };
+      };
+      const name = parsed.rig?.archetype ?? parsed.rig?.name ?? parsed.rig?.skeleton?.name;
       if (typeof name === 'string' && name.trim().length > 0) {
         return sanitizeNamespaceSegment(name.trim());
       }
     } catch {
-      // Fall back to path stem when model JSON is absent or unparseable.
+      // Fall back below when model JSON is unparseable.
     }
   }
   const stem = basename(skeletonPath, '.json');
-  const raw = stem !== 'skeleton' && stem.length > 0 ? stem : basename(dirname(skeletonPath));
-  return sanitizeNamespaceSegment(raw.length > 0 ? raw : 'rig');
+  if (stem !== 'skeleton' && stem.length > 0) {
+    return sanitizeNamespaceSegment(stem);
+  }
+  if (skeletonText !== undefined) {
+    return `skeleton-${spineFileSha256(skeletonText).slice(0, 8)}`;
+  }
+  return 'rig';
 }
 
 function sanitizeNamespaceSegment(segment: string): string {
@@ -394,6 +444,35 @@ export function sheetPackFaults(
   }
   if (manifest.endpointPolicy !== 'inclusive-grid') {
     faults.push(`manifest.endpointPolicy is ${JSON.stringify(manifest.endpointPolicy)}, required "inclusive-grid"`);
+  }
+  const hex64 = /^[0-9a-f]{64}$/;
+  const skelSrc = manifest.source?.skeleton;
+  if (
+    skelSrc === undefined ||
+    typeof skelSrc.file !== 'string' ||
+    skelSrc.file.length === 0 ||
+    skelSrc.file.includes('/') ||
+    skelSrc.file.includes('\\') ||
+    typeof skelSrc.sha256 !== 'string' ||
+    !hex64.test(skelSrc.sha256)
+  ) {
+    faults.push(
+      `manifest.source.skeleton is ${JSON.stringify(skelSrc ?? null)}, required { file: <relative name>, sha256: <64-hex> }`,
+    );
+  }
+  const modelSrc = manifest.source?.model;
+  if (
+    modelSrc !== null &&
+    (modelSrc === undefined ||
+      modelSrc.file !== MODEL_DOCUMENT_FILE ||
+      modelSrc.file.includes('/') ||
+      modelSrc.file.includes('\\') ||
+      typeof modelSrc.sha256 !== 'string' ||
+      !hex64.test(modelSrc.sha256))
+  ) {
+    faults.push(
+      `manifest.source.model is ${JSON.stringify(modelSrc)}, required null or { file: ${JSON.stringify(MODEL_DOCUMENT_FILE)}, sha256: <64-hex> }`,
+    );
   }
   if (pages.length === 0) {
     faults.push('sheet pack has 0 pages');
@@ -624,13 +703,11 @@ export function verifySheetPack(
  */
 export function buildSheetSet(opts: BuildSheetSetOptions): SheetSetPack {
   const format = opts.format ?? DEFAULT_SHEET_FORMAT;
-  if (!SHEET_FORMATS.includes(format)) {
-    throw new SheetUsageError(`--sheet-format ${JSON.stringify(String(opts.format))}; known formats: ${SHEET_FORMATS.join(', ')}`);
-  }
   const pageEdges = opts.pageEdges ?? DEFAULT_PAGE_EDGES;
-  if (!PAGE_EDGES.includes(pageEdges)) {
-    throw new SheetUsageError(`--page-edges ${JSON.stringify(String(opts.pageEdges))}; known values: ${PAGE_EDGES.join(', ')}`);
-  }
+  const source: SheetManifestSource = opts.source ?? {
+    skeleton: { file: 'skeleton.json', sha256: spineFileSha256(opts.rigName) },
+    model: null,
+  };
 
   const namespace = sheetNamespaceOf({
     rigName: opts.rigName,
@@ -782,6 +859,7 @@ export function buildSheetSet(opts: BuildSheetSetOptions): SheetSetPack {
     spec: SHEET_MANIFEST_SPEC,
     format,
     namespace,
+    source,
     animation: opts.animation,
     ...(opts.skin === undefined ? {} : { skin: opts.skin }),
     ...(opts.subset === undefined

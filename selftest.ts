@@ -122662,46 +122662,65 @@ function runSheetSuite(): number {
       );
     }
 
-    // --- SH14: straight-alpha semitransparent RGB preserved -------------------
+    // --- SH14: straight-alpha semitransparent RGB through renderFrame ---------
     {
-      const src = new Plate(8, 8);
-      const idx = (2 * 8 + 3) * 4;
-      src.data[idx] = 200;
-      src.data[idx + 1] = 100;
-      src.data[idx + 2] = 50;
-      src.data[idx + 3] = 128;
-      const t = trimTransparentFrame(src);
-      const pngBytes = encodePng(t.plate.width, t.plate.height, t.plate.data);
-      const decoded = decodePng(pngBytes);
-      const preserved =
-        decoded.data[0] === 200 &&
-        decoded.data[1] === 100 &&
-        decoded.data[2] === 50 &&
-        decoded.data[3] === 128;
-      // Plant premultiplied RGB [100, 50, 25, 128] and verify reconstruction differs
-      const pmaPlate = new Plate(1, 1);
-      pmaPlate.data.set([100, 50, 25, 128]);
-      const entry = {
-        frame: { x: 0, y: 0, w: 1, h: 1 },
-        rotated: false as const,
-        trimmed: true,
-        spriteSourceSize: { x: t.trimX, y: t.trimY, w: t.width, h: t.height },
-        sourceSize: { w: src.width, h: src.height },
-        anchor: { x: 0.5, y: 0.5 },
-      };
-      const cleanRec = reconstructSheetFrame(decoded, entry);
-      const pmaRec = reconstructSheetFrame(pmaPlate, entry);
-      let cleanDiff = 0;
-      let pmaDiff = 0;
-      for (let i = 0; i < src.data.length; i++) {
-        if (cleanRec.data[i] !== src.data[i]) cleanDiff++;
-        if (pmaRec.data[i] !== src.data[i]) pmaDiff++;
+      const semiPage = new Plate(4, 4);
+      for (let y = 0; y < 4; y++) {
+        for (let x = 0; x < 4; x++) {
+          semiPage.set(x, y, [200, 100, 50, 128]);
+        }
       }
-      const ok = preserved && cleanDiff === 0 && pmaDiff === 3;
+      const semiPages = new Map<string, Plate>([['semi.png', semiPage]]);
+      const semiPiece: Piece = {
+        kind: 'region',
+        slot: 'glow',
+        page: 'semi.png',
+        world: [12, 4, 4, 4, 4, 12, 12, 12],
+        uvs: [1, 1, 0, 1, 0, 0, 1, 0],
+        tint: [1, 1, 1, 1],
+      };
+      const semiFrame: Frame = { index: 0, time: 0, pieces: [semiPiece] };
+      const semiViewport = viewportOfSize(0, 0, 16, 16, 1, 16, 16);
+      const rendered = renderFrame(semiFrame, semiPages, semiViewport, TRANSPARENT_BACKGROUND);
+      const samplePx = rendered.get(8, 8);
+      const preservedInRender =
+        samplePx[0] === 200 && samplePx[1] === 100 && samplePx[2] === 50 && samplePx[3] === 128;
+
+      const semiPack = buildSheetSet({
+        rigName: 'semi_probe',
+        setName: 'idle',
+        animation: 'idle',
+        fps: 12,
+        maxSide: 16,
+        viewport: semiViewport,
+        frames: [semiFrame],
+        atlasPages: semiPages,
+        format: 'json-hash',
+        pageEdges: 'pot',
+      });
+      const cleanFaults = sheetPackFaults(semiPack.pages, semiPack.manifest, [rendered]);
+
+      // Plant a premultiplying blend (multiplying RGB by sa = 128/255 without dividing by oa) on the sheet page
+      const pmaPagePlate = clonePlate(semiPack.pages[0].plate);
+      for (let i = 0; i < pmaPagePlate.data.length; i += 4) {
+        const a = pmaPagePlate.data[i + 3];
+        if (a > 0 && a < 255) {
+          pmaPagePlate.data[i] = Math.round((pmaPagePlate.data[i] * a) / 255);
+          pmaPagePlate.data[i + 1] = Math.round((pmaPagePlate.data[i + 1] * a) / 255);
+          pmaPagePlate.data[i + 2] = Math.round((pmaPagePlate.data[i + 2] * a) / 255);
+        }
+      }
+      const pmaFaults = sheetPackFaults(
+        [{ ...semiPack.pages[0], plate: pmaPagePlate }],
+        semiPack.manifest,
+        [rendered],
+      );
+      const pmaCaught = pmaFaults.filter((f) => f.includes('reconstruction mismatch'));
+      const ok = preservedInRender && cleanFaults.length === 0 && pmaCaught.length > 0;
       say(
-        'SH14_STRAIGHT_ALPHA_SEMITRANSPARENT_RGB_IS_PRESERVED_WITHOUT_PREMULTIPLICATION',
+        'SH14_STRAIGHT_ALPHA_SEMITRANSPARENT_RGB_IS_PRESERVED_THROUGH_RENDER_FRAME_AND_PREMULTIPLIED_BLEND_GOES_RED',
         ok,
-        `semitransparent pixel [200,100,50,128] round-trips through trim + PNG + reconstruct as [${decoded.data[0]},${decoded.data[1]},${decoded.data[2]},${decoded.data[3]}] (${cleanDiff} diff bytes); premultiplied [100,50,25,128] differs on ${pmaDiff} RGB channel(s)`,
+        `renderFrame over TRANSPARENT_BACKGROUND preserves straight-alpha [${samplePx.join(',')}] through buildSheetSet (0 faults); planted premultiplying blend [100,50,25,128] caught: ${pmaCaught[0] ?? 'none'}`,
         ORIGIN,
       );
     }
@@ -122976,6 +122995,179 @@ function runSheetSuite(): number {
           ok,
           probes,
           `${rigNames.length} gallery rigs, ${combos} animation×rate combinations (12 & 24 fps), ${framesPerMode} frames per mode (${framesPerMode * 2} frames total): 100% pass verifySheetPack with 0 differing RGBA bytes; total page area pot=${totalPotArea} px² vs free=${totalFreeArea} px² (${(100 * (1 - totalFreeArea / Math.max(1, totalPotArea))).toFixed(1)}% smaller)`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH19: CLI render --sheet across rates emits disjoint keys ------------
+    {
+      const probes: string[] = [];
+      const fps12Dir = join(work, 'cli-fps12');
+      const fps24Dir = join(work, 'cli-fps24');
+      const r12 = runCli(['render', '--candidate', stretchOut, '--animation', 'bounce', '--fps', '12', '--sheet', '--out', fps12Dir]);
+      const r24 = runCli(['render', '--candidate', stretchOut, '--animation', 'bounce', '--fps', '24', '--sheet', '--out', fps24Dir]);
+      let ns12 = '';
+      let ns24 = '';
+      let keys12Count = 0;
+      let keys24Count = 0;
+      if (r12.status !== 0) probes.push(`render --fps 12 --sheet exited ${String(r12.status)}: ${r12.stderr.trim()}`);
+      if (r24.status !== 0) probes.push(`render --fps 24 --sheet exited ${String(r24.status)}: ${r24.stderr.trim()}`);
+      if (probes.length === 0) {
+        const pack12 = loadPackFromDisk(join(fps12Dir, 'bounce'));
+        const pack24 = loadPackFromDisk(join(fps24Dir, 'bounce@24fps'));
+        ns12 = pack12.manifest.namespace;
+        ns24 = pack24.manifest.namespace;
+        if (ns12 !== 'squash/bounce') probes.push(`expected 12 fps namespace "squash/bounce", got ${JSON.stringify(ns12)}`);
+        if (ns24 !== 'squash/bounce@24fps') probes.push(`expected 24 fps namespace "squash/bounce@24fps", got ${JSON.stringify(ns24)}`);
+        const keys12 = new Set(pack12.manifest.frames.map((f) => f.key));
+        const keys24 = new Set(pack24.manifest.frames.map((f) => f.key));
+        keys12Count = keys12.size;
+        keys24Count = keys24.size;
+        const shared = [...keys12].filter((k) => keys24.has(k));
+        if (shared.length > 0) probes.push(`12 fps and 24 fps CLI sheet renders share ${shared.length} frame key(s): ${shared.slice(0, 3).join(', ')}`);
+      }
+      const ok = probes.length === 0;
+      say(
+        'SH19_CLI_RENDER_SHEET_ACROSS_RATES_EMITS_DISJOINT_NAMESPACES_AND_KEYS',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `CLI render --sheet on gallery/squash bounce at 12 fps ("${ns12}", ${keys12Count} keys) and 24 fps ("${ns24}", ${keys24Count} keys) emits disjoint namespaces and 0 shared frame keys`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH20: rig key from model archetype, folder-independent & rig-disjoint
+    {
+      const probes: string[] = [];
+      const dirA = join(work, 'folder-alpha');
+      const dirB = join(work, 'folder-beta');
+      const bA = runCli([
+        'build',
+        '--rig',
+        join(import.meta.dir, 'gallery', 'squash', 'rig.json'),
+        '--motion',
+        join(import.meta.dir, 'gallery', 'squash', 'motion.json'),
+        '--copy-images',
+        '--out',
+        dirA,
+      ]);
+      if (bA.status !== 0) {
+        probes.push(`build --copy-images failed (exit ${String(bA.status)}): ${bA.stderr.trim()}`);
+      } else {
+        cpSync(dirA, dirB, { recursive: true });
+        const outA = join(work, 'render-alpha');
+        const outB = join(work, 'render-beta');
+        const rA = runCli(['render', '--candidate', dirA, '--animation', 'bounce', '--sheet', '--out', outA]);
+        const rB = runCli(['render', '--candidate', dirB, '--animation', 'bounce', '--sheet', '--out', outB]);
+        if (rA.status !== 0 || rB.status !== 0) {
+          probes.push(`render on folder copies exited ${String(rA.status)} / ${String(rB.status)}`);
+        } else {
+          for (const f of ['sheet.png', 'sheet.json', SHEET_MANIFEST_FILE]) {
+            const bytesA = readFileSync(join(outA, 'bounce', f));
+            const bytesB = readFileSync(join(outB, 'bounce', f));
+            if (!bytesA.equals(bytesB)) {
+              probes.push(`${f} differs between differently named build folders (${dirA} vs ${dirB})`);
+            }
+          }
+        }
+      }
+
+      // Two different rigs built into identically named `--out .../build` folders
+      const sameSquashBuild = join(work, 'rig1', 'build');
+      const sameNodBuild = join(work, 'rig2', 'build');
+      const bSq = runCli([
+        'build',
+        '--rig',
+        join(import.meta.dir, 'gallery', 'squash', 'rig.json'),
+        '--motion',
+        join(import.meta.dir, 'gallery', 'squash', 'motion.json'),
+        '--out',
+        sameSquashBuild,
+      ]);
+      const bNod = runCli([
+        'build',
+        '--rig',
+        join(import.meta.dir, 'gallery', 'nod', 'rig.json'),
+        '--motion',
+        join(import.meta.dir, 'gallery', 'nod', 'motion.json'),
+        '--out',
+        sameNodBuild,
+      ]);
+      let sqNs = '';
+      let nodNs = '';
+      if (bSq.status !== 0 || bNod.status !== 0) {
+        probes.push(`same-folder-name builds exited ${String(bSq.status)} / ${String(bNod.status)}`);
+      } else {
+        const outSq = join(work, 'render-same-sq');
+        const outNod = join(work, 'render-same-nod');
+        const rSq = runCli(['render', '--candidate', sameSquashBuild, '--animation', 'bounce', '--sheet', '--out', outSq]);
+        const rNod = runCli(['render', '--candidate', sameNodBuild, '--animation', 'idle', '--sheet', '--out', outNod]);
+        if (rSq.status !== 0 || rNod.status !== 0) {
+          probes.push(`renders on same-folder-name builds exited ${String(rSq.status)} / ${String(rNod.status)}`);
+        } else {
+          sqNs = loadPackFromDisk(join(outSq, 'bounce')).manifest.namespace;
+          nodNs = loadPackFromDisk(join(outNod, 'idle')).manifest.namespace;
+          if (sqNs !== 'squash/bounce' || nodNs !== 'nod/idle') {
+            probes.push(`expected disjoint namespaces "squash/bounce" and "nod/idle", got ${JSON.stringify(sqNs)} and ${JSON.stringify(nodNs)}`);
+          }
+        }
+      }
+
+      const ok = probes.length === 0;
+      say(
+        'SH20_RIG_KEY_COMES_FROM_MODEL_ARCHETYPE_SO_RENAMED_BUILD_DIRS_STAY_BYTE_IDENTICAL_AND_DISTINCT_RIGS_STAY_DISJOINT',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `two copies of one build in folder-alpha and folder-beta emit byte-identical sheet.png, sheet.json and ${SHEET_MANIFEST_FILE}; two rigs built into --out .../build emit disjoint namespaces ("${sqNs}" vs "${nodNs}")`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH21: manifest.source records relative filenames and sha256 digests --
+    {
+      const probes: string[] = [];
+      const wantSkelSha = spineFileSha256(readFileSync(join(stretchOut, 'skeleton.json')));
+      const wantModelSha = spineFileSha256(readFileSync(join(stretchOut, MODEL_DOCUMENT_FILE)));
+      const src = basePack.manifest.source;
+      if (src?.skeleton?.file !== 'skeleton.json' || src.skeleton.sha256 !== wantSkelSha) {
+        probes.push(`manifest.source.skeleton is ${JSON.stringify(src?.skeleton ?? null)}, expected {"file":"skeleton.json","sha256":${JSON.stringify(wantSkelSha)}}`);
+      }
+      if (src?.model?.file !== MODEL_DOCUMENT_FILE || src.model.sha256 !== wantModelSha) {
+        probes.push(`manifest.source.model is ${JSON.stringify(src?.model ?? null)}, expected {"file":${JSON.stringify(MODEL_DOCUMENT_FILE)},"sha256":${JSON.stringify(wantModelSha)}}`);
+      }
+
+      // Plant a path in source.skeleton.file and a bad digest in source.model.sha256
+      const mPath = clonePack();
+      mPath.manifest.source.skeleton.file = 'sub/skeleton.json';
+      const pathFaults = sheetPackFaults(mPath.pages, mPath.manifest, stretchUntrimmed).filter((f) =>
+        f.includes('manifest.source.skeleton'),
+      );
+      if (pathFaults.length === 0) probes.push('planted path in manifest.source.skeleton.file went uncaught');
+
+      const mBadSha = clonePack();
+      if (mBadSha.manifest.source.model !== null) {
+        mBadSha.manifest.source.model.sha256 = 'not-a-sha256';
+      }
+      const shaFaults = sheetPackFaults(mBadSha.pages, mBadSha.manifest, stretchUntrimmed).filter((f) =>
+        f.includes('manifest.source.model'),
+      );
+      if (shaFaults.length === 0) probes.push('planted bad sha256 in manifest.source.model.sha256 went uncaught');
+
+      const ok = probes.length === 0;
+      say(
+        'SH21_MANIFEST_SOURCE_RECORDS_RELATIVE_SKELETON_AND_MODEL_SHA256_AND_REFUSES_PATH_OR_BAD_DIGEST',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `manifest.source records relative filenames ("skeleton.json" sha256 ${wantSkelSha.slice(0, 12)}…, "${MODEL_DOCUMENT_FILE}" sha256 ${wantModelSha.slice(0, 12)}…) and refuses planted path ("${pathFaults[0] ?? ''}") or bad digest ("${shaFaults[0] ?? ''}")`,
         ),
         ORIGIN,
       );

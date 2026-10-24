@@ -1083,7 +1083,7 @@ const FLAG_MEANINGS: Record<string, string> = {
     `also pack each rendered set's frames over a transparent [0, 0, 0, 0] canvas into deterministic RGBA8 sprite sheet page(s) ` +
     `(\`sheet.png\`, \`sheet2.png\`, …; max edge ${SHEET_PAGE_SIZE}, padding ${SHEET_PADDING} with clamped edge extrusion, trimmed to alpha > 0 ` +
     'with a 1x1 transparent sentinel for empty frames), a shared TexturePacker-style JSON-Hash table per page (`sheet.json`, `sheet2.json`, …; ' +
-    `\`anchor\` at world (0, 0) for PixiJS Spritesheet and Phaser 3 JSONHash), and \`${SHEET_MANIFEST_FILE}\` (\`${SHEET_MANIFEST_SPEC}\`) ` +
+    `\`anchor\` at world (0, 0)), and \`${SHEET_MANIFEST_FILE}\` (\`${SHEET_MANIFEST_SPEC}\`) ` +
     'in each set directory; diagnostic `f####.png` and `contact.png` stay over opaque `BACKGROUND` unchanged',
   'sheet-format':
     `the table format \`render --sheet\` writes beside each sheet page (default \`${DEFAULT_SHEET_FORMAT}\`; known formats: ${SHEET_FORMATS.join(', ')}). ` +

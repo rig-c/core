@@ -40,7 +40,7 @@ import { outsideLine, outsideViewport, pinnedRecord, readViewportBox, viewportOf
 import { PASS_THROUGH_FILE, passFrameLine, type PassPair, passSummaryLine, passThroughFileOf, passThroughOf, passThroughText, PassThroughError, readPassPairs } from '../passthrough.ts';
 import type { Plate } from '../../tools/plate.ts';
 import { OVERLAPS_FILE, OverlapError, overlapLine, overlapPlate, overlapsFileOf, overlapsOf, overlapsPlateFile, overlapsText, plateParticipants, staticLine } from '../overlaps.ts';
-import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError, sheetRigNameOf, sheetSidecarRecord } from '../sheet.ts';
+import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError, sheetRigNameOf, sheetSidecarRecord, sheetSourceOf } from '../sheet.ts';
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
@@ -968,22 +968,26 @@ export function cmdRender(flags: Record<string, string>): void {
     }
     const sheetPacks = new Map<string, SheetSetPack>();
     if (wantsSheet) {
-      const rigName = sheetRigNameOf(skeletonPath, modelTextBeside(skeletonPath, skeletonText) ?? null);
+      const modelDocText = modelTextBeside(skeletonPath, skeletonText) ?? null;
+      const rigName = sheetRigNameOf(skeletonPath, modelDocText, skeletonText);
+      const source = sheetSourceOf(skeletonPath, skeletonText, modelDocText);
       const pinned = given === undefined ? undefined : pinnedRecord(given.by, outsideViewport(sampled, viewport));
       for (const [name, frames] of sampled) {
         const animation = name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name;
+        const setName = frameSetDir(name, fps);
         try {
           sheetPacks.set(
             name,
             buildSheetSet({
               rigName,
-              setName: name,
+              setName,
               animation,
               fps,
               maxSide,
               viewport,
               frames,
               atlasPages: pages,
+              source,
               format: sheetFormat,
               pageEdges: sheetPageEdges,
               skin,

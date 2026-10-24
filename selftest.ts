@@ -718,7 +718,7 @@ import { compareCut4c5Facts, comparePosedFacts, sumPosedTallies, CUT_4C5_FAMILIE
 import { compareSteppedPoses, coreRefusalOf, documentedCoreRefusal, STEPPED_FACT_FAMILIES, type SteppedFactFamily } from './tools/verdict_gate.ts';
 import { MERGED_TALLY_SPEC, PREPUBLISH_TALLY_VARIABLE, tallyDecision, treeHead, type MergedTally, type TallyTree } from './scripts/prepublish_gate.ts';
 import { ALIASES } from './scripts/alias_tarball.ts';
-import { VERIFY_NOVA_REMOTE } from './scripts/verify_nova.ts';
+import { VERIFY_NOVA_REMOTE, verifyNovaRemote } from './scripts/verify_nova.ts';
 import { judgeSquash, parseFaults, squashSubject, squashText } from './scripts/commit_parse.ts';
 import { rigFactsDerivationsOf, modelRigFacts, RIG_FACT_FAMILIES, rigFactsDerivations, rigFactsSpelling, sumTallies, type DerivationTally, type RigFactFamily, type RigFacts } from './tools/rig_facts.ts';
 import {
@@ -86194,6 +86194,101 @@ function runCurrencySuite(): number {
     say('CUR130_VERIFY_NOVA_PREPARES_THE_UPLOAD_AND_REFUSES_A_JOB_WITH_NO_LABEL_OWNER_OR_SESSION_BEFORE_SENDING_IT', probes.length === 0,
       probeDetail(probes.length === 0, probes, `${cases.length} reading(s): ${cases.join('; ')}`),
       'issue #1474: the pool uploads a tree with no .git and no examples/, so the full selftest is sent through a hand that prepares both; a job the pool would refuse after the upload is refused here before it');
+  }
+
+  // Issue #1499: exercise the actual CLI before the upload boundary. Only the
+  // network is substituted, by a child preload, so an offline selftest neither
+  // downloads a runtime nor depends on today's GitHub availability.
+  {
+    const probes: string[] = [];
+    const cases: string[] = [];
+    const work = mkdtempSync(join(harnessTemp(), 'rigc-nova-bun-'));
+    const version = '1.2.0'; // Published release; old enough to have no API asset digest.
+    const asset = 'bun-linux-x64-baseline.zip';
+    const url = `https://github.com/oven-sh/bun/releases/download/bun-v${version}/${asset}`;
+    const sha256 = createHash('sha256').update('archive').digest('hex');
+    try {
+      const marker = join(work, 'runner.json');
+      const requests = join(work, 'requests.jsonl');
+      const runner = join(work, 'runner');
+      const recorder = join(work, 'record.js');
+      const preload = join(work, 'network.js');
+      // Bun 1.2.0's -e argv contains [eval] and consumes the first forwarded
+      // argument; a file has the ordinary argv shape on both supported lines.
+      writeFileSync(recorder, `await Bun.write(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2))); process.exit(3);\n`);
+      writeFileSync(runner, `#!/bin/sh\nexec '${process.execPath}' '${recorder}' "$@"\n`);
+      chmodSync(runner, 0o755);
+      writeFileSync(preload, `
+        import { appendFileSync } from 'node:fs';
+        globalThis.fetch = async (url, init) => {
+          appendFileSync(${JSON.stringify(requests)}, JSON.stringify([url, init.method]) + '\\n');
+          const mode = process.env.NOVA_BUN_CONTROL;
+          if (mode === 'offline') throw new Error('network unavailable');
+          if (mode === 'unknown' || (mode === 'archive-404' && init.method === 'HEAD')) return new Response('', { status: 404 });
+          const row = ${JSON.stringify(`${sha256}  ${asset}\n`)};
+          const text = mode === 'missing' ? '' : mode === 'duplicate' ? row + row : mode === 'bad-hash' ? 'bad  ${asset}\\n' : row;
+          return new Response(text);
+        };
+      `);
+      const full = ['--label', '#1499 chosen Bun', '--owner', 'a squad', '--session', 'a-session-id'];
+      const hand = (extra: string[], mode = 'ok'): { status: number | null; stderr: string; args: string[] | null; requests: string[][] } => {
+        rmSync(marker, { force: true }); rmSync(requests, { force: true });
+        const r = spawnSync(process.execPath, ['--preload', preload, join(root, 'scripts', 'verify_nova.ts'), ...full, ...extra], {
+          cwd: work, encoding: 'utf8', env: { ...process.env, NOVA_RUN: runner, NOVA_BUN_CONTROL: mode },
+        });
+        return { status: r.status, stderr: r.stderr, args: existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) as string[] : null,
+          requests: existsSync(requests) ? readFileSync(requests, 'utf8').trim().split('\n').map((s) => JSON.parse(s) as string[]) : [] };
+      };
+      const plain = hand([], 'offline');
+      if (plain.status !== 3 || plain.requests.length !== 0 || plain.args?.join('\n') !== [...full, '--', 'bash', '-c', VERIFY_NOVA_REMOTE].join('\n')) probes.push(`default changed: ${JSON.stringify(plain)}`);
+      else cases.push('default: byte-identical command, no release fetch, runner exit propagated');
+      const pinned = verifyNovaRemote({ version, url, sha256 });
+      const chosen = hand(['--bun', version]);
+      const expectedRequests = [[url.replace(asset, 'SHASUMS256.txt'), 'GET'], [url, 'HEAD']];
+      if (chosen.status !== 3 || chosen.args?.join('\n') !== [...full, '--', 'bash', '-c', pinned].join('\n') || JSON.stringify(chosen.requests) !== JSON.stringify(expectedRequests)) probes.push(`chosen version lost before the runner: ${JSON.stringify(chosen)}`);
+      else cases.push('exact release manifest and archive checked before runner; pinned URL/digest and version reach job');
+      for (const extra of [['--bun'], ['--bun', '--owner'], ['--bun', version, '--bun', version], ...['', ' ', 'latest', 'v1.2.0', '1.2', '01.2.0', '1.2.0-canary', '1.2.0;echo bad', '1.2.0\n'].map((v) => ['--bun', v])]) {
+        const r = hand(extra);
+        if (r.status !== 2 || r.args !== null || r.requests.length !== 0 || !r.stderr.startsWith('verify:nova: --bun')) probes.push(`malformed ${JSON.stringify(extra)} was not refused before fetch/upload: ${JSON.stringify(r)}`);
+        else cases.push(`${JSON.stringify(extra)}: named refusal before fetch/upload`);
+      }
+      for (const [mode, value, text] of [
+        ['unknown', '9999.0.0', 'HTTP 404'], ['missing', version, '0 row(s)'], ['duplicate', version, '2 row(s)'],
+        ['bad-hash', version, 'no unambiguous valid checksum'], ['archive-404', version, 'HTTP 404'], ['offline', version, 'network unavailable'],
+      ]) {
+        const r = hand(['--bun', value], mode);
+        if (r.status !== 2 || r.args !== null || !r.stderr.includes(`--bun "${value}"`) || !r.stderr.includes(text) || r.requests.length !== (mode === 'archive-404' ? 2 : 1)) probes.push(`${mode} was not refused by name before upload: ${JSON.stringify(r)}`);
+        else cases.push(`${mode}: named refusal before upload`);
+      }
+
+      // Run the generated shell too: real SHA-256 reading, transport/extraction
+      // stubs, and two Buns. The old PATH's Bun must never run. No git is needed
+      // here: the upload already has a .git marker (CUR130 covers its absence).
+      const bin = join(work, 'bin'); const tmp = join(work, 'temp'); const calls = join(work, 'calls');
+      mkdirSync(bin); mkdirSync(tmp); writeFileSync(join(work, '.git'), 'prepared\n');
+      const executable = (name: string, body: string): void => { const file = join(bin, name); writeFileSync(file, `#!/bin/sh\n${body}\n`); chmodSync(file, 0o755); };
+      executable('uname', 'if [ "$1" = -s ]; then echo Linux; else echo x86_64; fi');
+      executable('curl', 'if [ "$NOVA_BUN_CONTROL" = transport ]; then exit 22; fi; while [ "$1" != -o ]; do shift; done; printf archive > "$2"');
+      executable('python3', `if [ "$NOVA_BUN_CONTROL" = extract ]; then exit 1; fi\nmkdir -p "$3/bun-linux-x64-baseline"\ncat > "$3/bun-linux-x64-baseline/bun" <<'BUN'\n#!/bin/sh\nif [ "$1" = --version ]; then if [ "$NOVA_BUN_CONTROL" = wrong ]; then echo 1.4.4; else echo 1.2.0; fi; exit 0; fi\nprintf '%s\\n' "$*" >> '${calls}'\nif [ "$2" = selftest ]; then exit 5; fi\nBUN\nchmod +x "$3/bun-linux-x64-baseline/bun"`);
+      executable('bun', `echo fallback >> '${calls}'; exit 99`);
+      // Portable checksum reader for the shell control, doing real hashing in
+      // the Bun running the suite; Nova uses its installed sha256sum.
+      executable('sha256sum', `exec '${process.execPath}' -e 'import {createHash} from "node:crypto"; const line = await Bun.stdin.text(); const [want, file] = line.trim().split(/\\s+/); process.exit(createHash("sha256").update(new Uint8Array(await Bun.file(file).arrayBuffer())).digest("hex") === want ? 0 : 1)'`);
+      for (const mode of ['ok', 'corrupt', 'wrong', 'transport', 'extract']) {
+        rmSync(calls, { force: true });
+        const command = mode === 'corrupt' ? verifyNovaRemote({ version, url, sha256: '0'.repeat(64) }) : pinned;
+        const r = spawnSync('bash', ['-c', command], { cwd: work, encoding: 'utf8', env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`, TMPDIR: tmp, NOVA_BUN_CONTROL: mode } });
+        const read = existsSync(calls) ? readFileSync(calls, 'utf8') : '';
+        const ok = mode === 'ok'
+          ? r.status === 5 && r.stdout === 'verify:nova: Bun 1.2.0\n' && read === 'run fetch-examples\nrun selftest\n'
+          : r.status === 2 && read === '' && r.stderr.includes('--bun 1.2.0');
+        if (!ok || readdirSync(tmp).length !== 0) probes.push(`remote ${mode}: exit ${String(r.status)}, stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}, calls ${JSON.stringify(read)}, temporary files ${JSON.stringify(readdirSync(tmp))}`);
+        else cases.push(`remote ${mode}: ${mode === 'ok' ? 'first line names selected Bun, both commands use it, selftest exit preserved' : 'refused before selftest'}; private runtime cleaned`);
+      }
+    } finally { rmSync(work, { recursive: true, force: true }); }
+    say('CUR134_VERIFY_NOVA_PINS_BUN_AND_REFUSES_UNFETCHABLE_VERSIONS_BEFORE_UPLOAD', probes.length === 0,
+      probeDetail(probes.length === 0, probes, `${cases.length} readings: ${cases.join('; ')}`),
+      'issue #1499: a version-shaped string is not evidence of a fetchable release; the actual release checksum and archive must be resolved before the upload, and the downloaded bytes and runtime checked before the full selftest');
   }
 
   return bad;

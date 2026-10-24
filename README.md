@@ -147,6 +147,25 @@ runners and on Linux at the declared minimum, Bun 1.2.0 (the `installs` and
 repository material, not in the npm package); a platform
 whose leg is red there is not one the package is known to run on.
 
+From a source checkout, `bun run verify:nova -- --label "<issue + purpose>"
+--owner "<who>" --session "<session id>" [--bun <version>]` sends the full
+selftest to the Nova pool (`NOVA_RUN` names the runner, or `nova-run.sh` is on
+PATH). `--bun 1.2.0` selects that exact stable release. Before upload, the hand
+fetches Bun's official `SHASUMS256.txt` and checks that the Linux x64 baseline
+archive is available; on the pool it downloads the pinned archive, verifies its
+SHA-256, checks its executable's version, and puts that private Bun first on PATH
+for corpus fetch and selftest. The remote command's first line is
+`verify:nova: Bun 1.2.0`. The temporary runtime is removed on exit. Without
+`--bun`, the pool's Bun and existing command are unchanged; dependency installation
+still uses the pool runner's installation step. The selftest's exit is returned
+unchanged: selecting a runtime does not promise a green run. Memory ceilings
+remain those of that platform and Bun major.minor's tracked row; a missing
+measurement remains a reported HOLE. Malformed, duplicate or missing
+versions, unavailable releases/assets and unreadable checksums are refused by
+name with exit 2 before upload. Use a published exact `X.Y.Z` (no `v` prefix,
+alias, range or prerelease), or retry a failed network fetch. This is repository
+verification tooling, not an installed `rigc` command or a change to CI's matrix.
+
 **The npm package is `rig-c`; the command it installs is `rigc`.** npm
 refuses the name `rigc` as too similar to packages that already exist, so the
 project and the executable keep their name and the registry entry carries one

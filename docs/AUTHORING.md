@@ -75,6 +75,27 @@ which is also repository material and not in the published package,
 *What a run may read* — the prompt that starts a run quotes them
 outright, which is the copy that binds.
 
+Repository maintainers can run the full selftest on Nova with
+`bun run verify:nova -- --label "<issue + purpose>" --owner "<who>"
+--session "<session id>" [--bun <version>]`. This is checkout tooling, not an
+installed `rigc` command. `NOVA_RUN` names `nova-run.sh`, or it is found on PATH.
+Without `--bun` the pool's runtime and command are unchanged. With `--bun 1.2.0`,
+the remote command's first line reads `verify:nova: Bun 1.2.0`; both corpus fetch
+and selftest use that privately downloaded runtime, removed on exit. The runner's
+dependency installation step still uses the pool's Bun.
+The selftest's exit is returned unchanged, including a failure under the chosen
+runtime. Memory ceilings still use that platform and Bun major.minor's tracked
+row; selecting a version neither raises a ceiling nor turns a missing measurement
+(a reported HOLE) into a pass.
+
+| `verify:nova` refusal (exit 2) | Repair |
+| --- | --- |
+| `--bun needs a value`, `--bun was given more than once`, or `--bun "<value>": expected an exact stable version X.Y.Z` | State one published exact stable release, e.g. `--bun 1.2.0`; aliases, prefixes, ranges, prereleases and whitespace are refused before upload |
+| `--bun "<version>": cannot fetch …` | The official release manifest or Linux x64 baseline archive is unavailable, or its fetch failed. Choose a published release with that asset or retry with network access to github.com. The pool runner has not been started |
+| `--bun "<version>": Bun's SHASUMS256.txt must name exactly one SHA-256 …` | The official manifest has no unambiguous valid digest for that archive; choose a release whose manifest names it. Refused before upload |
+| `--bun <version>: pinned runtime preparation failed; selftest was not started` | On the pool, check the download, SHA-256, archive extraction and Linux x64 host. The pinned archive must match Bun's official manifest; do not bypass the check |
+| `--bun <version>: downloaded Bun reports <found>; selftest was not started` | The downloaded executable is not the requested runtime; retry a verified official release. No selftest ran under the wrong version |
+
 ## The vocabulary is Spine's
 
 Wherever rigc has no better abstraction it uses **Spine 4.3's own concept, its own

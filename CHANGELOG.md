@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.70.0](https://github.com/rig-c/core/compare/v2.69.0...v2.70.0) (2026-10-25)
+
+
+### Features
+
+* **engines:** raise the declared Bun floor to 1.4.0 ([#1571](https://github.com/rig-c/core/issues/1571)) ([b1c9768](https://github.com/rig-c/core/commit/b1c976802f960a95a059212f2e3f0e987ff8aed1)), closes [#1570](https://github.com/rig-c/core/issues/1570)
+* **render:** deterministic sprite sheets with a json-hash table (--sheet) ([#1572](https://github.com/rig-c/core/issues/1572)) ([14fb118](https://github.com/rig-c/core/commit/14fb118312b691d3eec4dc0712d641640b06a736)), closes [#1560](https://github.com/rig-c/core/issues/1560)
+* **tools:** verify render --sheet output in pinned PixiJS and Phaser readers ([#1573](https://github.com/rig-c/core/issues/1573)) ([d0344a8](https://github.com/rig-c/core/commit/d0344a8b673a6ddbb4b5071484a2f293425ce236)), closes [#1560](https://github.com/rig-c/core/issues/1560)
+* **verify:** select a pinned Bun for Nova selftests ([#1564](https://github.com/rig-c/core/issues/1564)) ([1231889](https://github.com/rig-c/core/commit/12318890eb9321fe52658db1a949ff457337341e)), closes [#1499](https://github.com/rig-c/core/issues/1499)
+
+
+### Bug Fixes
+
+* **seam:** carry band cells by vertex displacement, not absolute re-interpolation ([#1569](https://github.com/rig-c/core/issues/1569)) ([e384a0e](https://github.com/rig-c/core/commit/e384a0e56e5e053eae4e99d6808c3732054297e3))
+
 ## [2.69.0](https://github.com/rig-c/core/compare/v2.68.0...v2.69.0) (2026-10-24)
 
 

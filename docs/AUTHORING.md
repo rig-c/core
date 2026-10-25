@@ -9060,6 +9060,23 @@ Draw order does not enter: a cell is covered or bare whichever piece is in front
 An owner says which piece drew a ghost cell; it does not say which piece is over
 or under the other, or whether that exposure should fail a consumer's policy.
 
+**Outside the overlap hull is outside the gap reading.** Both `gap` and its
+`gapOpen` partition are judged only inside the carried setup-overlap hull. Art
+that reaches beyond a joint disc, such as a drape over an elbow, can break
+outside that hull without a gap being reported. A gap of 0 is never a statement
+that the seam is closed outside the hull; inspect `ghost` and the actual frames
+too. Ghost independently names one-sided exposure of the carried setup overlap,
+not every visible break in the silhouette.
+
+In the public [draped-sleeve fixture](https://github.com/rig-c/parts/blob/0628d7bc311a2b548edf7a11e8407546357d4b4d/fixtures/hybrid_limb.ts),
+measured on core `f273358` at both −30° and +30°, the hard cut reads `gap = 0`,
+`gapOpen = 0`, `ghost = 8` cells; the hybrid's two interfaces read 0 in all three
+classes. The [cell overlay](https://github.com/rig-c/core/blob/570a2954747780a2169fa6036eebe53f3ea66f2a/bench/studies/2026-10-25-seam-reach/evidence/cut-endpoint-cell-overlay.png)
+shows the notch and flap excluded outside the hull, while ghost names different
+cells on the joint rim. The [measurement receipt](https://github.com/rig-c/core/blob/570a2954747780a2169fa6036eebe53f3ea66f2a/bench/studies/2026-10-25-seam-reach/evidence/receipt.json)
+pins the inputs, commands and frame digest; these are seam cells, not display
+pixels. See [#1575](https://github.com/rig-c/core/issues/1575) for the reading.
+
 **Its reach, stated.** A piece folded right back over its partner carries the band
 across the region it vacated, so a hull that wide reads the vacated cells its
 partner's view still finds drawn. And no size is too small to print: on

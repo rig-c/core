@@ -202,6 +202,18 @@ export interface SeamFile {
   pairs: SeamPairReading[];
 }
 
+/** Hit, miss and live-entry counters for `seamsOf`'s single-entry `readFrame` cache controls. */
+export interface SeamCacheStats {
+  hits: number;
+  misses: number;
+  maxEntries: number;
+}
+
+/** Opaque holder used only by the `cross-call` negative control in `selftest.ts`. */
+export interface SeamCrossCallSlot {
+  entry: CachedFrameRead | null;
+}
+
 /**
  * A planted defect, for the suite's mutants only (`SE` controls in
  * `selftest.ts`). Production passes none.
@@ -223,6 +235,16 @@ export interface SeamPlant {
   skipAsRead?: boolean;
   /** Count nothing. */
   never?: boolean;
+  /** Disable `readFrame` reuse or plant a defective cache key/retention mode (`SE30`–`SE33`). */
+  cacheKey?: 'off' | 'rest-only' | 'unbounded' | 'cross-call';
+  /** Shared slot for the `cross-call` negative control (`SE31`). */
+  crossCallSlot?: SeamCrossCallSlot;
+  /** Skip reading a frame index (`SE32`). */
+  skipFrame?: number;
+  /** Skip reading a `"<a>:<b>"` pair (`SE32`). */
+  skipPair?: string;
+  /** Record cache hits, misses and maximum live entries (`SE30`–`SE33`). */
+  cacheStats?: SeamCacheStats;
 }
 
 /** Twice the signed area of (a, b, c), each a point index into `xy`. */
@@ -491,6 +513,281 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   return { gap, ghost, ghostA, ghostB, gapOpen, gapCovered };
 }
 
+interface FrameRead {
+  gap: Cells;
+  ghost: Cells;
+  ghostA: Cells;
+  ghostB: Cells;
+  gapOpen: Cells;
+  gapCovered: Cells;
+}
+
+interface PieceSnapshot {
+  kind: Piece['kind'];
+  slot: string;
+  page: string;
+  world: number[];
+  uvs: number[];
+  tint: [number, number, number, number];
+  dark: [number, number, number] | undefined;
+  uvWindow: { u0: number; v0: number; u1: number; v1: number } | undefined;
+  triangles: number[] | undefined;
+  source: { world: number[]; uvs: number[] } | undefined;
+}
+
+interface SideSnapshot {
+  piece: PieceSnapshot;
+  rest: number[];
+  triangles: number[];
+  page: Plate;
+  pageWidth: number;
+  pageHeight: number;
+  pageData: Uint8Array;
+  pageByteLength: number;
+}
+
+interface FramePieceSnapshot {
+  piece: PieceSnapshot;
+  page: Plate | undefined;
+  pageWidth: number;
+  pageHeight: number;
+  pageData: Uint8Array | undefined;
+  pageByteLength: number;
+}
+
+/** One single-entry exact-input `readFrame` snapshot scoped to one `seamsOf` call. */
+export interface CachedFrameRead {
+  a: string;
+  b: string;
+  cell: number;
+  plant: SeamPlant;
+  A: SideSnapshot;
+  B: SideSnapshot;
+  framePieces: FramePieceSnapshot[] | null;
+  read: FrameRead | null;
+}
+
+function sameNumbers(a: ArrayLike<number>, b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (!Object.is(a[i], b[i])) return false;
+  }
+  return true;
+}
+
+function sameOptionalNumbers(a: ArrayLike<number> | undefined, b: readonly number[] | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return sameNumbers(a, b);
+}
+
+function sameUvWindow(
+  a: { u0: number; v0: number; u1: number; v1: number } | undefined,
+  b: { u0: number; v0: number; u1: number; v1: number } | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return Object.is(a.u0, b.u0) && Object.is(a.v0, b.v0) && Object.is(a.u1, b.u1) && Object.is(a.v1, b.v1);
+}
+
+function sameClipSource(
+  a: { world: number[]; uvs: number[] } | undefined,
+  b: { world: number[]; uvs: number[] } | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return sameNumbers(a.world, b.world) && sameNumbers(a.uvs, b.uvs);
+}
+
+function snapshotPiece(piece: Piece): PieceSnapshot {
+  return {
+    kind: piece.kind,
+    slot: piece.slot,
+    page: piece.page,
+    world: Array.from(piece.world),
+    uvs: Array.from(piece.uvs),
+    tint: [piece.tint[0], piece.tint[1], piece.tint[2], piece.tint[3]],
+    dark: piece.dark === undefined ? undefined : [piece.dark[0], piece.dark[1], piece.dark[2]],
+    uvWindow:
+      piece.uvWindow === undefined
+        ? undefined
+        : { u0: piece.uvWindow.u0, v0: piece.uvWindow.v0, u1: piece.uvWindow.u1, v1: piece.uvWindow.v1 },
+    triangles: piece.kind === 'mesh' ? Array.from(piece.triangles) : undefined,
+    source:
+      piece.kind === 'mesh' && piece.source !== undefined
+        ? { world: Array.from(piece.source.world), uvs: Array.from(piece.source.uvs) }
+        : undefined,
+  };
+}
+
+function samePiece(piece: Piece, snap: PieceSnapshot, ignorePosed: boolean): boolean {
+  if (piece.kind !== snap.kind || piece.slot !== snap.slot || piece.page !== snap.page) return false;
+  if (ignorePosed) return true;
+  if (!sameNumbers(piece.uvs, snap.uvs)) return false;
+  if (piece.kind === 'mesh') {
+    if (snap.triangles === undefined || !sameNumbers(piece.triangles, snap.triangles)) return false;
+    if (!sameClipSource(piece.source, snap.source)) return false;
+  } else if (snap.triangles !== undefined || snap.source !== undefined) {
+    return false;
+  }
+  if (!sameNumbers(piece.world, snap.world)) return false;
+  if (!sameNumbers(piece.tint, snap.tint)) return false;
+  if (!sameOptionalNumbers(piece.dark, snap.dark)) return false;
+  if (!sameUvWindow(piece.uvWindow, snap.uvWindow)) return false;
+  return true;
+}
+
+function snapshotSide(side: Side): SideSnapshot {
+  return {
+    piece: snapshotPiece(side.piece),
+    rest: Array.from(side.rest),
+    triangles: Array.from(side.triangles),
+    page: side.page,
+    pageWidth: side.page.width,
+    pageHeight: side.page.height,
+    pageData: side.page.data,
+    pageByteLength: side.page.data.byteLength,
+  };
+}
+
+function sameSide(side: Side, snap: SideSnapshot, mode: SeamPlant['cacheKey']): boolean {
+  if (mode === 'cross-call') {
+    return sameNumbers(side.piece.world, snap.piece.world);
+  }
+  if (
+    side.page !== snap.page ||
+    side.page.width !== snap.pageWidth ||
+    side.page.height !== snap.pageHeight ||
+    side.page.data !== snap.pageData ||
+    side.page.data.byteLength !== snap.pageByteLength
+  ) {
+    return false;
+  }
+  if (!sameNumbers(side.rest, snap.rest) || !sameNumbers(side.triangles, snap.triangles)) return false;
+  return samePiece(side.piece, snap.piece, mode === 'rest-only');
+}
+
+function snapshotFramePieces(pieces: readonly Piece[], pages: ReadonlyMap<string, Plate>): FramePieceSnapshot[] {
+  return pieces.map((piece) => {
+    const page = pages.get(piece.page);
+    return {
+      piece: snapshotPiece(piece),
+      page,
+      pageWidth: page?.width ?? 0,
+      pageHeight: page?.height ?? 0,
+      pageData: page?.data,
+      pageByteLength: page?.data.byteLength ?? 0,
+    };
+  });
+}
+
+function sameFramePieces(
+  pieces: readonly Piece[],
+  pages: ReadonlyMap<string, Plate>,
+  snaps: readonly FramePieceSnapshot[],
+): boolean {
+  if (pieces.length !== snaps.length) return false;
+  for (let i = 0; i < pieces.length; i++) {
+    const piece = pieces[i];
+    const snap = snaps[i];
+    const page = pages.get(piece.page);
+    if (
+      page !== snap.page ||
+      (page?.width ?? 0) !== snap.pageWidth ||
+      (page?.height ?? 0) !== snap.pageHeight ||
+      page?.data !== snap.pageData ||
+      (page?.data.byteLength ?? 0) !== snap.pageByteLength
+    ) {
+      return false;
+    }
+    if (!samePiece(piece, snap.piece, false)) return false;
+  }
+  return true;
+}
+
+function samePlant(a: SeamPlant, b: SeamPlant): boolean {
+  return (
+    a.world === b.world &&
+    a.noHull === b.noHull &&
+    a.bothViews === b.bothViews &&
+    a.ghostAnyArt === b.ghostAnyArt &&
+    a.ghostOnlyA === b.ghostOnlyA &&
+    a.gapCoverage === b.gapCoverage &&
+    a.skipAsRead === b.skipAsRead &&
+    a.never === b.never &&
+    a.cacheKey === b.cacheKey &&
+    a.skipFrame === b.skipFrame &&
+    a.skipPair === b.skipPair
+  );
+}
+
+function needsFramePieces(read: FrameRead | null, plant: SeamPlant): boolean {
+  return (
+    read !== null &&
+    read.gap.px > 0 &&
+    plant.gapCoverage !== 'covered' &&
+    plant.gapCoverage !== 'open' &&
+    plant.gapCoverage !== 'pair'
+  );
+}
+
+function cloneCells(c: Cells): Cells {
+  return { px: c.px, box: c.box === null ? null : [c.box[0], c.box[1], c.box[2], c.box[3]] };
+}
+
+function cloneFrameRead(r: FrameRead | null): FrameRead | null {
+  if (r === null) return null;
+  return {
+    gap: cloneCells(r.gap),
+    ghost: cloneCells(r.ghost),
+    ghostA: cloneCells(r.ghostA),
+    ghostB: cloneCells(r.ghostB),
+    gapOpen: cloneCells(r.gapOpen),
+    gapCovered: cloneCells(r.gapCovered),
+  };
+}
+
+function snapshotCachedFrameRead(
+  a: string,
+  b: string,
+  A: Side,
+  B: Side,
+  cell: number,
+  plant: SeamPlant,
+  pieces: readonly Piece[],
+  pages: ReadonlyMap<string, Plate>,
+  read: FrameRead | null,
+): CachedFrameRead {
+  return {
+    a,
+    b,
+    cell,
+    plant: { ...plant },
+    A: snapshotSide(A),
+    B: snapshotSide(B),
+    framePieces: needsFramePieces(read, plant) ? snapshotFramePieces(pieces, pages) : null,
+    read: cloneFrameRead(read),
+  };
+}
+
+function matchesCachedFrameRead(
+  entry: CachedFrameRead,
+  a: string,
+  b: string,
+  A: Side,
+  B: Side,
+  cell: number,
+  plant: SeamPlant,
+  pieces: readonly Piece[],
+  pages: ReadonlyMap<string, Plate>,
+): boolean {
+  if (entry.a !== a || entry.b !== b) return false;
+  if (!Object.is(cell, entry.cell) || !samePlant(plant, entry.plant)) return false;
+  const mode = plant.cacheKey;
+  if (!sameSide(A, entry.A, mode) || !sameSide(B, entry.B, mode)) return false;
+  if (mode !== 'rest-only' && mode !== 'cross-call' && entry.framePieces !== null) {
+    if (!sameFramePieces(pieces, pages, entry.framePieces)) return false;
+  }
+  return true;
+}
+
 const restKey = (slot: string, attachment: string): string => `${slot}\u0000${attachment}`;
 
 /** `frames` as spans of consecutive indices, each with its first and last time and its most cells. */
@@ -542,7 +839,13 @@ export function seamsOf(
     if (page === undefined) throw new SeamError(`slot "${slot}" samples atlas page "${piece.page}", which is not among [${[...pages.keys()].join(', ')}]`);
     return { piece, rest: entry.vertices, triangles: entry.triangles, page };
   };
-  return pairs.map(({ a, b }) => {
+  // Issue #1574: single-entry exact-input readFrame reuse scoped to one seamsOf call (local variable, never module state).
+  let cached: CachedFrameRead | null = plant.cacheKey === 'cross-call' ? (plant.crossCallSlot?.entry ?? null) : null;
+  const unbounded: CachedFrameRead[] = [];
+  const stats = plant.cacheStats;
+  const activePairs = plant.skipPair === undefined ? pairs : pairs.filter(({ a, b }) => `${a}:${b}` !== plant.skipPair);
+  return activePairs.map(({ a, b }) => {
+    if (plant.cacheKey !== 'unbounded' && plant.cacheKey !== 'cross-call') cached = null;
     let drawn = 0;
     let banded = 0;
     const gaps: SeamHit[] = [];
@@ -552,16 +855,44 @@ export function seamsOf(
     const openGaps: SeamHit[] = [];
     const coveredGaps: SeamHit[] = [];
     for (const frame of frames) {
+      if (plant.skipFrame !== undefined && frame.index === plant.skipFrame) continue;
       const A = sideOf(frame, a);
       const B = sideOf(frame, b);
-      if (A === null || B === null) continue;
+      if (A === null || B === null) {
+        if (plant.cacheKey !== 'unbounded' && plant.cacheKey !== 'cross-call') cached = null;
+        continue;
+      }
       drawn++;
       const cellA = texelSize(A.piece, A.rest, A.page);
       const cellB = texelSize(B.piece, B.rest, B.page);
       const flat = cellA === null ? a : cellB === null ? b : null;
       if (cellA === null || cellB === null) throw new SeamError(`frame ${frame.index}: slot "${flat}" draws no area at its setup pose, so it has no texel to grid the seam by`);
       const cell = Math.max(cellA, cellB);
-      const read = readFrame(A, B, cell, plant, frame, pages);
+      let read: FrameRead | null;
+      if (plant.cacheKey === 'off') {
+        if (stats !== undefined) stats.misses++;
+        read = readFrame(A, B, cell, plant, frame, pages);
+      } else if (plant.cacheKey === 'unbounded') {
+        const hit = unbounded.find((entry) => matchesCachedFrameRead(entry, a, b, A, B, cell, plant, frame.pieces, pages));
+        if (hit !== undefined) {
+          if (stats !== undefined) stats.hits++;
+          read = cloneFrameRead(hit.read);
+        } else {
+          if (stats !== undefined) stats.misses++;
+          read = readFrame(A, B, cell, plant, frame, pages);
+          unbounded.push(snapshotCachedFrameRead(a, b, A, B, cell, plant, frame.pieces, pages, read));
+          if (stats !== undefined) stats.maxEntries = Math.max(stats.maxEntries, unbounded.length);
+        }
+      } else if (cached !== null && matchesCachedFrameRead(cached, a, b, A, B, cell, plant, frame.pieces, pages)) {
+        if (stats !== undefined) stats.hits++;
+        read = cloneFrameRead(cached.read);
+      } else {
+        if (stats !== undefined) stats.misses++;
+        read = readFrame(A, B, cell, plant, frame, pages);
+        cached = snapshotCachedFrameRead(a, b, A, B, cell, plant, frame.pieces, pages, read);
+        if (plant.cacheKey === 'cross-call' && plant.crossCallSlot !== undefined) plant.crossCallSlot.entry = cached;
+        if (stats !== undefined) stats.maxEntries = Math.max(stats.maxEntries, 1);
+      }
       if (read === null) continue;
       banded++;
       for (const [cells, into] of [[read.gap, gaps], [read.ghost, ghosts], [read.ghostA, ghostsA], [read.ghostB, ghostsB], [read.gapOpen, openGaps], [read.gapCovered, coveredGaps]] as const) {

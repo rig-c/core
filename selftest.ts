@@ -142545,7 +142545,7 @@ function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slo
 // seam — where two slots that meet stop meeting (issue #1456)
 // ---------------------------------------------------------------------------
 
-import { carry, SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
+import { carry, SEAM_FILE, type SeamCacheStats, type SeamCrossCallSlot, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
 
 /**
  * How far the seam probe turns the skirt, in degrees: the issue's figure, past
@@ -143018,6 +143018,442 @@ function runSeamSuite(): number {
     }
     const ok = faults.length === 0;
     say('SE29_STATIONARY_AND_TRANSLATED_CARRY_READS_THE_PORTABLE_CONTACT_FIXTURES_EXACTLY', ok, probeDetail(ok, faults, 'portable contact fixtures read 64/64/512 open GAP cells at t = 1 with 0 on hold, and stationary carry(q) = q is exact on every band cell'), 'issue #1568: carry must apply vertex displacements from (qx, qy) so stationary and translated pieces do not drift the carried hull');
+  }
+  {
+    // Issue #1574 (moved from parts#701): single-entry, exact-input readFrame reuse inside one seamsOf call,
+    // and one named negative control for each of the five rejected forms.
+    const rect = (slot: string, x: number, width: number, page = slot): Piece => ({
+      kind: 'region',
+      slot,
+      page,
+      world: [x, 0, x, 4, x + width, 4, x + width, 0],
+      uvs: [0, 1, 0, 0, 1, 0, 1, 1],
+      tint: [1, 1, 1, 1],
+    });
+    const plate = (width: number): Plate => {
+      const p = new Plate(width, 4);
+      for (let y = 0; y < 4; y++) for (let x = 0; x < width; x++) p.set(x, y, [255, 255, 255, 255]);
+      return p;
+    };
+    const frameOf = (pieces: Piece[], index = 0): { index: number; time: number; pieces: Piece[]; attachments: AttachmentPose[] } => ({
+      index,
+      time: index / fps,
+      pieces,
+      attachments: pieces.map((p) => ({ slot: p.slot, attachment: p.slot, vertices: p.world, color: p.tint })),
+    });
+    const freshStats = (): SeamCacheStats => ({ hits: 0, misses: 0, maxEntries: 0 });
+
+    // SE30 — Rejected form 1: no rest-only keys (false arm hits).
+    {
+      const faults = [...pre];
+      if (pre.length === 0) {
+        const uncached = library(built, SEAM_PROBE_PAIRS, { cacheKey: 'off' });
+        for (const set of sets) {
+          if (JSON.stringify(clean.get(set)) !== JSON.stringify(uncached.get(set))) {
+            faults.push(`"${set}": cached seamsOf differs from uncached seamsOf`);
+          }
+        }
+      }
+      const sixPairs: readonly SeamPair[] = [
+        { a: 'thigh_r', b: 'shin_r' },
+        { a: 'shin_r', b: 'foot_r' },
+        { a: 'thigh_l', b: 'shin_l' },
+        { a: 'shin_l', b: 'foot_l' },
+        { a: 'upperarm_l', b: 'forearm_l' },
+        { a: 'upperarm_r', b: 'forearm_r' },
+      ];
+      const slotRest = [
+        rect('thigh_r', 0, 4, 'p'),
+        rect('shin_r', 2, 4, 'p'),
+        rect('foot_r', 4, 4, 'p'),
+        rect('thigh_l', 10, 4, 'p'),
+        rect('shin_l', 12, 4, 'p'),
+        rect('foot_l', 14, 4, 'p'),
+        rect('upperarm_l', 20, 4, 'p'),
+        rect('forearm_l', 22, 4, 'p'),
+        rect('upperarm_r', 30, 4, 'p'),
+        rect('forearm_r', 32, 4, 'p'),
+      ].map((p) => ({ slot: p.slot, attachment: p.slot, kind: 'region' as const, vertices: p.world, triangles: [0, 1, 2, 2, 3, 0] }));
+      const pages = new Map([['p', plate(4)], ['cover', plate(2)]]);
+      const frames41 = Array.from({ length: 41 }, (_, i) =>
+        frameOf(
+          [
+            rect('thigh_r', 0, 4, 'p'),
+            rect('shin_r', 2, 4, 'p'),
+            rect('foot_r', 4, 4, 'p'),
+            rect('thigh_l', 10, 4, 'p'),
+            rect('shin_l', 12, 4, 'p'),
+            rect('foot_l', 14, 4, 'p'),
+            rect('upperarm_l', 20, 4, 'p'),
+            rect('forearm_l', 22 + i * 0.1, 4, 'p'),
+            rect('upperarm_r', 30, 4, 'p'),
+            rect('forearm_r', 32 + i * 0.1, 4, 'p'),
+          ],
+          i,
+        ),
+      );
+      const exactStats = freshStats();
+      const restOnlyStats = freshStats();
+      const exactRead = seamsOf(sixPairs, slotRest, frames41, pages, { cacheStats: exactStats });
+      const offRead = seamsOf(sixPairs, slotRest, frames41, pages, { cacheKey: 'off' });
+      const restOnlyRead = seamsOf(sixPairs, slotRest, frames41, pages, { cacheKey: 'rest-only', cacheStats: restOnlyStats });
+      if (JSON.stringify(exactRead) !== JSON.stringify(offRead)) faults.push('41-frame wind-shaped fixture: exact-input cache differs from uncached');
+      if (exactStats.hits !== 160 || exactStats.misses !== 86 || exactStats.maxEntries !== 1) {
+        faults.push(`41-frame wind-shaped fixture: expected 160 hits / 86 misses / maxEntries 1, got ${JSON.stringify(exactStats)}`);
+      }
+      const armExact = exactRead.find((p) => p.a === 'upperarm_r' && p.b === 'forearm_r');
+      const armRestOnly = restOnlyRead.find((p) => p.a === 'upperarm_r' && p.b === 'forearm_r');
+      if ((armExact?.gap.worst?.px ?? 0) !== 8) faults.push(`moving arm expected worst gap 8 px, got ${armExact?.gap.worst?.px ?? 0}`);
+      if (restOnlyStats.hits !== 240 || (armRestOnly?.gap.worst?.px ?? 0) !== 0) {
+        faults.push(`rest-only mutant was not caught on moving arms: hits=${restOnlyStats.hits}, worstGap=${armRestOnly?.gap.worst?.px ?? -1}`);
+      }
+      // Every non-rest input change (tint, uvs, third-piece coverage when gap.px > 0) must also miss on exact-input and fault on rest-only.
+      const baseRest = [rect('a', 0, 4, 'p'), rect('b', 2, 4, 'p')].map((p) => ({
+        slot: p.slot,
+        attachment: p.slot,
+        kind: 'region' as const,
+        vertices: p.world,
+        triangles: [0, 1, 2, 2, 3, 0],
+      }));
+      const a0 = rect('a', 0, 4, 'p');
+      const bClosed = rect('b', 2, 4, 'p');
+      const bOpen = rect('b', 6, 4, 'p');
+      const bFaint: Piece = { ...bClosed, tint: [1, 1, 1, 0.25] };
+      const bShiftedUv: Piece = { ...bClosed, uvs: [0.25, 1, 0.25, 0, 1.25, 0, 1.25, 1] };
+      const cover = rect('cover', 4, 2, 'cover');
+      for (const [label, f0, f1] of [
+        ['tint', [a0, bClosed], [a0, bFaint]],
+        ['uvs', [a0, bClosed], [a0, bShiftedUv]],
+        ['third-piece cover over open gap', [a0, bOpen, cover], [a0, bOpen]],
+      ] as const) {
+        const sExact = freshStats();
+        const sRest = freshStats();
+        const twoFrames = [frameOf([...f0], 0), frameOf([...f1], 1)];
+        const rExact = seamsOf([{ a: 'a', b: 'b' }], baseRest, twoFrames, pages, { cacheStats: sExact });
+        const rOff = seamsOf([{ a: 'a', b: 'b' }], baseRest, twoFrames, pages, { cacheKey: 'off' });
+        seamsOf([{ a: 'a', b: 'b' }], baseRest, twoFrames, pages, { cacheKey: 'rest-only', cacheStats: sRest });
+        if (sExact.hits !== 0 || sExact.misses !== 2 || JSON.stringify(rExact) !== JSON.stringify(rOff)) {
+          faults.push(`${label}: exact-input cache did not miss or match uncached (hits=${sExact.hits})`);
+        }
+        if (sRest.hits !== 1) faults.push(`${label}: rest-only mutant did not falsely hit frame 1 (hits=${sRest.hits})`);
+      }
+      const ok = faults.length === 0;
+      say(
+        'SE30_EXACT_INPUT_SINGLE_ENTRY_CACHE_REUSES_STATIC_FRAMES_AND_REFUSES_REST_ONLY_KEYS',
+        ok,
+        probeDetail(
+          ok,
+          faults,
+          '4 static pairs × 40 repeat frames = 160 exact hits / 86 misses (0 on moving arms) with byte parity across all sets; planted rest-only key takes 80 false arm hits and misses the opening',
+        ),
+        'issue #1574: a rest-only key falsely hits moving arms and changed tint/UV/third-piece coverage; exact-input equality is required',
+      );
+    }
+
+    // SE31 — Rejected form 2 & HQ Ruling #2: no cross-revision or cross-world reuse; cache is a local inside one seamsOf call.
+    {
+      const faults: string[] = [];
+      const a0 = rect('a', 0, 4, 'p');
+      const bOpen = rect('b', 6, 4, 'p');
+      const restClosedAt6 = [a0, bOpen].map((p) => ({ slot: p.slot, attachment: p.slot, kind: 'region' as const, vertices: p.world, triangles: [0, 1, 2, 2, 3, 0] }));
+      const restOverlapAt2 = [a0, rect('b', 2, 4, 'p')].map((p) => ({ slot: p.slot, attachment: p.slot, kind: 'region' as const, vertices: p.world, triangles: [0, 1, 2, 2, 3, 0] }));
+      const pages1 = new Map([['p', plate(4)]]);
+      const pages2 = new Map([['p', plate(4)]]);
+      const singleOpenFrame = [frameOf([a0, bOpen], 0)];
+      // Cross-revision (rest geometry changed between rev1 and rev2 while posed world is identical).
+      const rev1Stats = freshStats();
+      const rev2Stats = freshStats();
+      const rev1 = seamsOf([{ a: 'a', b: 'b' }], restClosedAt6, singleOpenFrame, pages1, { cacheStats: rev1Stats })[0];
+      const rev2 = seamsOf([{ a: 'a', b: 'b' }], restOverlapAt2, singleOpenFrame, pages2, { cacheStats: rev2Stats })[0];
+      if (rev1.status !== 'skip' || rev2.gap.worst?.px !== 8 || rev2Stats.hits !== 0 || rev2Stats.misses !== 1) {
+        faults.push(`cross-revision production calls shared state or misread rev2: hits=${rev2Stats.hits}, rev2Gap=${rev2.gap.worst?.px ?? 0}`);
+      }
+      // Cross-revision (atlas plate texels changed between revA and revB while rest and posed world are identical).
+      const halfOpaque = new Plate(4, 4);
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 2; x++) halfOpaque.set(x, y, [255, 255, 255, 255]);
+      const pagesHalf = new Map([['p', halfOpaque]]);
+      const texStatsB = freshStats();
+      const revTexA = seamsOf([{ a: 'a', b: 'b' }], restOverlapAt2, singleOpenFrame, pagesHalf)[0];
+      const revTexB = seamsOf([{ a: 'a', b: 'b' }], restOverlapAt2, singleOpenFrame, pages2, { cacheStats: texStatsB })[0];
+      if (revTexA.status !== 'skip' || revTexB.gap.worst?.px !== 8 || texStatsB.hits !== 0) {
+        faults.push(`cross-revision plate change shared state: hits=${texStatsB.hits}, revTexA=${revTexA.status}, revTexB=${revTexB.gap.worst?.px ?? 0}`);
+      }
+      // Planted cross-call slot reuses rev1 across revisions and worlds, caught by name.
+      const crossCallSlot: SeamCrossCallSlot = { entry: null };
+      const plantedStats1 = freshStats();
+      const plantedStats2 = freshStats();
+      seamsOf([{ a: 'a', b: 'b' }], restClosedAt6, singleOpenFrame, pages1, { cacheKey: 'cross-call', crossCallSlot, cacheStats: plantedStats1 });
+      const plantedRev2 = seamsOf([{ a: 'a', b: 'b' }], restOverlapAt2, singleOpenFrame, pages2, { cacheKey: 'cross-call', crossCallSlot, cacheStats: plantedStats2 })[0];
+      if (plantedStats2.hits !== 1 || plantedRev2.status !== 'skip') {
+        faults.push(`planted cross-call mutant did not reuse stale rev1 entry: hits=${plantedStats2.hits}, status=${plantedRev2.status}`);
+      }
+      // Cross-world: two separate seamsOf calls on identical frame-0 inputs share zero state in production.
+      const worldDefaultStats = freshStats();
+      const worldStillStats = freshStats();
+      seamsOf([{ a: 'a', b: 'b' }], restOverlapAt2, singleOpenFrame, pages2, { cacheStats: worldDefaultStats });
+      seamsOf([{ a: 'a', b: 'b' }], restOverlapAt2, singleOpenFrame, pages2, { cacheStats: worldStillStats });
+      if (worldDefaultStats.hits !== 0 || worldStillStats.hits !== 0) {
+        faults.push(`two seamsOf world calls shared state: defaultHits=${worldDefaultStats.hits}, stillHits=${worldStillStats.hits}`);
+      }
+      // Structural check on src/seam.ts: no module-level let/var/Map/Set.
+      const seamSource = readFileSync(join(import.meta.dir, 'src', 'seam.ts'), 'utf8');
+      const topLevelMutable = seamSource
+        .split('\n')
+        .filter((line) => /^(export\s+)?(let|var)\s+/.test(line) || /^const\s+\w+\s*=\s*new\s+(Map|Set|WeakMap|WeakSet)\b/.test(line));
+      if (topLevelMutable.length > 0) faults.push(`src/seam.ts declares module-scope mutable state: ${topLevelMutable.join('; ')}`);
+      if (!seamSource.includes('let cached: CachedFrameRead | null =')) faults.push('src/seam.ts does not declare local cached variable inside seamsOf');
+      const ok = faults.length === 0;
+      say(
+        'SE31_TWO_SEAMS_OF_CALLS_SHARE_NO_STATE_ACROSS_REVISIONS_OR_WORLDS',
+        ok,
+        probeDetail(
+          ok,
+          faults,
+          'cache is a local inside seamsOf (0 module-level mutable bindings in src/seam.ts); two calls across revisions or worlds record 0 cross-call hits while planted cross-call reuse is caught',
+        ),
+        'issue #1574 HQ Ruling #2: scoping the cache to one seamsOf call fixes world and revision by construction without hashing every page RGBA per call',
+      );
+    }
+
+    // SE32 — Rejected form 3: no skipped gate, world, frame or pair.
+    {
+      const faults = [...pre];
+      // (a) Skipped gate: a broken rig spec is refused by build and writes no candidate for render --seam.
+      const badRigPath = join(work, 'bad_gate.rig.json');
+      const badOut = join(work, 'bad_gate_out');
+      writeFileSync(badRigPath, JSON.stringify({ stage: { width: 64, height: 64 }, bones: [{ name: 'root' }, { name: 'child', parent: 'missing_parent' }], slots: [] }));
+      const badBuild = runCli(['build', '--rig', badRigPath, '--motion', motionPath, '--images', probe.imagesDir, '--out', badOut]);
+      if (badBuild.status === 0 || existsSync(badOut)) faults.push('broken rig passed build gate or wrote output');
+      // (b) Skipped world: two distinct --environment worlds produce distinct seam readings when physics moves the piece, and copying one world's reading into the other fails.
+      const envDir = join(work, 'env_worlds');
+      mkdirSync(envDir, { recursive: true });
+      plate(4).writePng(join(envDir, 'p.png'));
+      const physSkeleton = JSON.stringify({
+        skeleton: { spine: '4.3.13', width: 16, height: 16 },
+        bones: [
+          { name: 'root' },
+          { name: 'b_phys', parent: 'root', x: 2, length: 4 },
+        ],
+        slots: [
+          { name: 'a', bone: 'root', attachment: 'a' },
+          { name: 'b', bone: 'b_phys', attachment: 'b' },
+        ],
+        constraints: [{ type: 'physics', name: 'wind_b', bone: 'b_phys', x: 1, wind: 2, inertia: 0.5, strength: 0.2, damping: 0.8 }],
+        skins: [{ name: 'default', attachments: { a: { a: { x: 2, y: 2, width: 4, height: 4 } }, b: { b: { x: 2, y: 2, width: 4, height: 4 } } } }],
+        animations: { idle: { bones: { root: { translate: [{ time: 0 }, { time: 1 }] } } } },
+      });
+      const physAtlas = 'p.png\nsize: 4,4\nfilter: Linear,Linear\na\nbounds: 0,0,4,4\nb\nbounds: 0,0,4,4\n';
+      writeFileSync(join(envDir, 'skeleton.json'), physSkeleton);
+      writeFileSync(join(envDir, 'skeleton.atlas'), physAtlas);
+      const stillEnvPath = join(envDir, 'still.json');
+      const gustEnvPath = join(envDir, 'gust.json');
+      writeFileSync(stillEnvPath, JSON.stringify({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: [0, 0] }] }));
+      writeFileSync(gustEnvPath, JSON.stringify({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: [40, 0] }] }));
+      const gustRender = runCli(['render', '--candidate', envDir, '--seam', 'a:b', '--environment', gustEnvPath, '--max', '64', '--out', join(envDir, 'gust_out')]);
+      const stillRender = runCli(['render', '--candidate', envDir, '--seam', 'a:b', '--environment', stillEnvPath, '--max', '64', '--out', join(envDir, 'still_out')]);
+      if (gustRender.status !== 0 || stillRender.status !== 0) {
+        faults.push(`world renders failed: gust=${String(gustRender.status)}, still=${String(stillRender.status)}`);
+      } else {
+        const gustSeam = JSON.parse(readFileSync(join(envDir, 'gust_out', 'idle', SEAM_FILE), 'utf8')) as SeamFile;
+        const stillSeam = JSON.parse(readFileSync(join(envDir, 'still_out', 'idle', SEAM_FILE), 'utf8')) as SeamFile;
+        if (stillSeam.pairs[0].opens.length !== 0 || gustSeam.pairs[0].opens.length === 0) {
+          faults.push(`expected still world closed (0 opens) and gust world open (>0 opens), got still=${stillSeam.pairs[0].opens.length}, gust=${gustSeam.pairs[0].opens.length}`);
+        }
+        if (JSON.stringify(gustSeam) === JSON.stringify(stillSeam)) faults.push('skipped-world mutant (copying gust world into still world) was not distinguished');
+      }
+      // (c) Skipped frame and (d) skipped pair: planted in seamsOf and caught against the full reading.
+      const a0 = rect('a', 0, 4, 'p');
+      const bOpen = rect('b', 6, 4, 'p');
+      const baseRest = [a0, rect('b', 2, 4, 'p'), rect('c', 2, 4, 'p')].map((p) => ({
+        slot: p.slot,
+        attachment: p.slot,
+        kind: 'region' as const,
+        vertices: p.world,
+        triangles: [0, 1, 2, 2, 3, 0],
+      }));
+      const pages = new Map([['p', plate(4)]]);
+      const threeFrames = [0, 1, 2].map((i) => frameOf([a0, bOpen, rect('c', 2, 4, 'p')], i));
+      const fullPairs: readonly SeamPair[] = [{ a: 'a', b: 'b' }, { a: 'a', b: 'c' }];
+      const fullReading = seamsOf(fullPairs, baseRest, threeFrames, pages);
+      const skippedFrameReading = seamsOf(fullPairs, baseRest, threeFrames, pages, { skipFrame: 1 });
+      const skippedPairReading = seamsOf(fullPairs, baseRest, threeFrames, pages, { skipPair: 'a:c' });
+      if (fullReading.length !== 2 || fullReading[0].drawn !== 3 || fullReading[0].banded !== 3 || fullReading[0].opens.length !== 3) {
+        faults.push(`unplanted reading did not cover all 2 pairs and 3 frames: ${JSON.stringify(fullReading)}`);
+      }
+      if (skippedFrameReading[0].drawn !== 2 || JSON.stringify(skippedFrameReading[0].opens) !== '[0,2]') {
+        faults.push(`skipFrame mutant did not drop frame 1 as expected: ${JSON.stringify(skippedFrameReading[0])}`);
+      }
+      if (skippedPairReading.length !== 1) {
+        faults.push(`skipPair mutant did not drop pair a:c: length=${skippedPairReading.length}`);
+      }
+      const ok = faults.length === 0;
+      say(
+        'SE32_SKIPPED_GATE_WORLD_FRAME_OR_PAIR_MUTANTS_ARE_RED',
+        ok,
+        probeDetail(
+          ok,
+          faults,
+          'broken build refused before render, gust vs still --environment worlds read distinct seam.json files, and planted skipFrame/skipPair mutants fail the frame and pair counts',
+        ),
+        'issue #1574: no gate, world, frame or pair may be skipped to save time',
+      );
+    }
+
+    // SE33 — Rejected form 4: no unbounded cache.
+    {
+      const faults: string[] = [];
+      const a0 = rect('a', 0, 4, 'p');
+      const bClosed = rect('b', 2, 4, 'p');
+      const bOpen = rect('b', 6, 4, 'p');
+      const cClosed = rect('c', 2, 4, 'p');
+      const baseRest = [a0, bClosed, cClosed].map((p) => ({
+        slot: p.slot,
+        attachment: p.slot,
+        kind: 'region' as const,
+        vertices: p.world,
+        triangles: [0, 1, 2, 2, 3, 0],
+      }));
+      const pages = new Map([['p', plate(4)]]);
+      // Alternating frame inputs I1 -> I2 -> I1 -> I2.
+      const alternatingFrames = [
+        frameOf([a0, bClosed], 0),
+        frameOf([a0, bOpen], 1),
+        frameOf([a0, bClosed], 2),
+        frameOf([a0, bOpen], 3),
+      ];
+      const singleStats = freshStats();
+      const unboundedStats = freshStats();
+      const singleRead = seamsOf([{ a: 'a', b: 'b' }], baseRest, alternatingFrames, pages, { cacheStats: singleStats });
+      const unboundedRead = seamsOf([{ a: 'a', b: 'b' }], baseRest, alternatingFrames, pages, { cacheKey: 'unbounded', cacheStats: unboundedStats });
+      if (singleStats.hits !== 0 || singleStats.misses !== 4 || singleStats.maxEntries !== 1) {
+        faults.push(`alternating I1->I2->I1->I2: single-entry cache expected 0 hits / 4 misses / maxEntries 1, got ${JSON.stringify(singleStats)}`);
+      }
+      if (unboundedStats.hits !== 2 || unboundedStats.maxEntries !== 2) {
+        faults.push(`alternating I1->I2->I1->I2: planted unbounded cache was not distinguished: ${JSON.stringify(unboundedStats)}`);
+      }
+      if (JSON.stringify(singleRead) !== JSON.stringify(unboundedRead)) {
+        faults.push('alternating frames reading differed');
+      }
+      // Alternating pairs pair1 -> pair2 -> pair1 on 1 frame, and non-consecutive undrawn frame I1 -> undrawn -> I1.
+      const pairAltStats = freshStats();
+      const pairUnboundedStats = freshStats();
+      const oneFrame = [frameOf([a0, bClosed, cClosed], 0)];
+      seamsOf([{ a: 'a', b: 'b' }, { a: 'a', b: 'c' }, { a: 'a', b: 'b' }], baseRest, oneFrame, pages, { cacheStats: pairAltStats });
+      seamsOf([{ a: 'a', b: 'b' }, { a: 'a', b: 'c' }, { a: 'a', b: 'b' }], baseRest, oneFrame, pages, { cacheKey: 'unbounded', cacheStats: pairUnboundedStats });
+      if (pairAltStats.hits !== 0 || pairAltStats.maxEntries !== 1 || pairUnboundedStats.hits !== 1 || pairUnboundedStats.maxEntries !== 2) {
+        faults.push(`pair1->pair2->pair1 eviction failed: single=${JSON.stringify(pairAltStats)}, unbounded=${JSON.stringify(pairUnboundedStats)}`);
+      }
+      const gapUndrawnFrames = [frameOf([a0, bClosed], 0), frameOf([a0], 1), frameOf([a0, bClosed], 2)];
+      const undrawnStats = freshStats();
+      seamsOf([{ a: 'a', b: 'b' }], baseRest, gapUndrawnFrames, pages, { cacheStats: undrawnStats });
+      if (undrawnStats.hits !== 0 || undrawnStats.misses !== 2 || undrawnStats.maxEntries !== 1) {
+        faults.push(`undrawn intermediate frame did not evict single-entry cache: ${JSON.stringify(undrawnStats)}`);
+      }
+      const ok = faults.length === 0;
+      say(
+        'SE33_SINGLE_ENTRY_BOUND_EVICTS_ON_ALTERNATING_FRAMES_AND_PAIRS',
+        ok,
+        probeDetail(
+          ok,
+          faults,
+          'I1→I2→I1→I2, pair1→pair2→pair1 and I1→undrawn→I1 each hold maxEntries=1 and 0 non-consecutive hits, while planted unbounded Map grows to 2 entries and hits',
+        ),
+        'issue #1574: the cache is strictly single-entry and resets between pairs and undrawn frames rather than retaining all seen inputs',
+      );
+    }
+
+    // SE34 — Rejected form 5: no PNG-first ordering or omitted render artifacts.
+    {
+      const faults = [...pre];
+      // (a) A SeamError on a later frame refuses before mkdirSync(outRoot) or any f0000.png write.
+      const clipDir = join(work, 'clip_refusal');
+      mkdirSync(clipDir, { recursive: true });
+      plate(4).writePng(join(clipDir, 'p.png'));
+      const clipSkeleton = JSON.stringify({
+        skeleton: { spine: '4.3.13', width: 16, height: 16 },
+        bones: [{ name: 'root' }, { name: 'mask_bone', parent: 'root', x: 10 }],
+        slots: [
+          { name: 'mask', bone: 'mask_bone', attachment: 'mask' },
+          { name: 'a', bone: 'root', attachment: 'a' },
+          { name: 'b', bone: 'root', attachment: 'b' },
+        ],
+        skins: [
+          {
+            name: 'default',
+            attachments: {
+              mask: { mask: { type: 'clipping', end: 'a', vertexCount: 4, vertices: [0, 0, 2, 0, 2, 4, 0, 4] } },
+              a: { a: { x: 2, y: 2, width: 4, height: 4 } },
+              b: { b: { x: 2, y: 2, width: 4, height: 4 } },
+            },
+          },
+        ],
+        animations: {
+          cut: {
+            bones: {
+              mask_bone: {
+                translate: [
+                  { time: 0, x: 0, curve: 'stepped' },
+                  { time: 1 / fps, x: -9, curve: 'stepped' },
+                  { time: 2 / fps, x: -9 },
+                ],
+              },
+            },
+          },
+        },
+      });
+      const clipAtlas = 'p.png\nsize: 4,4\nfilter: Linear,Linear\na\nbounds: 0,0,4,4\nb\nbounds: 0,0,4,4\n';
+      writeFileSync(join(clipDir, 'skeleton.json'), clipSkeleton);
+      writeFileSync(join(clipDir, 'skeleton.atlas'), clipAtlas);
+      const refusedOut = join(clipDir, 'out_refused');
+      const clipRun = runCli(['render', '--candidate', clipDir, '--seam', 'a:b', '--max', '64', '--out', refusedOut]);
+      if (clipRun.status !== 2 || !clipRun.stderr.includes('a clip cuts slot "a"')) {
+        faults.push(`clipped seam slot on frame 1 did not exit 2 naming the clip: status=${String(clipRun.status)}, stderr=${clipRun.stderr.trim()}`);
+      }
+      if (existsSync(refusedOut)) {
+        faults.push(`render --seam wrote ${refusedOut} (PNG-first ordering) before seamsOf finished validating all frames`);
+      }
+      // Planted PNG-first writer that writes f0000.png before seamsOf finishes leaves a partial directory on refusal and is caught.
+      const plantedPngFirstDir = join(clipDir, 'out_planted_png_first');
+      mkdirSync(join(plantedPngFirstDir, 'cut'), { recursive: true });
+      plate(4).writePng(join(plantedPngFirstDir, 'cut', 'f0000.png'));
+      if (!existsSync(join(plantedPngFirstDir, 'cut', 'f0000.png')) || existsSync(join(plantedPngFirstDir, 'cut', SEAM_FILE))) {
+        faults.push('planted PNG-first partial directory did not exhibit f0000.png without seam.json');
+      }
+      // (b) On a valid render --seam, every set writes f####.png, contact.png, frames.json and seam.json, and any planted omission is caught.
+      if (pre.length === 0) {
+        const checkManifest = (files: readonly string[]): string[] => {
+          const errs: string[] = [];
+          for (const set of sets) {
+            for (const req of [`${set}/f0000.png`, `${set}/contact.png`, `${set}/${SEAM_FILE}`]) {
+              if (!files.includes(req)) errs.push(`missing ${req}`);
+            }
+          }
+          if (!files.includes('frames.json')) errs.push('missing frames.json');
+          return errs;
+        };
+        const actualFiles = readdirSync(dir('seam'), { recursive: true })
+          .map(String)
+          .filter((f) => statSync(join(dir('seam'), f)).isFile())
+          .sort();
+        faults.push(...checkManifest(actualFiles));
+        for (const omitted of ['swing/f0000.png', 'swing/contact.png', `swing/${SEAM_FILE}`, 'frames.json']) {
+          if (checkManifest(actualFiles.filter((f) => f !== omitted)).length !== 1) {
+            faults.push(`manifest check did not catch omitted ${omitted}`);
+          }
+        }
+      }
+      const ok = faults.length === 0;
+      say(
+        'SE34_PNG_FIRST_ORDERING_OR_OMITTED_RENDER_OUTPUT_IS_RED',
+        ok,
+        probeDetail(
+          ok,
+          faults,
+          'a frame-1 clip SeamError exits 2 before creating outRoot or writing f0000.png, and every valid set writes all f####.png, contact.png, frames.json and seam.json bytes',
+        ),
+        'issue #1574: seamsOf runs before any PNG is written so a refusal leaves nothing on disk, and --seam never omits or reorders frame PNGs, contact sheets or sidecars',
+      );
+    }
   }
 
   // SE01 — the positive control: what does not move, and what moves together, reads closed on every frame.

@@ -1086,7 +1086,7 @@ const FLAG_MEANINGS: Record<string, string> = {
     `\`anchor\` at world (0, 0)), and \`${SHEET_MANIFEST_FILE}\` (\`${SHEET_MANIFEST_SPEC}\`) ` +
     'in each set directory; diagnostic `f####.png` and `contact.png` stay over opaque `BACKGROUND` unchanged',
   'sheet-format':
-    `the table format \`render --sheet\` writes beside each sheet page (default \`${DEFAULT_SHEET_FORMAT}\`; known formats: ${SHEET_FORMATS.join(', ')}). ` +
+    `the table format \`render --sheet\` writes beside each sheet page (default \`${DEFAULT_SHEET_FORMAT}\`, verified against pixi.js@8.22.0 and phaser@3.90.0 by tools/sheet_readers.ts; known formats: ${SHEET_FORMATS.join(', ')}). ` +
     'Takes --sheet',
   'viewport-from':
     "draw on an earlier render's grid exactly — the box, the scale and the pixel size its frames.json records (the file, or the " +

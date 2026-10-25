@@ -123172,6 +123172,254 @@ function runSheetSuite(): number {
         ORIGIN,
       );
     }
+
+    // --- SH22–SH25: tools/sheet_readers.ts refusal controls (Bar 3) -----------
+    const stretchSetDir = join(potRenderDir, 'bounce');
+    const runSheetReaders = (args: string[]): { status: number | null; stdout: string; stderr: string } => {
+      const result = spawnSync(process.execPath, ['tools/sheet_readers.ts', ...args], {
+        cwd: import.meta.dir,
+        encoding: 'utf8',
+      });
+      return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    };
+
+    // --- SH22: missing browser executable refused by the path it looked at ----
+    {
+      const probes: string[] = [];
+      const missingBrowser = join(work, 'nowhere', 'chrome');
+      const res = runSheetReaders(['--sheet', stretchSetDir, '--browser', missingBrowser]);
+      if (res.status !== 1) {
+        probes.push(`expected exit 1 on missing browser, got ${String(res.status)}`);
+      }
+      if (!res.stderr.includes(`Playwright Chromium browser not found at ${missingBrowser}`)) {
+        probes.push(`stderr=${JSON.stringify(res.stderr.trim())} did not name missing browser path ${missingBrowser}`);
+      }
+      if (res.stdout.trim() !== '') {
+        probes.push(`expected empty stdout on missing browser refusal, got ${JSON.stringify(res.stdout.trim())}`);
+      }
+      const ok = probes.length === 0;
+      say(
+        'SH22_SHEET_READERS_REFUSES_MISSING_BROWSER_BY_THE_PATH_IT_LOOKED_AT',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `exit=${String(res.status)} stderr=${JSON.stringify(res.stderr.trim().split('\n')[0] ?? '')}`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH23: unpinned or mismatched phaser / pixi.js versions refused -------
+    {
+      const probes: string[] = [];
+      const stubBrowser = join(work, 'sh23-stub-browser');
+      const stubRan = join(work, 'sh23-ran');
+      writeStubEditor(stubBrowser, stubRan, ['Google Chrome for Testing 151.0.7922.34']);
+
+      const writeFakePkgRoot = (
+        label: string,
+        opts: {
+          deps?: Record<string, string>;
+          devDeps: Record<string, string>;
+          lockText: string;
+          pixiInstalledVersion?: string;
+          phaserInstalledVersion?: string;
+        },
+      ): string => {
+        const dir = join(work, `pkg-${label}`);
+        mkdirSync(join(dir, 'node_modules', 'pixi.js', 'dist'), { recursive: true });
+        mkdirSync(join(dir, 'node_modules', 'phaser', 'dist'), { recursive: true });
+        writeFileSync(
+          join(dir, 'package.json'),
+          `${JSON.stringify({ name: 'probe', dependencies: opts.deps, devDependencies: opts.devDeps }, null, 2)}\n`,
+        );
+        writeFileSync(join(dir, 'bun.lock'), opts.lockText);
+        writeFileSync(
+          join(dir, 'node_modules', 'pixi.js', 'package.json'),
+          `${JSON.stringify({ name: 'pixi.js', version: opts.pixiInstalledVersion ?? '8.22.0' })}\n`,
+        );
+        writeFileSync(
+          join(dir, 'node_modules', 'phaser', 'package.json'),
+          `${JSON.stringify({ name: 'phaser', version: opts.phaserInstalledVersion ?? '3.90.0' })}\n`,
+        );
+        writeFileSync(join(dir, 'node_modules', 'pixi.js', 'dist', 'pixi.min.js'), '// stub\n');
+        writeFileSync(join(dir, 'node_modules', 'phaser', 'dist', 'phaser.js'), '// stub\n');
+        return dir;
+      };
+
+      const validLock = `"pixi.js": "8.22.0",\n"phaser": "3.90.0",\n"pixi.js@8.22.0"\n"phaser@3.90.0"\n`;
+      const cases: Array<{ label: string; rootDir: string; expectedSubstring: string }> = [
+        {
+          label: 'caret-range-pixi',
+          rootDir: writeFakePkgRoot('caret-pixi', {
+            devDeps: { 'pixi.js': '^8.22.0', phaser: '3.90.0' },
+            lockText: validLock,
+          }),
+          expectedSubstring: 'devDependencies["pixi.js"] is "^8.22.0", required exact pin "8.22.0"',
+        },
+        {
+          label: 'wrong-phaser-pin',
+          rootDir: writeFakePkgRoot('wrong-phaser', {
+            devDeps: { 'pixi.js': '8.22.0', phaser: '3.89.0' },
+            lockText: validLock,
+          }),
+          expectedSubstring: 'devDependencies["phaser"] is "3.89.0", required exact pin "3.90.0"',
+        },
+        {
+          label: 'runtime-dependencies-leak',
+          rootDir: writeFakePkgRoot('runtime-leak', {
+            deps: { 'pixi.js': '8.22.0' },
+            devDeps: { 'pixi.js': '8.22.0', phaser: '3.90.0' },
+            lockText: validLock,
+          }),
+          expectedSubstring: 'lists "pixi.js" under dependencies',
+        },
+        {
+          label: 'lockfile-drift',
+          rootDir: writeFakePkgRoot('lock-drift', {
+            devDeps: { 'pixi.js': '8.22.0', phaser: '3.90.0' },
+            lockText: `"pixi.js": "8.22.0",\n"phaser": "3.90.0",\n"pixi.js@8.22.0"\n"phaser@3.89.0"\n`,
+          }),
+          expectedSubstring: 'resolves "phaser" to "3.89.0", required "3.90.0"',
+        },
+        {
+          label: 'installed-node-modules-drift',
+          rootDir: writeFakePkgRoot('nm-drift', {
+            devDeps: { 'pixi.js': '8.22.0', phaser: '3.90.0' },
+            lockText: validLock,
+            pixiInstalledVersion: '8.21.0',
+          }),
+          expectedSubstring: 'has version "8.21.0", required exact pin "8.22.0"',
+        },
+      ];
+
+      for (const c of cases) {
+        const res = runSheetReaders(['--sheet', stretchSetDir, '--browser', stubBrowser, '--package-root', c.rootDir]);
+        if (res.status !== 1) {
+          probes.push(`${c.label}: expected exit 1, got ${String(res.status)}`);
+        }
+        if (!res.stderr.includes(c.expectedSubstring)) {
+          probes.push(`${c.label}: stderr=${JSON.stringify(res.stderr.trim())} missing ${JSON.stringify(c.expectedSubstring)}`);
+        }
+        if (existsSync(stubRan)) {
+          probes.push(`${c.label}: browser stub was started before package pin refusal`);
+        }
+      }
+
+      const ok = probes.length === 0;
+      say(
+        'SH23_SHEET_READERS_REFUSES_UNPINNED_OR_MISMATCHED_PHASER_AND_PIXI_VERSIONS_BY_NAME_BEFORE_THE_BROWSER',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `${cases.length}/${cases.length} unpinned/mismatched package states refused by name (exit 1, stub browser never started: ${cases.map((c) => c.label).join(', ')})`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH24: bad flags (exit 2) and missing/empty --sheet dir (exit 1) ------
+    {
+      const probes: string[] = [];
+      const stubBrowser = join(work, 'sh24-stub-browser');
+      const stubRan = join(work, 'sh24-ran');
+      writeStubEditor(stubBrowser, stubRan, ['Google Chrome for Testing 151.0.7922.34']);
+
+      const emptyDir = join(work, 'sh24-empty');
+      mkdirSync(emptyDir, { recursive: true });
+      const missingSheetDir = join(work, 'sh24-missing');
+
+      const usageCases: Array<{ label: string; args: string[]; wantExit: number; wantSub: string }> = [
+        {
+          label: 'missing-sheet-flag',
+          args: ['--browser', stubBrowser],
+          wantExit: 2,
+          wantSub: 'missing required --sheet <dir>',
+        },
+        {
+          label: 'unknown-flag',
+          args: ['--sheet', stretchSetDir, '--bogus', '1', '--browser', stubBrowser],
+          wantExit: 2,
+          wantSub: 'unknown flag "--bogus"',
+        },
+        {
+          label: 'non-positive-timeout',
+          args: ['--sheet', stretchSetDir, '--timeout', '0', '--browser', stubBrowser],
+          wantExit: 2,
+          wantSub: '--timeout must be a positive finite number',
+        },
+        {
+          label: 'missing-sheet-dir',
+          args: ['--sheet', missingSheetDir, '--browser', stubBrowser],
+          wantExit: 1,
+          wantSub: `--sheet directory not found at ${missingSheetDir}`,
+        },
+        {
+          label: 'dir-without-manifest-or-frames-json',
+          args: ['--sheet', emptyDir, '--browser', stubBrowser],
+          wantExit: 1,
+          wantSub: `neither ${SHEET_MANIFEST_FILE} nor frames.json found in ${emptyDir}`,
+        },
+      ];
+
+      for (const c of usageCases) {
+        const res = runSheetReaders(c.args);
+        if (res.status !== c.wantExit) {
+          probes.push(`${c.label}: expected exit ${c.wantExit}, got ${String(res.status)}`);
+        }
+        if (!res.stderr.includes(c.wantSub)) {
+          probes.push(`${c.label}: stderr=${JSON.stringify(res.stderr.trim())} missing ${JSON.stringify(c.wantSub)}`);
+        }
+        if (existsSync(stubRan)) {
+          probes.push(`${c.label}: browser stub was started before flag/manifest refusal`);
+        }
+      }
+
+      const ok = probes.length === 0;
+      say(
+        'SH24_SHEET_READERS_REFUSES_BAD_FLAGS_WITH_EXIT_2_AND_MISSING_SHEET_MANIFEST_WITH_EXIT_1_BEFORE_THE_BROWSER',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `${usageCases.length}/${usageCases.length} bad-flag / missing-manifest inputs refused before browser launch (${usageCases.map((c) => `${c.label}: exit ${c.wantExit}`).join(', ')})`,
+        ),
+        ORIGIN,
+      );
+    }
+
+    // --- SH25: positive control — valid sheet & pins reach the browser --------
+    {
+      const probes: string[] = [];
+      const stubBrowser = join(work, 'sh25-stub-browser');
+      const stubRan = join(work, 'sh25-ran');
+      writeStubEditor(stubBrowser, stubRan, ['stub-chromium: simulated launch refusal'], ['exit 1']);
+
+      const res = runSheetReaders(['--sheet', stretchSetDir, '--browser', stubBrowser]);
+      if (!existsSync(stubRan)) {
+        probes.push('valid sheet and pinned packages did not reach the browser executable');
+      }
+      if (res.status !== 1) {
+        probes.push(`expected exit 1 from failing stub browser --version, got ${String(res.status)}`);
+      }
+      if (!res.stderr.includes('stub-chromium: simulated launch refusal')) {
+        probes.push(`stderr=${JSON.stringify(res.stderr.trim())} did not quote failing stub browser output`);
+      }
+
+      const ok = probes.length === 0;
+      say(
+        'SH25_VALID_SHEET_AND_PINNED_READERS_PASS_HOST_GATES_AND_QUOTE_FAILING_BROWSER_PROBE',
+        ok,
+        probeDetail(
+          ok,
+          probes,
+          `stub browser started=${existsSync(stubRan)}, exit=${String(res.status)}, stderr=${JSON.stringify(res.stderr.trim().split('\n')[0] ?? '')}`,
+        ),
+        ORIGIN,
+      );
+    }
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

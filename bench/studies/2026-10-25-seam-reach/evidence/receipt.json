@@ -1,0 +1,225 @@
+{
+  "spec": "seam-reach-reading/1",
+  "coreCommit": "f273358b378a107e9db4b75e1d5ef17ad303535a",
+  "partsCommit": "0628d7bc311a2b548edf7a11e8407546357d4b4d",
+  "viewport": [
+    -32,
+    0,
+    64,
+    64
+  ],
+  "max": 256,
+  "fps": 60,
+  "runtime": {
+    "bun": "1.4.4",
+    "node": "24.21.0"
+  },
+  "producer": "bun tools/hybrid_limb_acceptance.ts ../out/producer --bootstrap",
+  "dependencyBinding": "parts dependency rig-c=file:../core; core exported from pinned commit; ag-psd=31.0.3",
+  "renders": [
+    {
+      "args": [
+        "node",
+        "node_modules/.bin/rigc",
+        "render",
+        "--candidate",
+        "../out/producer/cut/sweep/build",
+        "--poser",
+        "core",
+        "--fps",
+        "60",
+        "--max",
+        "256",
+        "--viewport",
+        "-32,0,64,64",
+        "--folds",
+        "--geometry",
+        "--seam",
+        "proximal:distal",
+        "--out",
+        "../out/producer/cut/sweep/render"
+      ],
+      "status": 0
+    },
+    {
+      "args": [
+        "node",
+        "node_modules/.bin/rigc",
+        "render",
+        "--candidate",
+        "../out/producer/cut/sweep/build",
+        "--poser",
+        "core",
+        "--fps",
+        "60",
+        "--max",
+        "256",
+        "--viewport",
+        "-32,0,64,64",
+        "--hide",
+        "distal_under",
+        "--out",
+        "../out/producer/cut/sweep/bare"
+      ],
+      "status": 0
+    },
+    {
+      "args": [
+        "node",
+        "node_modules/.bin/rigc",
+        "render",
+        "--candidate",
+        "../out/producer/hybrid/sweep/build",
+        "--poser",
+        "core",
+        "--fps",
+        "60",
+        "--max",
+        "256",
+        "--viewport",
+        "-32,0,64,64",
+        "--folds",
+        "--geometry",
+        "--seam",
+        "proximal:joint_band,joint_band:distal",
+        "--out",
+        "../out/producer/hybrid/sweep/render"
+      ],
+      "status": 0
+    },
+    {
+      "args": [
+        "node",
+        "node_modules/.bin/rigc",
+        "render",
+        "--candidate",
+        "../out/producer/hybrid/sweep/build",
+        "--poser",
+        "core",
+        "--fps",
+        "60",
+        "--max",
+        "256",
+        "--viewport",
+        "-32,0,64,64",
+        "--hide",
+        "distal_under",
+        "--out",
+        "../out/producer/hybrid/sweep/bare"
+      ],
+      "status": 0
+    },
+    {
+      "args": [
+        "node",
+        "node_modules/.bin/rigc",
+        "render",
+        "--candidate",
+        "../out/producer/one-bone/sweep/build",
+        "--poser",
+        "core",
+        "--fps",
+        "60",
+        "--max",
+        "256",
+        "--viewport",
+        "-32,0,64,64",
+        "--folds",
+        "--geometry",
+        "--seam",
+        "proximal:joint_band,joint_band:distal",
+        "--out",
+        "../out/producer/one-bone/sweep/render"
+      ],
+      "status": 0
+    },
+    {
+      "args": [
+        "node",
+        "node_modules/.bin/rigc",
+        "render",
+        "--candidate",
+        "../out/producer/one-bone/sweep/build",
+        "--poser",
+        "core",
+        "--fps",
+        "60",
+        "--max",
+        "256",
+        "--viewport",
+        "-32,0,64,64",
+        "--hide",
+        "distal_under",
+        "--out",
+        "../out/producer/one-bone/sweep/bare"
+      ],
+      "status": 0
+    }
+  ],
+  "frames": {
+    "count": 858,
+    "concatenatedPngSha256": "8d1e57a0a027d4e7d6b7d4372b1717d46194eb136c5ed46ac51977b337eedcad",
+    "order": "lexical producer-relative POSIX path; complete render/bare sets for cut, hybrid, one-bone"
+  },
+  "endpointOrderDegrees": [
+    -30,
+    30
+  ],
+  "endpointWorstPx": {
+    "cut": {
+      "gap": [
+        0,
+        0
+      ],
+      "gapOpen": [
+        0,
+        0
+      ],
+      "ghost": [
+        8,
+        8
+      ]
+    },
+    "hybridBothInterfaces": {
+      "gap": [
+        0,
+        0
+      ],
+      "gapOpen": [
+        0,
+        0
+      ],
+      "ghost": [
+        0,
+        0
+      ]
+    },
+    "oneBoneJointBandDistal": {
+      "gap": [
+        2,
+        13
+      ],
+      "gapOpen": [
+        1,
+        10
+      ],
+      "ghost": [
+        5,
+        4
+      ]
+    }
+  },
+  "reconciliation": {
+    "completeSeamDocumentsEqual": 9,
+    "pngsByteIdentical": 63,
+    "allSixCellHitListsAndBoxesEqual": true
+  },
+  "overlaySha256": "5c650e9ce6b9700ac0caa4e115e7f81aeed7e4b527460c368de5fc90f6dfd563",
+  "interpretation": "Visible drape notch/flap outside carried overlap hull excluded before gap rest-support test. Ghost names different joint-rim cells. Zero gap is not closure outside reach.",
+  "overlayPixels": {
+    "width": 1580,
+    "height": 1220,
+    "format": "RGBA row-major bytes",
+    "sha256": "19d603dc443dcca903d4deb901cf085c21f4829659fbffaa7b6f114ca7ca069c"
+  }
+}

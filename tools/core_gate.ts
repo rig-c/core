@@ -207,6 +207,26 @@
  * only reading. A DIFF or REFUSED there turns the run RED. `--walk` walks the
  * same three probes beside the inactive-bone ones.
  *
+ * ## The runtime poser (issue #1591)
+ *
+ * After the bounds, every built row once more through the third dumper
+ * (`runtimeDump` in `./pose_oracle.ts`): the runtime poser (`src/runtime/`)
+ * against the core under `--raw` at the oracle's default samples, whatever
+ * flag the run was given, and compared twice at tolerance 0 — by `compare`, and
+ * cell by cell over every pose block both sides carry (`strictPoseDiff`, which
+ * reads the bones `compare`'s ill-conditioned rule leaves out). The page UVs
+ * are the atlas's and are compared by neither. One `RUNTIME` line per row —
+ * `IDENTICAL` (covered whole and equal), `SKIP` (refused at load, every
+ * missing feature named with how often and where first; or covered in part,
+ * every refused animation, every block the core leaves out and events not
+ * fired named — the rest compared), `DIFF` with the first difference,
+ * `REFUSED` — then one `RUNTIME SKIP feature` line per feature with its rows,
+ * a `HOLE` line when no row is covered whole or nothing was compared, and the
+ * `RUNTIME GREEN|RED` verdict line counting the rows each way and the poses and
+ * values compared. A DIFF or REFUSED turns the run RED; a corpus the runtime
+ * poses none of is a HOLE, not a failure — stage 0 refuses most of a
+ * production corpus by design.
+ *
  * ## `--walk` — A10's walk (issue #1025, cut 4c-5a)
  *
  * `bun tools/core_gate.ts --walk [--recipes …] [--root …] [--work …]` builds
@@ -232,7 +252,7 @@
  *
  * Exit codes: 0 when every row is IDENTICAL or SKIP; 1 when any row is DIFF or
  * REFUSED, or its stepped run or any skin's run is DIFF, or a no-skin row is
- * DIFF or REFUSED; 2 on a bad input, by name. `tools/` is not `src/`: this file runs
+ * DIFF or REFUSED, or a runtime row is DIFF or REFUSED; 2 on a bad input, by name. `tools/` is not `src/`: this file runs
  * child processes (through `runRecipes`) and reads the disk.
  */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -279,6 +299,8 @@ import {
   spineSetupBounds,
 } from './pose_oracle.ts';
 import type { WalkPlant } from '../src/core/walk.ts';
+import { runtimeDump, RUNTIME_NO_EVENTS_WHY, type RuntimeDump } from './pose_oracle.ts';
+import { missingText, RuntimeRefusal, RUNTIME_STAGE, type RuntimeMissing, type RuntimePlant } from '../src/runtime/index.ts';
 
 /** The options both dumps are taken under: the oracle's defaults. */
 export const GATE_OPTIONS: OracleOptions = { phase: 'grid', samples: ORACLE_DEFAULT_SAMPLES, skin: 'all', physics: 'none', dt: null };
@@ -2080,6 +2102,192 @@ export function boundsLines(rows: readonly BoundsRow[]): { lines: string[]; ok: 
 }
 // --- #907 the setup-pose bounding box: end ---
 
+// --- #1591 the runtime poser: begin ---
+
+/** The blocks of a pose the runtime poser writes, compared cell by cell (`strictPoseDiff`) as well as by `compare`. */
+const RUNTIME_POSE_BLOCKS = ['bones', 'slots', 'drawOrder', 'attachments', 'clips', 'clipped'] as const;
+
+/** One built row's third dumper (issue #1591): the runtime poser against the oracle at tolerance 0, or why not. */
+export interface RuntimeRow {
+  name: string;
+  /** IDENTICAL: covered whole and equal. SKIP: refused at load, or animations or events left out, every one named. DIFF: a compared value differs. REFUSED: the build or a document could not be read. */
+  verdict: GateVerdict;
+  why: string | null;
+  /** The model's own refusal, when it was refused at load. */
+  refusedAtLoad: readonly RuntimeMissing[] | null;
+  /** The animations posed and compared, and those refused with what each misses. */
+  covered: string[];
+  refusedAnimations: ReadonlyArray<{ animation: string; missing: readonly RuntimeMissing[] }>;
+  /** Poses compared (the setup pose and every covered sample) and numbers compared in them, cell by cell. */
+  poses: number;
+  values: number;
+  /** A covered animation keys events, which the runtime does not fire (`RUNTIME_NO_EVENTS_WHY`). */
+  eventsNotFired: boolean;
+}
+
+/** Each feature once, with how often and the first object it was found on — a refusal list as a reader reads it. */
+export function missingSummary(missing: readonly RuntimeMissing[]): string {
+  const by = new Map<string, { n: number; first: RuntimeMissing }>();
+  for (const m of missing) {
+    const kept = by.get(m.feature);
+    if (kept === undefined) by.set(m.feature, { n: 1, first: m });
+    else kept.n++;
+  }
+  return [...by.values()].map(({ n, first }) => `${n > 1 ? `${first.feature} ×${n}` : first.feature} (first: ${missingText(first).slice(first.feature.length + 2)})`).join('; ');
+}
+
+/** The numbers in a value, counted — what a cell-by-cell comparison of it compared. */
+function numbersIn(v: unknown): number {
+  if (typeof v === 'number') return 1;
+  if (Array.isArray(v)) return v.reduce((n: number, x) => n + numbersIn(x), 0);
+  return 0;
+}
+
+/**
+ * The first pose cell where two documents of one model differ, compared as
+ * written (raw doubles, so text equality is equality of the doubles, `-0`
+ * written `0`), or `null`: every block of `RUNTIME_POSE_BLOCKS` both carry, at
+ * setup and at every sample of every animation the second carries. `compare`
+ * leaves a bone out where either side's matrix is ill-conditioned; this reads
+ * every cell, so the two together are tolerance 0 with no exception.
+ */
+export function strictPoseDiff(oracle: OracleDocument, runtime: OracleDocument): { first: string | null; poses: number; values: number } {
+  let poses = 0;
+  let values = 0;
+  const pose = (where: string, a: Record<string, unknown>, b: Record<string, unknown>, fields: readonly string[]): string | null => {
+    poses++;
+    for (const f of fields) {
+      const x = a[f];
+      const y = b[f];
+      if (x === null || y === null || x === undefined || y === undefined) continue;
+      values += numbersIn(y);
+      if (JSON.stringify(x) === JSON.stringify(y)) continue;
+      if (Array.isArray(x) && Array.isArray(y)) {
+        const at = x.findIndex((row, i) => JSON.stringify(row) !== JSON.stringify(y[i]));
+        const k = at < 0 ? Math.min(x.length, y.length) : at;
+        return `${where}.${f}[${k}]: the oracle ${JSON.stringify(x[k])?.slice(0, 160)}, the runtime ${JSON.stringify(y[k])?.slice(0, 160)}`;
+      }
+      return `${where}.${f}: the oracle ${JSON.stringify(x)}, the runtime ${JSON.stringify(y)}`;
+    }
+    return null;
+  };
+  const setup = pose('setup', oracle.setup as unknown as Record<string, unknown>, runtime.setup as unknown as Record<string, unknown>, RUNTIME_POSE_BLOCKS);
+  if (setup !== null) return { first: setup, poses, values };
+  for (const a of runtime.animations ?? []) {
+    const o = oracle.animations?.find((x) => x.name === a.name);
+    if (o === undefined) return { first: `animation "${a.name}": the oracle has none`, poses, values };
+    if (o.duration !== a.duration || o.samples.length !== a.samples.length) return { first: `animation "${a.name}": the oracle's duration ${o.duration} over ${o.samples.length} sample(s), the runtime's ${a.duration} over ${a.samples.length}`, poses, values };
+    for (let i = 0; i < a.samples.length; i++) {
+      const first = pose(`animation "${a.name}" sample ${i}`, o.samples[i] as unknown as Record<string, unknown>, a.samples[i] as unknown as Record<string, unknown>, ['t', 'events', ...RUNTIME_POSE_BLOCKS]);
+      if (first !== null) return { first, poses, values };
+    }
+  }
+  return { first: null, poses, values };
+}
+
+/** The oracle's document with only the animations the runtime posed, for a like-for-like comparison. */
+function coveredOf(oracle: OracleDocument, covered: ReadonlySet<string>): OracleDocument {
+  return { ...oracle, animations: oracle.animations === null ? null : oracle.animations.filter((a) => covered.has(a.name)) };
+}
+
+/** One built output directory's runtime row; `plant` is handed to the runtime's load, which is how a control plants a misreading. */
+export function runtimeRow(name: string, outDir: string, plant: RuntimePlant = {}): RuntimeRow {
+  const model = join(outDir, MODEL_DOCUMENT_FILE);
+  const atlas = join(outDir, 'skeleton.atlas');
+  const missing = [atlas, model].filter((p) => !existsSync(p));
+  if (missing.length > 0) return { name, verdict: 'REFUSED', why: `the build wrote no ${missing.map((p) => p.slice(outDir.length + 1)).join(', ')}`, refusedAtLoad: null, covered: [], refusedAnimations: [], poses: 0, values: 0, eventsNotFired: false };
+  return runtimeOfTexts(name, readFileSync(model, 'utf8'), readFileSync(atlas, 'utf8'), plant);
+}
+
+/** `runtimeRow` over the model and atlas texts, for a document a control wrote itself (an empty atlas text: no page UVs on either side). */
+export function runtimeOfTexts(name: string, modelText: string, atlasText: string, plant: RuntimePlant = {}): RuntimeRow {
+  const options = rawOptions(GATE_OPTIONS, true);
+  const empty = (verdict: GateVerdict, why: string, refusedAtLoad: readonly RuntimeMissing[] | null = null): RuntimeRow => ({ name, verdict, why, refusedAtLoad, covered: [], refusedAnimations: [], poses: 0, values: 0, eventsNotFired: false });
+  let rt: RuntimeDump;
+  let oracle: OracleDocument;
+  try {
+    const doc = readModel(modelText, `${name}: ${MODEL_DOCUMENT_FILE}`);
+    try {
+      rt = runtimeDump(doc, options, plant);
+    } catch (err) {
+      if (err instanceof RuntimeRefusal) return empty('SKIP', `refused at load — ${missingSummary(err.missing)}`, err.missing);
+      throw err;
+    }
+    oracle = coreDump(doc, options, {}, atlasText === '' ? null : uvSourceOf(atlasText, modelText));
+  } catch (err) {
+    if (err instanceof OracleInputError || err instanceof CoreInputError) return empty('REFUSED', err.message);
+    throw err;
+  }
+  const covered = rt.document.animations?.map((a) => a.name) ?? [];
+  const eventsNotFired = (rt.document.absent ?? []).some((x) => x[0] === 'animations.events');
+  const base = { name, refusedAtLoad: null, covered, refusedAnimations: rt.refused, eventsNotFired };
+  const oracleSide = coveredOf(oracle, new Set(covered));
+  const c = compareDumps(withoutUvs(oracleSide), withoutUvs(rt.document), RAW_TOLERANCE);
+  const strict = strictPoseDiff(oracleSide, rt.document);
+  const figures = { poses: strict.poses, values: strict.values };
+  if (!c.identical) return { ...base, ...figures, verdict: 'DIFF', why: `compare: ${c.first}` };
+  if (strict.first !== null) return { ...base, ...figures, verdict: 'DIFF', why: `cell by cell: ${strict.first}` };
+  const skipped: string[] = [];
+  for (const r of rt.refused) skipped.push(`animation "${r.animation}" refused — ${missingSummary(r.missing)}`);
+  for (const [block, why] of oracleSide.absent ?? []) if (!block.endsWith('.uvs') && RUNTIME_POSE_BLOCKS.some((b) => block.endsWith(`.${b}`))) skipped.push(`${block} left out by the oracle — ${why}`);
+  if (eventsNotFired) skipped.push(`events: not fired (${RUNTIME_NO_EVENTS_WHY})`);
+  return { ...base, ...figures, verdict: skipped.length === 0 ? 'IDENTICAL' : 'SKIP', why: skipped.length === 0 ? null : skipped.join(' | ') };
+}
+
+/**
+ * A document with its page UVs emptied and no longer named absent: the UVs are
+ * the atlas's and the runtime writes none (`RUNTIME_NO_UVS_WHY`), so both
+ * sides are handed to `compare` without them rather than as one side's SKIP.
+ */
+function withoutUvs(d: OracleDocument): OracleDocument {
+  return {
+    ...d,
+    absent: (d.absent ?? []).filter((x) => !x[0].endsWith('.uvs')),
+    setup: { ...d.setup, uvs: [] },
+    animations: d.animations === null ? null : d.animations.map((a) => ({ ...a, samples: a.samples.map((x) => ({ ...x, uvs: [] })) })),
+  };
+}
+
+/** Every built row's runtime row, a refused build chain named. */
+export function runtimeBuilt(built: readonly BuiltRow[], plant: RuntimePlant = {}): RuntimeRow[] {
+  return built.map((r) => (r.exits.some((e) => e !== 0) ? { name: r.name, verdict: 'REFUSED' as const, why: `the build chain exited ${JSON.stringify(r.exits)}`, refusedAtLoad: null, covered: [], refusedAnimations: [], poses: 0, values: 0, eventsNotFired: false } : runtimeRow(r.name, r.out, plant)));
+}
+
+/**
+ * The runtime rows' lines and their verdict line: GREEN with no row DIFF or
+ * REFUSED. A corpus the runtime poses none of compares nothing, which is a
+ * HOLE line and not a pass: the count of rows covered whole, partly and
+ * refused is printed beside it, and each feature that refused one, with its
+ * rows.
+ */
+export function runtimeLines(rows: readonly RuntimeRow[]): { lines: string[]; ok: boolean } {
+  const lines = rows.map(
+    (r) =>
+      `  RUNTIME ${r.verdict.padEnd(9)} ${r.name}: ` +
+      (r.refusedAtLoad === null && r.verdict !== 'REFUSED' ? `${r.poses} pose(s) and ${r.values} value(s) compared at tolerance 0, ${r.covered.length} animation(s) posed, ${r.refusedAnimations.length} refused` : '') +
+      (r.why === null ? '' : `${r.refusedAtLoad === null && r.verdict !== 'REFUSED' ? ' — ' : ''}${r.why}`),
+  );
+  const count = (v: GateVerdict): number => rows.filter((r) => r.verdict === v).length;
+  const atLoad = rows.filter((r) => r.refusedAtLoad !== null);
+  const partly = rows.filter((r) => r.verdict === 'SKIP' && r.refusedAtLoad === null);
+  const poses = rows.reduce((n, r) => n + r.poses, 0);
+  const values = rows.reduce((n, r) => n + r.values, 0);
+  const features = new Map<string, Set<string>>();
+  for (const r of rows) for (const m of [...(r.refusedAtLoad ?? []), ...r.refusedAnimations.flatMap((x) => x.missing)]) features.set(m.feature, (features.get(m.feature) ?? new Set()).add(r.name));
+  for (const r of rows) if (r.eventsNotFired) features.set('events (not fired; posed)', (features.get('events (not fired; posed)') ?? new Set()).add(r.name));
+  for (const [f, names] of [...features].sort((x, y) => (x[0] < y[0] ? -1 : 1))) lines.push(`  RUNTIME SKIP feature ${f}: ${names.size} row(s) — ${[...names].join(', ')}`);
+  if (count('IDENTICAL') === 0) lines.push(`  HOLE  runtime: no row is posed whole by the runtime poser (stage ${RUNTIME_STAGE}), so no model was held to the oracle in full`);
+  if (poses === 0) lines.push(`  HOLE  runtime: the runtime poser posed nothing in this corpus, so the third dumper compared nothing`);
+  const ok = count('DIFF') === 0 && count('REFUSED') === 0;
+  lines.push(
+    `RUNTIME ${ok ? 'GREEN' : 'RED'} — ${rows.length} row(s): the runtime poser (stage ${RUNTIME_STAGE}) against the oracle at tolerance 0, --raw doubles, compared and cell by cell: ` +
+      `${count('IDENTICAL')} covered whole and IDENTICAL, ${partly.length} covered in part (SKIP, every animation or block left out named), ${atLoad.length} refused at load (SKIP, every feature named), ${count('DIFF')} DIFF, ${count('REFUSED')} REFUSED; ` +
+      `${poses} pose(s), ${values} value(s) compared (issue #1591)`,
+  );
+  return { lines, ok };
+}
+// --- #1591 the runtime poser: end ---
+
 /** The no-skin probes walked (`--walk`): A10's walk is posed with no skin set, so each probe is a row as it stands. */
 export function noSkinWalkProbes(dir: string, walkPlant: WalkPlant = {}): WalkRow[] {
   return walkBuilt(noSkinProbeBuilds(dir), walkPlant);
@@ -2377,12 +2585,15 @@ export function gateMain(argv: readonly string[], print: (line: string) => void 
     // Issue #907: the header's setup-pose bounding box, rigc's core against spine-core's getBounds.
     const bounds = boundsLines(boundsBuilt(built));
     for (const line of bounds.lines) print(line);
+    // Issue #1591: the third dumper, the runtime poser, against the oracle at tolerance 0.
+    const runtime = runtimeLines(runtimeBuilt(built));
+    for (const line of runtime.lines) print(line);
     const verdict = gateVerdict(rows);
     print(raw ? `RAW (full doubles, tolerance 0, worst in ulps) ${verdict.line}` : verdict.line);
     // The slider-physics probes (issue #1049), their own block after the corpus's verdict, which they do not move.
     const probes = sliderPhysicsSteppedLines(raw);
     for (const line of probes.lines) print(line);
-    return verdict.ok && noSkin.ok && bounds.ok && probes.ok ? 0 : 1;
+    return verdict.ok && noSkin.ok && bounds.ok && runtime.ok && probes.ok ? 0 : 1;
   } catch (err) {
     if (err instanceof GateInputError || err instanceof HashesInputError) {
       warn(`core_gate: ${err.message}`);

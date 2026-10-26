@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 1): one
+ * The runtime poser's per-instance half (issue #1591, stage 2): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -38,7 +38,7 @@
  * hierarchy and never posed again by a constraint, nor the bones below it.
  */
 import { COLLAPSED_X_AXIS_SQ, RUNTIME_DEG, RUNTIME_PI } from '../core/world.ts';
-import { channelValue, keyAt } from './curves.ts';
+import { channelValue, keyAt, deformFraction, CURVE_STEPPED } from './curves.ts';
 import {
   DRAW_MESH,
   DRAW_NONE,
@@ -111,6 +111,9 @@ export class RuntimePose {
   readonly shown: Int32Array;
   /** Every attachment's world vertices at its `offset`, written by `computeVertices` for the attachments shown. */
   readonly vertices: Float64Array;
+  /** Held/interpolated deform values, one pair per binding when weighted. */
+  readonly deform: Float64Array;
+  private readonly deformed: Uint8Array;
   /** The running sum of `step`'s steps, and the animation time the last pose was posed at. */
   trackTime = 0;
   time = 0;
@@ -146,6 +149,8 @@ export class RuntimePose {
     this.light = new Float64Array(ns * 4);
     this.shown = new Int32Array(ns);
     this.vertices = new Float64Array(model.vertexCount);
+    this.deform = new Float64Array(model.deformCount);
+    this.deformed = new Uint8Array(model.attachments.length);
     this.cursors = new Int32Array(Math.max(1, model.cursors)).fill(-1);
     this.ikMix = new Float64Array(nc);
     this.ikSoftness = new Float64Array(nc);
@@ -195,6 +200,7 @@ export class RuntimePose {
     this.constraintValues(null, 0);
     this.solveConstraints();
     this.slotValues(null, 0);
+    this.deformValues(null, 0);
   }
 
   /** The animation posed at its time `t`, from the setup pose (the header). */
@@ -209,6 +215,7 @@ export class RuntimePose {
     this.constraintValues(anim, t);
     this.solveConstraints();
     this.slotValues(anim, t);
+    this.deformValues(anim, t);
   }
 
   /** One step of a looping track: the track time moved by `dt`, the animation posed at it wrapped by the duration (`loopedTime` in src/core/raw.ts). */
@@ -940,6 +947,32 @@ export class RuntimePose {
     }
   }
 
+  /** Reset on every pose, then match source identity after switches; no old frame's offsets survive. */
+  private deformValues(anim: RuntimeAnimation | null, t: number): void {
+    this.deformed.fill(0);
+    this.deform.fill(0);
+    if (anim === null || this.model.omitDeform) return;
+    for (let k = 0; k < anim.deforms.length; k++) {
+      const tl = anim.deforms[k];
+      const i = keyAt(tl.curve, this.cursors, tl.cursor, t);
+      if (i < 0) continue;
+      const held = i + 1 === tl.curve.keys || tl.curve.kinds[i] === CURVE_STEPPED;
+      const p = held ? 0 : deformFraction(tl.curve, i, t);
+      const start = i * tl.count;
+      for (let s = 0; s < this.shown.length; s++) {
+        const index = this.shown[s];
+        if (index < 0 || !this.model.slots[s].live) continue;
+        const at = this.model.attachments[index];
+        if (at.timeline !== tl.identity || at.deformCount === 0) continue;
+        this.deformed[index] = 1;
+        for (let q = 0; q < tl.count; q++) {
+          const v = tl.held[start + q];
+          this.deform[at.deformOffset + q] = held ? v : v + (tl.held[start + tl.count + q] - v) * p;
+        }
+      }
+    }
+  }
+
   /** Every shown attachment's world vertices into `vertices` at its offset (`regionCorners`, `worldVertices`). */
   computeVertices(): void {
     const m = this.model;
@@ -961,7 +994,8 @@ export class RuntimePose {
         const d = W[b + W_D];
         const wx = W[b + W_X];
         const wy = W[b + W_Y];
-        const local = at.local;
+        const local = this.deformed[index] && at.draw === DRAW_MESH ? this.deform : at.local;
+        const lo = this.deformed[index] && at.draw === DRAW_MESH ? at.deformOffset : 0;
         if (at.draw === DRAW_REGION) {
           for (let q = 0; q < 8; q += 2) {
             const lx = local[q];
@@ -971,8 +1005,8 @@ export class RuntimePose {
           }
         } else {
           for (let q = 0; q < at.count; q += 2) {
-            const x = local[q];
-            const y = local[q + 1];
+            const x = local[lo + q];
+            const y = local[lo + q + 1];
             out[o++] = x * a + y * bb + wx;
             out[o++] = x * c + y * d + wy;
           }
@@ -992,9 +1026,16 @@ export class RuntimePose {
         const end = n + counts[v];
         for (; n < end; n++) {
           const b = bones[n] * WORLDS;
-          const x = xs[n];
-          const y = ys[n];
           const weight = weights[n];
+          // The pair belongs to this influence, before its transform and weight, never to the logical vertex.
+          const deformed = this.deformed[index] !== 0;
+          const x = deformed ? xs[n] + this.deform[at.deformOffset + n * 2] : xs[n];
+          const y = deformed ? ys[n] + this.deform[at.deformOffset + n * 2 + 1] : ys[n];
+          if (deformed && m.deformAfterWeights) {
+            wx += (xs[n] * W[b + W_A] + ys[n] * W[b + W_B] + W[b + W_X]) * weight + this.deform[at.deformOffset + n * 2];
+            wy += (xs[n] * W[b + W_C] + ys[n] * W[b + W_D] + W[b + W_Y]) * weight + this.deform[at.deformOffset + n * 2 + 1];
+            continue;
+          }
           wx += (x * W[b + W_A] + y * W[b + W_B] + W[b + W_X]) * weight;
           wy += (x * W[b + W_C] + y * W[b + W_D] + W[b + W_Y]) * weight;
         }

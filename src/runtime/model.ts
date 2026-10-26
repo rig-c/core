@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 1): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 2): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -21,13 +21,13 @@
  *   differently, or a block the oracle itself leaves out;
  * - **refuses an animation** (`RuntimeModel.refused`; `animation(name)`
  *   throws the same `RuntimeRefusal`) when the construct is the animation's
- *   — an `inherit` timeline, a deform or sequence timeline, a draw-order
+ *   — an `inherit` timeline, a sequence timeline, a draw-order
  *   timeline, a dark-colour (`rgba2`, `rgb2`) timeline, or an
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 1 reads
- * named/no-skin views and delivers event keys, with immutable payloads compiled
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 2 adds mesh deform timelines to the
+ * named/no-skin views and event keys, with immutable payloads compiled
  * at load. `ignore: ['events']` remains an explicit diagnostic opt-out; it is
  * never the default. A merged view with conflicting attachments still refuses
  * by name, as the oracle itself cannot resolve that view without file order.
@@ -49,10 +49,11 @@ import type { ModelVertices } from '../model.ts';
 import { activeBones, constraintRecords, CORE_REGION_KINDS, foldInheritMode, readBlend, readColour, shownAttachment, shownRow, sourceOfDoc, underSkin, type CompiledDocument, type CoreAnimation, type CoreBlendMode } from '../core/index.ts';
 import { constraintInactiveWhy, constraintsAbsentWhy, TRANSFORM_PROPERTIES, type CoreIkRecord, type CoreTransformRecord } from '../core/constraints.ts';
 import { RUNTIME_PI } from '../core/world.ts';
-import { compileCurve, type RuntimeCurve } from './curves.ts';
+import { heldArray, timelineIdentity } from '../core/deform.ts';
+import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 1;
+export const RUNTIME_STAGE = 2;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
@@ -68,7 +69,6 @@ export const RUNTIME_FEATURES = [
   'skin-conflict',
   'oracle-absent',
   'inherit-timeline',
-  'deform-timeline',
   'sequence-timeline',
   'draw-order-timeline',
   'dark-colour-timeline',
@@ -125,6 +125,9 @@ export interface RuntimePlant {
   readonly eventWrapOffByOne?: boolean;
   /** The old restore behavior, which repeats keys up to the restored time. */
   readonly restoreEventsFromStart?: boolean;
+  /** Omit deform / multiply offsets by weights too early: negative controls only. */
+  readonly omitDeform?: boolean;
+  readonly deformAfterWeights?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -184,6 +187,10 @@ export const RAD = RUNTIME_PI / 180;
  * bindings (bone index, float32 coordinates, float32 weight) in their order.
  */
 export interface RuntimeAttachment {
+  /** Source timeline identity, including linked-mesh inheritance, resolved once. */
+  readonly timeline: string | null;
+  readonly deformOffset: number;
+  readonly deformCount: number;
   readonly slot: number;
   readonly name: string;
   /** Exact resolved source table identity; display names need not be unique. */
@@ -289,11 +296,21 @@ export interface RuntimeEvent {
   readonly balance: number;
 }
 
+/** One source record's deform, its held arrays by key, matched after attachment switches. */
+export interface RuntimeDeformTimeline {
+  readonly identity: string;
+  readonly curve: RuntimeCurve;
+  readonly cursor: number;
+  readonly held: Float64Array;
+  readonly count: number;
+}
+
 /** One covered animation, compiled. */
 export interface RuntimeAnimation {
   readonly name: string;
   readonly duration: number;
   readonly bones: readonly RuntimeBoneTimeline[];
+  readonly deforms: readonly RuntimeDeformTimeline[];
   readonly slots: readonly RuntimeSlotTimeline[];
   /** Per constraint of the plan, its timeline in this animation or `null`. */
   readonly constraints: ReadonlyArray<RuntimeConstraintTimeline | null>;
@@ -307,6 +324,9 @@ export interface RuntimeAnimation {
 /** The compiled model a pose is made of (`compileRuntime`). Read-only once built. */
 export interface RuntimeModel {
   /** Control-only boundary defect; fixed at load. */
+  readonly omitDeform: boolean;
+  readonly deformAfterWeights: boolean;
+  readonly deformCount: number;
   readonly eventWrapOffByOne: boolean;
   readonly restoreEventsFromStart: boolean;
   readonly doc: CompiledDocument;
@@ -454,6 +474,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   // --- slots and the records they show ---
   const attachments: RuntimeAttachment[] = [];
   let vertexCount = 0;
+  let deformCount = 0;
   const sourceOf = sourceOfDoc(doc);
   const attachmentView = plant.attachmentSkin === undefined ? doc : underSkin(doc, plant.attachmentSkin);
   /** Per slot, each placeholder's attachment index (−1 shows nothing) and what it misses, resolved once and its refusal noted for every animation that shows it. */
@@ -475,7 +496,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     if ('conflict' in shown) return { index: -1, missing: ['skin-conflict', `slot "${slot.name}" placeholder "${placeholder}" is filled by skins that disagree`] };
     const row = shownRow(shown);
     const g = shown.record.geometry;
-    const at = { slot: si, name: row.name, skin: shown.skin, placeholder: shown.placeholder, path: CORE_REGION_KINDS.has(shown.record.kind) ? row.path : null, bone: indexOf(slot.bone), offset: vertexCount };
+    const at = { timeline: timelineIdentity(slot.name, shown), deformOffset: deformCount, slot: si, name: row.name, skin: shown.skin, placeholder: shown.placeholder, path: CORE_REGION_KINDS.has(shown.record.kind) ? row.path : null, bone: indexOf(slot.bone), offset: vertexCount };
     let made: RuntimeAttachment | null = null;
     let missing: readonly [RuntimeFeature, string] | null = null;
     if (g?.kind === 'clipping') missing = ['clipping', `slot "${slot.name}" shows clipping attachment "${row.name}"`];
@@ -519,6 +540,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     if (made === null) made = vertexAttachment(at, DRAW_NONE, new Float64Array(0), 0);
     attachments.push(made);
     vertexCount += made.count;
+    deformCount += made.deformCount;
     return { index: attachments.length - 1, missing };
   };
   const slots: RuntimeSlot[] = doc.slots.map((slot, si) => {
@@ -542,7 +564,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   const refused: Array<{ animation: string; missing: RuntimeMissing[] }> = [];
   let cursorMax = 0;
   for (const anim of doc.animations) {
-    const compiled = compileAnimation(anim, refusals, ignoreEvents, boneIndex, slotIndex, slots, constraints, (si, ph) => resolve(si, ph, anim.name));
+    const compiled = compileAnimation(anim, refusals, ignoreEvents, boneIndex, slotIndex, slots, constraints, doc, (si, ph) => resolve(si, ph, anim.name));
     const missing = refusals.byAnimation.get(anim.name);
     if (missing !== undefined && missing.length > 0) refused.push({ animation: anim.name, missing });
     else {
@@ -554,6 +576,9 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   if (refusals.model.length > 0) throw new RuntimeRefusal(refusals.model);
   const names = doc.animations.map((a) => a.name);
   return {
+    omitDeform: plant.omitDeform === true,
+    deformAfterWeights: plant.deformAfterWeights === true,
+    deformCount,
     eventWrapOffByOne: plant.eventWrapOffByOne === true,
     restoreEventsFromStart: plant.restoreEventsFromStart === true,
     doc,
@@ -583,13 +608,13 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   };
 }
 
-type AttachmentHead = { slot: number; name: string; skin: string; placeholder: string; path: string | null; bone: number; offset: number };
+type AttachmentHead = { timeline: string | null; deformOffset: number; slot: number; name: string; skin: string; placeholder: string; path: string | null; bone: number; offset: number };
 
 const NO_INTS = new Int32Array(0);
 const NO_NUMBERS = new Float64Array(0);
 
 function vertexAttachment(at: AttachmentHead, draw: number, local: Float64Array, count: number): RuntimeAttachment {
-  return { ...at, draw, local, count, bindingCounts: NO_INTS, bindingBones: NO_INTS, bindingX: NO_NUMBERS, bindingY: NO_NUMBERS, bindingWeights: NO_NUMBERS };
+  return { ...at, draw, local, count, deformCount: draw === DRAW_MESH ? count : 0, bindingCounts: NO_INTS, bindingBones: NO_INTS, bindingX: NO_NUMBERS, bindingY: NO_NUMBERS, bindingWeights: NO_NUMBERS };
 }
 
 /** A mesh's (or a linked mesh's source's) vertices: every stored number through `Math.fround` (src/core/vertices.ts, *A mesh's vertices*). */
@@ -615,7 +640,7 @@ function meshAttachment(at: AttachmentHead, vertices: ModelVertices, indexOf: (n
       ws.push(Math.fround(b.weight));
     }
   }
-  return { ...at, draw: DRAW_WEIGHTED, local: NO_NUMBERS, count: counts.length * 2, bindingCounts: Int32Array.from(counts), bindingBones: Int32Array.from(ids), bindingX: Float64Array.from(xs), bindingY: Float64Array.from(ys), bindingWeights: Float64Array.from(ws) };
+  return { ...at, deformCount: ids.length * 2, draw: DRAW_WEIGHTED, local: NO_NUMBERS, count: counts.length * 2, bindingCounts: Int32Array.from(counts), bindingBones: Int32Array.from(ids), bindingX: Float64Array.from(xs), bindingY: Float64Array.from(ys), bindingWeights: Float64Array.from(ws) };
 }
 
 function compileIk(r: CoreIkRecord, index: number, applied: boolean, bones: Int32Array, indexOf: (name: string) => number): RuntimeIk {
@@ -675,6 +700,7 @@ function compileAnimation(
   slotIndex: ReadonlyMap<string, number>,
   slots: readonly RuntimeSlot[],
   constraints: readonly RuntimeConstraint[],
+  doc: CompiledDocument,
   resolve: (slot: number, placeholder: string | null) => number,
 ): RuntimeAnimation {
   const tl = anim.timelines;
@@ -682,7 +708,7 @@ function compileAnimation(
   let cursors = 0;
   const deform = tl.attachments.filter((a) => a.deform !== null);
   const sequence = tl.attachments.filter((a) => a.sequence !== null);
-  if (deform.length > 0) refusals.note('deform-timeline', `${deform.length} deform timeline(s): ${deform.slice(0, 3).map((a) => `${a.skin}/${a.slot}/${a.attachment}`).join(', ')}${deform.length > 3 ? ', …' : ''}`, name);
+
   if (sequence.length > 0) refusals.note('sequence-timeline', `${sequence.length} sequence timeline(s): ${sequence.slice(0, 3).map((a) => `${a.skin}/${a.slot}/${a.attachment}`).join(', ')}${sequence.length > 3 ? ', …' : ''}`, name);
   if (tl.drawOrder.length > 0) refusals.note('draw-order-timeline', `${tl.drawOrder.length} draw-order key(s)`, name);
 
@@ -732,5 +758,12 @@ function compileAnimation(
       constraintTimelines[c.index] = { constraint: c.index, curve: compileCurve(keyed.keys, TRANSFORM_PROPERTIES.length), cursor: cursors++, flags: null };
     }
   }
-  return { name, duration: tl.duration, bones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
+  const deforms: RuntimeDeformTimeline[] = deform.map(a => {
+    const g = doc.skins.find(s => s.name === a.skin)?.attachments[a.slot]?.[a.attachment]?.geometry;
+    if (g === undefined || g.kind === 'region' || g.kind === 'linkedmesh') throw new RuntimeInputError(`deform "${a.skin}/${a.slot}/${a.attachment}" has no vertex geometry (readModel refuses it first)`);
+    const keys = a.deform!;
+    const arrays = keys.map(k => heldArray(g.vertices, k));
+    return { identity: `${a.skin}/${a.slot}/${a.attachment}`, cursor: cursors++, curve: compileDeformCurve(keys), count: arrays[0].length, held: Float64Array.from(arrays.flat()) };
+  });
+  return { name, duration: tl.duration, deforms, bones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
 }

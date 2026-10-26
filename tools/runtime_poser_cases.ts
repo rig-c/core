@@ -489,19 +489,18 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
   // --- RP05: a refused feature smuggled through is a DIFF, never a pass --
   {
     const probes: string[] = [];
-    const deformed = gallery.filter((r) => r.refusedAnimations.some((a) => a.missing.some((m) => m.feature === 'deform-timeline')));
+    const deformed = built.filter(b => { const row = gallery.find(r => r.name === b.name)!; return row.refusedAtLoad === null && readModel(readFileSync(join(b.out, MODEL_DOCUMENT_FILE), 'utf8')).animations.some(a => row.covered.includes(a.name) && a.timelines.attachments.some(t => t.deform !== null)); });
     const turned: string[] = [];
-    for (const r of deformed) {
-      const b = built.find((x) => x.name === r.name) as Built;
-      const smuggled = runtimeRow(r.name, b.out, { admit: ['deform-timeline'] });
-      if (smuggled.verdict !== 'DIFF' || !(smuggled.why ?? '').includes('attachment')) probes.push(`${r.name}: its deform timelines posed as absent read ${smuggled.verdict} — ${smuggled.why}`);
-      else turned.push(r.name);
+    for (const b of deformed) {
+      const smuggled = runtimeRow(b.name, b.out, { omitDeform: true });
+      if (smuggled.verdict !== 'DIFF' || !(smuggled.why ?? '').includes('attachment')) probes.push(`${b.name}: omitted deform read ${smuggled.verdict} — ${smuggled.why}`);
+      else turned.push(b.name);
     }
-    if (deformed.length === 0) probes.push('no gallery rig keys a deform timeline, so nothing was smuggled');
+    if (deformed.length === 0) probes.push('no gallery rig keys a deform timeline, so nothing was omitted');
     say(
-      'RP05_A_REFUSED_FEATURE_SMUGGLED_THROUGH_IS_A_DIFF_NEVER_A_PASS',
+      'RP05_AN_OMITTED_DEFORM_IS_A_DIFF_NEVER_A_PASS',
       probes,
-      `the deform-timeline refusal let through by a plant, the timelines posed as absent: DIFF on the attachments of [${turned.join(', ')}], every gallery rig that keys one`,
+      `deform timelines omitted by a plant: DIFF on the attachments of [${turned.join(', ')}], every gallery rig that keys one`,
     );
   }
 
@@ -585,7 +584,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     const seqRegion = { kind: 'region', width: 10, height: 10, sequence: { count: 2, start: 0, digits: 0, setup: 0, atlas: [rect(10, 10), rect(8, 8)] } };
     const animationProbes: Array<[RuntimeFeature, ProbeSpec, Obj]> = [
       ['inherit-timeline', base, { name: 'x', bones: [{ name: 'b', timelines: [{ name: 'inherit', keys: [{ time: 0, inherit: 'onlyTranslation' }] }] }] }],
-      ['deform-timeline', base, { name: 'x', attachments: [{ name: 'default', slots: [{ name: 'm', attachments: [{ name: 'mesh', deform: [{ time: 0, vertices: [1, 2, 3, 4, 5, 6] }, { time: 1 }] }] }] }] }],
       ['sequence-timeline', { ...base, attachments: { ...base.attachments, s: { p: seqRegion } } }, { name: 'x', attachments: [{ name: 'default', slots: [{ name: 's', attachments: [{ name: 'p', sequence: [{ time: 0, mode: 'loop', index: 0, delay: 0.1 }] }] }] }] }],
       ['draw-order-timeline', base, { name: 'x', drawOrder: [{ time: 0.5, offsets: [{ slot: 's', offset: 1 }] }] }],
       ['dark-colour-timeline', { ...base, slots: [{ name: 's', bone: 'b', setup: 'p', dark: '000000' }, base.slots?.[1] as Obj] }, { name: 'x', slots: [{ name: 's', timelines: [{ name: 'rgba2', keys: [{ time: 0, light: 'ffffffff', dark: '102030' }] }] }] }],

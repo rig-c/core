@@ -3015,6 +3015,46 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
   // The same for a `soft` mask's per-vertex level, which a deform envelope's
   // `mask` reads (issue #1413). Never emitted either.
   const attachmentSoftMasks = new Map<string, DeformSoftMask>();
+  // `skin/slot/attachment` -> per-axis narrowing mode when a deform turn key on
+  // that attachment declares `narrowing: false` (issue #1584), so `sampleMeshDepth`
+  // evaluates `turnCeiling` with the `asin(|A₀ / A_axis|)` closed form that
+  // matches `A39` on the keyed turn.
+  const attachmentTurnNarrowing = new Map<string, { yaw?: boolean; pitch?: boolean }>();
+  const attachmentTurnNarrowingBy = new Map<string, { yaw?: { mode: boolean; anim: string }; pitch?: { mode: boolean; anim: string } }>();
+  withMotionSource(() => {
+    for (const [turnAnimName, turnAnim] of Object.entries(motion.animations ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      for (const turnTrack of turnAnim.deform ?? []) {
+        const turnDeformSkin = turnTrack.skin ?? DEFAULT_SKIN;
+        const turnTriple = `${turnDeformSkin}/${turnTrack.slot}/${turnTrack.attachment}`;
+        for (const turnKey of turnTrack.keys ?? []) {
+          const turnSpec = turnKey.transform as { kind?: unknown; narrowing?: unknown } | undefined;
+          if (turnSpec && (turnSpec.kind === 'yaw' || turnSpec.kind === 'pitch')) {
+            const turnAxis = turnSpec.kind;
+            const turnNarrowMode = turnSpec.narrowing !== false;
+            const turnPrev = attachmentTurnNarrowingBy.get(turnTriple)?.[turnAxis];
+            if (turnPrev !== undefined && turnPrev.mode !== turnNarrowMode) {
+              const turnFalseAnim = turnNarrowMode ? turnPrev.anim : turnAnimName;
+              const turnTrueAnim = turnNarrowMode ? turnAnimName : turnPrev.anim;
+              throw new CompileError(
+                `deform ${turnTriple} keys "${turnAxis}" with narrowing=false in animation "${turnFalseAnim}" and with narrowing=true in animation "${turnTrueAnim}". ` +
+                  'An attachment\'s turn ceiling on one axis is either asin(|A₀ / A_axis|) (without narrowing) or atan(|A₀ / A_axis|) (with narrowing) — ' +
+                  `mixing both on one attachment and axis would report one ceiling where two apply. Use one "narrowing" setting across every "${turnAxis}" key on ${turnTriple}.`,
+                'CE_COMPILE_DEFORM_TURN_NARROWING_MIXED',
+              );
+            }
+            const curBy = attachmentTurnNarrowingBy.get(turnTriple) ?? {};
+            if (curBy[turnAxis] === undefined) curBy[turnAxis] = { mode: turnNarrowMode, anim: turnAnimName };
+            attachmentTurnNarrowingBy.set(turnTriple, curBy);
+            if (!turnNarrowMode) {
+              const cur = attachmentTurnNarrowing.get(turnTriple) ?? {};
+              cur[turnAxis] = false;
+              attachmentTurnNarrowing.set(turnTriple, cur);
+            }
+          }
+        }
+      }
+    }
+  });
 
   for (const rigSlot of rig.slots) {
     const part = partBySlot.get(rigSlot.name);
@@ -3183,6 +3223,7 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
           imagesDir,
           depths: attachmentDepths,
           softMasks: attachmentSoftMasks,
+          turnNarrowing: attachmentTurnNarrowing.get(`${skinName}/${rigSlot.name}/${placeholder}`),
           slotNames: new Set(rig.slots.map((s) => s.name)),
           atlasRegions: atlasIn === null ? null : atlasIn.byName,
           links: pendingLinks,
@@ -4333,6 +4374,12 @@ interface AttachmentContext {
    * emitted, for `depths`' reason.
    */
   softMasks: Map<string, DeformSoftMask>;
+  /**
+   * Per-axis `narrowing` mode when a deform turn key on this attachment states
+   * `"narrowing": false` (issue #1584), so `sampleMeshDepth` computes the turn
+   * ceiling with `asin(|A₀ / A_axis|)` on that axis.
+   */
+  turnNarrowing?: { yaw?: boolean; pitch?: boolean };
   /** Every slot the rig declares — a clipping attachment's `end` resolves here. */
   slotNames: Set<string>;
   /**
@@ -6324,6 +6371,7 @@ function sampleMeshDepth(
         points.map(([px, py]) => toBind(px, py)),
         z,
         triangles,
+        ctx.turnNarrowing === undefined ? undefined : { narrowing: ctx.turnNarrowing },
       ),
     },
   };

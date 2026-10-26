@@ -211,8 +211,8 @@ export function depthDigest(map: DepthMap): string {
  * be a different model. `u` is the point's offset from the axis; `z` is how far
  * in front of that axis it sits.
  */
-export function turnDisplacement(u: number, z: number, radians: number): number {
-  return u * (Math.cos(radians) - 1) - z * Math.sin(radians);
+export function turnDisplacement(u: number, z: number, radians: number, narrowing = true): number {
+  return (narrowing ? u * (Math.cos(radians) - 1) : 0) - z * Math.sin(radians);
 }
 
 /** What a field comparison measured. Pixels, in the part's own grid. */
@@ -676,10 +676,16 @@ export function turnCeiling(
   points: ReadonlyArray<readonly [number, number]>,
   z: readonly number[],
   triangles: ReadonlyArray<number>,
+  options?: { narrowing?: boolean | { yaw?: boolean; pitch?: boolean } },
 ): TurnCeiling {
   if (z.length !== points.length) {
     throw new DepthError(`the mesh has ${points.length} vertices and ${z.length} depths were supplied for it`);
   }
+  const narrowingOpt = options?.narrowing;
+  const narrowingByAxis = {
+    yaw: typeof narrowingOpt === 'object' ? narrowingOpt.yaw !== false : narrowingOpt !== false,
+    pitch: typeof narrowingOpt === 'object' ? narrowingOpt.pitch !== false : narrowingOpt !== false,
+  };
   const out: TurnCeiling = {
     yaw: { positive: null, negative: null },
     pitch: { positive: null, negative: null },
@@ -745,10 +751,17 @@ export function turnCeiling(
       ['pitch', dxb * dzc - dxc * dzb],
     ] as const) {
       // A zero here is a triangle the axis cannot fold at all: its area stays
-      // `A₀·cos t`, which only reaches zero at a right angle.
+      // `A₀·cos t` (or `A₀` when `narrowing` is false), which only reaches zero
+      // at a right angle or never.
       if (aAxis === 0) continue;
       const ratio = a0 / aAxis;
-      const degrees = (Math.atan(Math.abs(ratio)) * 180) / Math.PI;
+      const narrowing = narrowingByAxis[axis];
+      // With `narrowing: false`, `2A(t) = 2A₀ − 2A_axis·sin t`, which crosses
+      // zero at `sin t = A₀ / A_axis = ratio`. A ratio with `|ratio| >= 1` never
+      // crosses zero short of 90° (`|sin t| < 1` on `(0, 90°)`), so it is
+      // skipped for the same reason `aAxis === 0` is.
+      if (!narrowing && Math.abs(ratio) >= 1) continue;
+      const degrees = ((narrowing ? Math.atan(Math.abs(ratio)) : Math.asin(Math.abs(ratio))) * 180) / Math.PI;
       const side = ratio > 0 ? 'positive' : 'negative';
       angles[axis][side].push(degrees);
       const held = out[axis][side];

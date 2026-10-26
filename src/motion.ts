@@ -146,8 +146,8 @@ export const MOTION_KEYS = {
   MotionDrawOrderKey: ['t', 'offsets'],
   MotionDrawOrderOffset: ['slot', 'offset'],
   MotionEventKey: ['t', 'name', 'int', 'float', 'string', 'volume', 'balance'],
-  TrackDeriveTurn: ['kind', 'degrees', 'depth', 'carried', 'about'],
-  DeformTurn: ['kind', 'radius', 'depth', 'degrees', 'about', 'envelope'],
+  TrackDeriveTurn: ['kind', 'degrees', 'depth', 'carried', 'about', 'narrowing'],
+  DeformTurn: ['kind', 'radius', 'depth', 'degrees', 'about', 'narrowing', 'envelope'],
   DeformAffine: ['kind', 'scale', 'about', 'envelope'],
   DeformWave: ['kind', 'amplitude', 'wavelength', 'phase', 'along', 'axis', 'envelope'],
   DeformBend: ['kind', 'amount', 'from', 'to', 'power', 'along', 'axis', 'envelope'],
@@ -220,8 +220,8 @@ export const MOTION_TYPES = {
   MotionEventKey: {
     t: 'number', name: 'string', int: 'number', float: 'number', string: 'string', volume: 'number', balance: 'number',
   },
-  TrackDeriveTurn: { kind: 'enum', degrees: 'number', depth: 'mixed', carried: 'number', about: 'number' },
-  DeformTurn: { kind: 'enum', radius: 'number', depth: 'boolean', degrees: 'number', about: 'number', envelope: 'object' },
+  TrackDeriveTurn: { kind: 'enum', degrees: 'number', depth: 'mixed', carried: 'number', about: 'number', narrowing: 'boolean' },
+  DeformTurn: { kind: 'enum', radius: 'number', depth: 'boolean', degrees: 'number', about: 'number', narrowing: 'boolean', envelope: 'object' },
   DeformAffine: { kind: 'enum', scale: 'number[]', about: 'number[]', envelope: 'object' },
   DeformWave: {
     kind: 'enum', amplitude: 'number', wavelength: 'number', phase: 'number', along: 'enum', axis: 'enum', envelope: 'object',

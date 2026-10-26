@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.74.0](https://github.com/rig-c/core/compare/v2.73.0...v2.74.0) (2026-10-26)
+
+
+### Features
+
+* **runtime:** stage 2 — deform timelines in the runtime poser ([#1606](https://github.com/rig-c/core/issues/1606)) ([#1607](https://github.com/rig-c/core/issues/1607)) ([a83ad81](https://github.com/rig-c/core/commit/a83ad81b78d935c728a0d28028163daa5820aa51))
+
 ## [2.73.0](https://github.com/rig-c/core/compare/v2.72.0...v2.73.0) (2026-10-26)
 
 

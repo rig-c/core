@@ -2400,6 +2400,18 @@ export function readBuildInvocation(flags: Record<string, string>): { label: str
   return { label, opts, profile, packing };
 }
 
+/** Six decimal places: display error <=0.5e-6 per scalar; cells/counts remain integers. */
+export function printAlphaClips(result: Pick<CompileResult, 'alphaClips'>): void {
+  for (const clip of result.alphaClips ?? []) console.log(
+    `  CLIP  ${clip.target} from=${clip.source} alpha=${clip.alpha} tolerance=${clip.tolerance} drawing-px ` +
+    `vertices=${clip.vertices}/${clip.maxVertices} traced=${clip.tracedVertices} simplified=${clip.simplifiedVertices} ` +
+    `coverage=${clip.coverage.toFixed(6)} (${clip.coveredArt}/${clip.artPixels}) ` +
+    `falsePositive=${clip.falsePositive} falseNegative=${clip.falseNegative} ` +
+    `maxTraceDeviation=${clip.maxTraceDeviation.toFixed(6)}drawing-px ` +
+    `maxBindingDeviation=${clip.maxBindingDeviationWorld.toFixed(6)}world-units overshoot=${clip.overshoot.toFixed(6)}drawing-px`,
+  );
+}
+
 /** The lines a build opens on: the cut, then its two input files. */
 export function printBuildHeader(label: string, opts: CompileOptions): void {
   console.log(`rigc build ${label}`);
@@ -2412,7 +2424,7 @@ export function printBuildHeader(label: string, opts: CompileOptions): void {
 }
 
 /** What a compile measured, as `build` reports it before its gate: the parts, the dropped states, the absent parts, the meshes, the physics. */
-export function printCompiled(opts: CompileOptions, result: Pick<CompileResult, 'images' | 'droppedStates' | 'absentParts' | 'meshes' | 'rig' | 'physics'>): void {
+export function printCompiled(opts: CompileOptions, result: Pick<CompileResult, 'images' | 'droppedStates' | 'absentParts' | 'meshes' | 'rig' | 'physics' | 'alphaClips'>): void {
   if (opts.atlasInPath !== undefined) console.log(`  ..    atlas-in ${opts.atlasInPath}`);
   console.log(`  ..    ${result.images.length} part page(s):`);
   for (const img of result.images) {
@@ -2447,6 +2459,7 @@ export function printCompiled(opts: CompileOptions, result: Pick<CompileResult, 
   for (const a of result.absentParts) {
     console.log(`  ABSENT ${a.slot}: ${a.why} — slot not emitted`);
   }
+  printAlphaClips(result);
   for (const m of result.meshes) {
     console.log(
       `  MESH  ${m.slot.padEnd(12)} ${m.kind.padEnd(8)} ${m.vertices} vertices / ${m.triangles} triangles  ` +

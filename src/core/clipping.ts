@@ -633,7 +633,11 @@ export function clipThrough(
   clip: TriangleClipper = clipTriangles,
   reading: { dropRegion?: number } = {},
 ): ClipResult | null {
-  const plan = clipShapeOf(shape);
+  let plan = clipShapeOf(shape);
+  // CO11/CL01/CN06 and portal's convex rows need the original world doubles.
+  // Two 66-point region/authored up_minus15 pieces witnesses went from 2 to 0
+  // rendered pixel differences with Float32 input; SDK clipper storage was not observed.
+  if (plan.kind === 'pieces') plan = clipShapeOf({ ...shape, polygon: shape.polygon.map(Math.fround) });
   if (plan.kind === 'refused') return null;
   if (plan.kind === 'convex') return clip(plan.polygon, vertices, triangles, uvs);
   const f = Math.fround;

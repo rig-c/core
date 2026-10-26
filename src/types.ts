@@ -1562,7 +1562,33 @@ export interface DroppedState {
   why?: string;
 }
 
+/** Alpha-derived clipping fit, on the source plate's pixel-centre grid. */
+export interface AlphaClipReport {
+  target: string;
+  source: string;
+  alpha: number;
+  tolerance: number;
+  maxVertices: number;
+  tracedVertices: number;
+  simplifiedVertices: number;
+  vertices: number;
+  artPixels: number;
+  coveredArt: number;
+  coverage: number;
+  falsePositive: number;
+  falseNegative: number;
+  /** Original trace-corner distance to simplified outline, in drawing pixels, before binding. */
+  maxTraceDeviation: number;
+  /** Maximum setup-world displacement caused by final float32 bind/world rounding, in world units. */
+  maxBindingDeviationWorld: number;
+  overshoot: number;
+  /** source normalized UVs in the emitted clipping vertex order, including carrier crossings. */
+  uvs: Array<[number, number]>;
+}
+
 export interface CompileResult {
+  /** Present only for generated clipping; does not alter emitted model/skeleton geometry. */
+  alphaClips?: AlphaClipReport[];
   /**
    * The compiled model (`src/model.ts`): what the skeleton below was emitted
    * from. This cut fills its `bones` and `setupWorld`; every other field is

@@ -1,4 +1,9 @@
 #!/usr/bin/env bun
+import { alphaClipInputs, writeAlphaClipFixture, ALPHA_CLIP_FIXTURE } from './fixtures/alpha_clip.ts';
+import { buildAlphaClipProof, proveAlphaClipBuild } from './tools/alpha_clip_proof.ts';
+import { refuseClipCrossing, refuseClipDegeneracy, clipCarriers } from './src/alpha_clip.ts';
+import { segmentsMeet as meshSegmentsMeet } from './src/mesh.ts';
+import { splitRigSkin, type RigAlphaClip, type RigClippingAttachment } from './src/rig.ts';
 /**
  * rigc selftest — proof that the validator can go RED.
  *
@@ -36632,10 +36637,156 @@ const POLYGON_MOTION = {
   animations: {},
 };
 
+/** Alpha source compiler controls; the actual editor trip remains a separate prerequisite. */
+function runAlphaClipSuite(): number {
+  let bad = 0;
+  const say = (name: string, faults: string[], detail: string): void => { bad += reportCase(name, faults.length === 0, faults.length ? faults.join('; ') : detail, 'issue #1585: named-slot alpha, source geometry, existing projection and emit gate'); };
+  // The old predicate correctly accepts both positive controls. Only the
+  // separated case must go red under its epsilon-zero proper branch.
+  {
+    type Point = readonly [number, number];
+    type Edges = readonly [Point, Point, Point, Point];
+    const orient = (p: Point, q: Point, r: Point): number => {
+      const v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+      return Math.abs(v) < 1e-9 ? 0 : Math.sign(v);
+    };
+    const signs = ([a, b, c, d]: Edges): readonly [number, number, number, number] =>
+      [orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b)];
+    const endpointOn = (p: Point, q: Point, r: Point): boolean =>
+      orient(p, q, r) === 0 &&
+      Math.min(p[0], q[0]) - 1e-9 <= r[0] && r[0] <= Math.max(p[0], q[0]) + 1e-9 &&
+      Math.min(p[1], q[1]) - 1e-9 <= r[1] && r[1] <= Math.max(p[1], q[1]) + 1e-9;
+    const plantedNoProper = ([a, b, c, d]: Edges): boolean =>
+      endpointOn(a, b, c) || endpointOn(a, b, d) || endpointOn(c, d, a) || endpointOn(c, d, b);
+    const plantedOld = (edges: Edges): boolean => {
+      const [o1, o2, o3, o4] = signs(edges);
+      return (o1 !== o2 && o3 !== o4) || plantedNoProper(edges);
+    };
+    const crossing: Edges = [[0, 0], [2, 2], [0, 2], [2, 0]];
+    const touching: Edges = [[0, 0], [1, 0], [1, 0], [2, 0]];
+    // The y gap is 2^-29 > 1e-9, while its orientation area is 2^-32 < 1e-9.
+    // The old proper branch mistakes that epsilon-zero for a side switch.
+    const nearGap = 2 ** -29;
+    const separated: Edges = [[0, 0], [0, 1], [0, 1 + nearGap], [1 / 8, 1 + nearGap + 1 / 8]];
+    say('ALC16_SHARED_SEGMENTS_TRUE_CROSS', meshSegmentsMeet(...crossing) && plantedOld(crossing) ? [] : ['strict crossing rejected by current or old predicate'], 'strict crossing remains accepted by both predicates; an always-false fix goes red');
+    say('ALC17_SHARED_SEGMENTS_END_TOUCH', meshSegmentsMeet(...touching) && plantedOld(touching) ? [] : ['collinear end touch rejected by current or old predicate'], 'endpoint contact remains accepted by both predicates; an always-false fix goes red');
+    say('ALC18_SHARED_SEGMENTS_NEAR_COLLINEAR_SEPARATED', !meshSegmentsMeet(...separated) && plantedOld(separated) ? [] : ['disjoint gap or old proper-branch plant was not distinguished'], 'positive gap exceeds the endpoint bound; old epsilon-zero proper branch goes red');
+  }
+  const sourceFormCodes = { region: 'ALC01', grid: 'ALC20', contour: 'ALC21', authored: 'ALC22', linked: 'ALC23' } as const;
+  for (const form of ['region', 'grid', 'contour', 'authored', 'linked'] as const) {
+    const root = mkdtempSync(join(harnessTemp(), 'alpha-clip-'));
+    const opts = writeAlphaClipFixture(root, form);
+    const faults: string[] = [];
+    try {
+      const a = compile(opts), b = compile(opts);
+      if (a.skeletonText !== b.skeletonText || JSON.stringify(a.alphaClips) !== JSON.stringify(b.alphaClips)) faults.push('independent compiles differ');
+      const gate = validate({ skeletonText: a.skeletonText, atlasText: a.atlasText, atlasDir: opts.outDir, declaredDurations: a.declaredDurations, modelText: modelDocument(a.model, a.skeletonText, a.atlasText), rig: a.rig, profile: 'spine', reEmit: gateTextsOf(b) });
+      if (gate.failures.length) faults.push(...gate.failures.map((f) => `${f.assertion}: ${f.detail}`));
+      if (!gate.passed.includes('A33_VERTEX_ATTACHMENT_GEOMETRY') || !gate.passed.includes('A18_DETERMINISTIC_EMIT')) faults.push('A18/A33 did not execute');
+      const report = a.alphaClips?.[0];
+      if (!report || report.vertices > report.maxVertices || report.maxTraceDeviation > ALPHA_CLIP_FIXTURE.tolerance + 0.5e-6) faults.push(`invalid/missing fit ${JSON.stringify(report)}`);
+      // Ordinary CLI build is the only writer of the pair consumed by the runtime proof.
+      const proof = buildAlphaClipProof(root, form);
+      if (proof.states.length !== 8) faults.push('runtime proof did not execute all 8 states');
+    } catch (error) { faults.push(error instanceof Error ? error.message : String(error)); }
+    say(`${sourceFormCodes[form]}_SOURCE_FORM_${form}`, faults, `${form}: deterministic compile, A33 and eight source-bound core/SkeletonClipping states`);
+  }
+  {
+    const root = mkdtempSync(join(harnessTemp(), 'alpha-clip-grid-simple-'));
+    const opts = writeAlphaClipFixture(root, 'grid');
+    const faults: string[] = [];
+    try { if (!compile(opts).alphaClips?.[0]) faults.push('generated grid clip report absent'); }
+    catch (error) { faults.push(error instanceof Error ? error.message : String(error)); }
+    say('ALC19_GENERATED_GRID_CARRIED_SIMPLE', faults, 'generated grid source compiles through its carried clip without a false crossing');
+  }
+  const negative = (name: string, edit: (dir: string, rig: RigSpec, motion: MotionSpec) => void, code: string): void => {
+    const dir = mkdtempSync(join(harnessTemp(), 'alpha-clip-red-')), opts = writeAlphaClipFixture(dir, 'grid');
+    const input = alphaClipInputs('grid'); edit(dir, input.rig, input.motion);
+    writeFileSync(opts.rigPath, JSON.stringify(input.rig)); writeFileSync(opts.motionPath, JSON.stringify(input.motion));
+    let caught = '';
+    try { compile(opts); } catch (error) { caught = error instanceof CompileError ? error.code ?? '' : String(error); }
+    say(name, caught === code ? [] : [`wanted ${code}, got ${caught || 'no refusal'}`], code);
+  };
+  const clipOf = (rig: RigSpec): RigClippingAttachment => splitRigSkin(rig.skins!.default, 'fixture').attachments.clip.clip as RigClippingAttachment;
+  negative('ALC02_SLOT_WITH_NO_ALPHA', (dir) => { const plate = new Plate(64, 48); for (let y = 0; y < 48; y++) for (let x = 0; x < 64; x++) plate.set(x, y, [255, 255, 255, 255]); plate.writePng(join(dir, 'aperture.png')); }, 'CE_COMPILE_ALPHA_CLIP_NO_ALPHA');
+  negative('ALC03_POLYGON_OVER_DECLARED_VERTEX_BUDGET', (_dir, rig) => { clipOf(rig).alphaClip!.maxVertices = 3; }, 'CE_COMPILE_ALPHA_CLIP_VERTEX_BUDGET');
+  negative('ALC04_MISSING_SOURCE_IS_NAMED', (_dir, rig) => { clipOf(rig).alphaClip!.slot = 'absent'; }, 'CE_COMPILE_ALPHA_CLIP_SOURCE');
+  negative('ALC05_MISSING_DECLARED_THRESHOLD', (_dir, rig) => { delete (clipOf(rig).alphaClip as Partial<RigAlphaClip>).alpha; }, 'CE_COMPILE_ALPHA_CLIP_PARAMETERS');
+  negative('ALC06_AUTHOR_AND_GENERATOR_CONFLICT', (_dir, rig) => { clipOf(rig).vertexCount = 3; }, 'CE_COMPILE_ALPHA_CLIP_CONFLICT');
+  negative('ALC07_SOURCE_DEPTH_IS_NOT_AUTOMATICALLY_CLIP_DEFORM', (_dir, _rig, motion) => { delete motion.animations.left_minus15.deform; motion.animations.left_minus15.deform = [{ slot: 'aperture', attachment: 'aperture', keys: [{ t: 0, transform: { kind: 'yaw', degrees: -15, depth: true } }] }]; }, 'CE_COMPILE_ALPHA_CLIP_DEFORM');
+  negative('ALC08_HOLE_IS_NOT_FILLED_FOR_CLIPPING', (dir) => { const plate = readPlate(join(dir, 'aperture.png')); plate.set(32, 24, [0, 0, 0, 0]); plate.writePng(join(dir, 'aperture.png')); }, 'CE_COMPILE_ALPHA_CLIP_TOPOLOGY');
+  let crossed = '';
+  try { refuseClipCrossing([[0, 0], [4, 4], [0, 4], [4, 0]], 'forged simplifier output'); }
+  catch (error) { crossed = error instanceof CompileError ? error.code ?? '' : String(error); }
+  say('ALC09_SELF_INTERSECTION_HELPER_ONLY', crossed === 'CE_COMPILE_ALPHA_CLIP_SELF_INTERSECTION' ? [] : ['crossing not refused'], 'forged helper input, not a traced raster counterexample');
+  const rectangle: Array<[number, number]> = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const stripUvs = [0, 0, 0.4, 0, 0.4, 1, 0, 1, 0.6, 0, 1, 0, 1, 1, 0.6, 1];
+  const stripTriangles = [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4];
+  let gap = '';
+  try { clipCarriers(rectangle, stripUvs, stripTriangles, 'carried endpoints with open middle gap'); }
+  catch (error) { gap = error instanceof CompileError ? error.code ?? '' : String(error); }
+  say('ALC11_CARRIED_ENDPOINTS_CANNOT_BRIDGE_UNCARRIED_EDGE_INTERVAL', gap === 'CE_COMPILE_ALPHA_CLIP_CARRIER' ? [] : ['uncovered middle interval was not refused'], 'each endpoint lies on a source strip, open edge midpoint has no carrier');
+  let rectangleFault = '';
+  try { clipCarriers(rectangle, [0, 0, 1, 0, 1, 1, 0, 1], [0, 1, 2, 2, 3, 0], 'covered rectangle'); }
+  catch (error) { rectangleFault = String(error); }
+  say('ALC12_FULLY_COVERED_RECTANGLE_INTERVALS_ARE_ACCEPTED', rectangleFault ? [rectangleFault] : [], 'same complete outline has carried open intervals');
+  let collapsed = '';
+  try { refuseClipDegeneracy([[0, 0], [0, 0], [1, 1]], 'rounded adjacent vertices'); }
+  catch (error) { collapsed = error instanceof CompileError ? error.code ?? '' : String(error); }
+  say('ALC13_ADJACENT_ROUNDED_DUPLICATE_IS_NAMED', collapsed === 'CE_COMPILE_ALPHA_CLIP_TOPOLOGY' ? [] : ['rounded duplicate was not refused'], 'helper-level final-coordinate degeneracy control');
+  negative('ALC14_FLOAT32_WORLD_COLLAPSE_IS_REFUSED', (_dir, rig) => { rig.bones.find((bone) => bone.name === 'head')!.x = 2 ** 30; }, 'CE_COMPILE_ALPHA_CLIP_TOPOLOGY');
+  const deformFrameCodes = { duplicate: 'ALC15', single: 'ALC24', world: 'ALC25' } as const;
+  for (const mode of ['duplicate', 'single', 'world'] as const) {
+    const dir = mkdtempSync(join(harnessTemp(), 'alpha-clip-frame-'));
+    const opts = writeAlphaClipFixture(dir, 'authored');
+    const input = alphaClipInputs('authored');
+    const table = splitRigSkin(input.rig.skins!.default, 'fixture').attachments;
+    const source = table.aperture.aperture as import('./src/rig.ts').RigMeshAttachment;
+    const xy = source.vertices!;
+    delete source.vertices;
+    if (mode === 'world') input.rig.bones.push({ name: 'head_aux', parent: 'root', x: 8, y: -3 });
+    source.weights = Array.from({ length: xy.length / 2 }, (_, i) => {
+      const binding = { bone: 'head', x: xy[2 * i], y: xy[2 * i + 1], weight: mode === 'single' ? 1 : 0.5 };
+      return mode === 'single' ? [binding] : [binding, { ...binding, bone: mode === 'world' ? 'head_aux' : 'head' }];
+    });
+    for (const animation of Object.values(input.motion.animations)) {
+      const keys = [0, 1].map((t) => ({ t, transform: { kind: 'affine' as const, scale: [1.1, 1.05] as [number, number] } }));
+      animation.deform = [{ slot: 'aperture', attachment: 'aperture', keys }, { slot: 'clip', attachment: 'clip', keys }];
+    }
+    writeFileSync(opts.rigPath, JSON.stringify(input.rig)); writeFileSync(opts.motionPath, JSON.stringify(input.motion));
+    const frameFaults: string[] = [];
+    try {
+      const compiled = compile(opts);
+      if (mode === 'duplicate') frameFaults.push('world source / bind-space clip was accepted');
+      else {
+        const child = spawnSync(process.execPath, [join(import.meta.dir, 'cli.ts'), 'build', '--rig', opts.rigPath, '--motion', opts.motionPath, '--images', dir, '--out', opts.outDir], { encoding: 'utf8' });
+        if (child.status !== 0) frameFaults.push(`${child.status}: ${child.stderr}`);
+        else if (proveAlphaClipBuild(dir, 'authored').states.length !== 8) frameFaults.push('compatible frame positive did not render eight states');
+        if (!compiled.alphaClips?.length) frameFaults.push('compatible-frame report absent');
+      }
+    } catch (error) {
+      if (mode !== 'duplicate' || !(error instanceof CompileError) || error.code !== 'CE_COMPILE_ALPHA_CLIP_DEFORM' || !error.message.includes('source frame=world') || !error.message.includes('clip frame=bone:head')) frameFaults.push(String(error));
+    }
+    say(`${deformFrameCodes[mode]}_DEFORM_FRAME_${mode}`, frameFaults, `${mode}: actual DeformGeometry frame compatibility, nonidentity head bone`);
+  }
+  // Compile failures on both public build entry points must leave no new skeleton/atlas/model artifact.
+  const dir = mkdtempSync(join(harnessTemp(), 'alpha-clip-gate-')), opts = writeAlphaClipFixture(dir, 'region');
+  const rig = alphaClipInputs('region').rig; clipOf(rig).alphaClip!.maxVertices = 3; writeFileSync(opts.rigPath, JSON.stringify(rig));
+  const faults: string[] = [];
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    const result = spawnSync(process.execPath, [join(import.meta.dir, entry), 'build', '--rig', opts.rigPath, '--motion', opts.motionPath, '--images', dir, '--out', opts.outDir], { encoding: 'utf8' });
+    if (result.status !== 1 || !result.stderr.includes('CE_COMPILE_ALPHA_CLIP_VERTEX_BUDGET')) faults.push(`${entry}: ${result.status}, ${result.stderr}`);
+    for (const file of ['skeleton.json', 'skeleton.atlas', 'skeleton.model.json']) if (existsSync(join(opts.outDir, file))) faults.push(`${entry} emitted ${file} on refusal`);
+  }
+  say('ALC10_BOTH_BUILD_ENTRY_POINTS_REFUSE_BEFORE_EMIT', faults, 'both entry points refuse; no new emitted artifacts');
+  return bad;
+}
+
 function runPolygonSuite(): number {
   const dirs = writeProbeRig(POLYGON_RIG);
   let bad = 0;
   console.log('\n── bounding boxes and clipping (self-contained) ──');
+  bad += runAlphaClipSuite();
   const say = (name: string, ok: boolean, detail: string, why: string): void => {
     bad += reportCase(name, ok, detail, why);
   };

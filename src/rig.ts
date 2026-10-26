@@ -1124,7 +1124,26 @@ export interface RigBoundingBoxAttachment extends RigVertexGeometry {
  * never ends — it runs to the bottom of the draw order and takes every slot
  * below it with it. rigc refuses a name the rig does not declare.
  */
-export interface RigClippingAttachment extends RigVertexGeometry {
+/** A clipping outline measured from one named attachment's plate. No inferred parameters. */
+export interface RigAlphaClip {
+  slot: string;
+  skin: string;
+  attachment: string;
+  alpha: number;
+  tolerance: number;
+  maxVertices: number;
+}
+
+export interface RigClippingAttachment {
+  /** Authored geometry uses the same named/raw contract as RigVertexGeometry. */
+  vertices?: number[];
+  weights?: RigMeshBinding[][];
+  boneIndexing?: 'name' | 'raw';
+  color?: string;
+  /** Required for authored geometry; derived for alphaClip. */
+  vertexCount?: number;
+  /** Exclusive with authored vertexCount/vertices/weights/boneIndexing. */
+  alphaClip?: RigAlphaClip;
   type: 'clipping';
   /** The runtime's attachment name — see `RigAttachmentName`. Absent, it is the placeholder. */
   name?: RigAttachmentName;
@@ -2089,7 +2108,8 @@ export const RIG_KEYS = {
   RigMeshBinding: ['bone', 'x', 'y', 'weight'],
   RigSequence: ['count', 'start', 'digits', 'setup'],
   RigBoundingBoxAttachment: ['vertexCount', 'vertices', 'weights', 'boneIndexing', 'color', 'type', 'name'],
-  RigClippingAttachment: ['vertexCount', 'vertices', 'weights', 'boneIndexing', 'color', 'type', 'name', 'end', 'convex', 'inverse'],
+  RigClippingAttachment: ['vertexCount', 'vertices', 'weights', 'boneIndexing', 'color', 'type', 'name', 'end', 'convex', 'inverse', 'alphaClip'],
+  RigAlphaClip: ['slot', 'skin', 'attachment', 'alpha', 'tolerance', 'maxVertices'],
   RigPathAttachment: ['vertexCount', 'vertices', 'weights', 'boneIndexing', 'color', 'type', 'name', 'closed', 'constantSpeed', 'lengths'],
   RigRingGenerator: ['kind', 'hull', 'center', 'inner', 'size', 'bias', 'controls'],
   RigRibbonGenerator: ['kind', 'size', 'rows', 'chain'],
@@ -2218,8 +2238,9 @@ export const RIG_TYPES = {
   },
   RigClippingAttachment: {
     vertexCount: 'number', vertices: 'number[]', weights: 'object[][]', boneIndexing: 'enum', color: 'string', type: 'enum', name: 'string',
-    end: 'string', convex: 'boolean', inverse: 'boolean',
+    end: 'string', convex: 'boolean', inverse: 'boolean', alphaClip: 'object',
   },
+  RigAlphaClip: { slot: 'string', skin: 'string', attachment: 'string', alpha: 'number', tolerance: 'number', maxVertices: 'number' },
   RigPathAttachment: {
     vertexCount: 'number', vertices: 'number[]', weights: 'object[][]', boneIndexing: 'enum', color: 'string', type: 'enum', name: 'string',
     closed: 'boolean', constantSpeed: 'boolean', lengths: 'number[]',
@@ -2550,6 +2571,7 @@ function checkRigSpecKeys(raw: Record<string, unknown>, where: string): Array<{ 
         }
         const here = [...base, slot, placeholder];
         at(att, shape, `${who} (${type})`, here);
+        if (type === 'clipping') at(att.alphaClip, 'RigAlphaClip', `${who} alphaClip`, [...here, 'alphaClip']);
         if (att.sequence !== undefined) {
           at(att.sequence, 'RigSequence', `${who} "sequence"`, [...here, 'sequence']);
           checkRigSequence(att, who, where);

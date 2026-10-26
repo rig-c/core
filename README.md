@@ -51,6 +51,16 @@ Everything in that table needs Bun and this package — `preview` and `vote` als
 `@esotericsoftware/spine-core` installed beside it (see below) — and no clone, no
 reference art, no art pipeline, no server.
 
+### Alpha-derived clipping
+
+Alpha-derived clipping takes a named source slot/skin/attachment plus explicit
+alpha threshold, drawing-pixel simplification tolerance and mapped vertex budget.
+Region, authored/resolved linked mesh and generated grid/contour depth sources use
+ordinary weighted clipping, with the existing validation gate before emission.
+See [AUTHORING: Alpha-derived clipping](docs/AUTHORING.md#alpha-derived-clipping)
+for source-motion limits, fit reports and named refusals, and
+[the face guide](docs/FACE.md#a-measured-alpha-aperture) for the depth-yaw flow.
+
 ## What rigc is, and what it is not
 
 rigc emits **Spine's own skeleton data format**. That is the whole positioning, and

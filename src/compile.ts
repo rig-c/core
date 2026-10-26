@@ -5120,20 +5120,32 @@ function resolveAlphaClips(
       filed.vertices = out.vertices;
       filed.vertexCount = out.vertexCount;
     }
-    // Since #1590 an authored source may carry `{ z, geometry }`; the clip reads its per-vertex z and derives its own frame below.
+    // Authored depth turns use setup-world geometry, even for a rigid source.
+    // Preserve that frame on the clip's own vertex/influence roster, not the source's.
     const sourceDepth = ctx.depths.get(depthKey);
     const z = sourceDepth === undefined || Array.isArray(sourceDepth) ? sourceDepth : sourceDepth.z;
+    let clipDepthGeometry: DeformGeometry | undefined;
     if (z !== undefined) {
       const depths = carried.carriers.map((carrier) =>
         carrier.corners.reduce((sum, vertex, i) => sum + carrier.bary[i] * z[vertex], 0));
-      ctx.depths.set(`${ctx.skinName}/${ctx.slotName}/${targetKey}`, depths);
+      if (sourceDepth !== undefined && !Array.isArray(sourceDepth)) {
+        clipDepthGeometry = {
+          ...deformGeometryOf(out, label, ctx.transforms, ctx.transforms.get(ctx.anchorBone)!),
+          depth: depths,
+        };
+      }
+      ctx.depths.set(`${ctx.skinName}/${ctx.slotName}/${targetKey}`,
+        clipDepthGeometry === undefined ? depths : { z: depths, geometry: clipDepthGeometry });
     }
     // The helper, not the number of distinct bone names, defines the frame.
     // Duplicate influences on one bone also take the world-space path.
-    const frameOf = (attachment: ModelVertexAttachment, unweightedBone: string): {
+    const frameOf = (attachment: ModelVertexAttachment, unweightedBone: string, depthGeometry: DeformGeometry | undefined,
+      key: MotionDeformTrack['keys'][number] | undefined): {
       name: string; geometry: DeformGeometry;
     } => {
-      const geometry = deformGeometryOf(attachment, label, ctx.transforms);
+      // Match compileDeformTrack's per-key choice, including authored depth:true.
+      const geometry = (key?.transform !== undefined && 'depth' in key.transform && key.transform.depth === true
+        ? depthGeometry : undefined) ?? deformGeometryOf(attachment, label, ctx.transforms);
       const vertices = attachment.vertices;
       const bone = vertices.weighted ? vertices.bindings[0]?.[0]?.bone : unweightedBone;
       return { name: geometry.influenceBones === null ? `bone:${bone}` : 'world', geometry };
@@ -5146,10 +5158,15 @@ function resolveAlphaClips(
       const clipTrack = animation.deform?.find((track) =>
         `${track.skin ?? 'default'}/${track.slot}/${track.attachment}` === targetIdentity);
       if (!sourceTrack && !clipTrack) continue;
-      const sourceFrame = geometry.kind === 'mesh' ? frameOf(geometry, sourceSlot.bone) : null;
-      const clipFrame = frameOf(out, ctx.anchorBone);
-      const compatible = sourceFrame !== null && sourceFrame.geometry.setup !== null &&
-        clipFrame.geometry.setup !== null && sourceFrame.name === clipFrame.name;
+      const sourceDepthGeometry = sourceDepth !== undefined && !Array.isArray(sourceDepth) ? sourceDepth.geometry : undefined;
+      const frames = (sourceTrack?.keys.length ? sourceTrack.keys : [undefined]).map((key, index) => ({
+        source: geometry.kind === 'mesh' ? frameOf(geometry, sourceSlot.bone, sourceDepthGeometry, key) : null,
+        clip: frameOf(out, ctx.anchorBone, clipDepthGeometry, clipTrack?.keys[index]),
+      }));
+      const compatible = frames.every(({ source, clip }) => source !== null && source.geometry.setup !== null &&
+        clip.geometry.setup !== null && source.name === clip.name);
+      const { source: sourceFrame, clip: clipFrame } = frames.find(({ source, clip }) =>
+        source === null || source.geometry.setup === null || clip.geometry.setup === null || source.name !== clip.name) ?? frames[0];
       // With a world-space deform, varying per-vertex influence shares would
       // correlate the deform with moving bone matrices. Constant shares commute
       // with the affine/depth projection; no new deformation transfer is implied.
@@ -5160,7 +5177,7 @@ function resolveAlphaClips(
         }
         return JSON.stringify([...shares].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
       };
-      const constantWorldShares = sourceFrame?.name !== 'world' ||
+      const constantWorldShares = !frames.some(({ source }) => source?.name === 'world') ||
         sourceBindings.every((vertex) => sharesOf(vertex) === sharesOf(sourceBindings[0]));
       const shared = sourceTrack !== undefined && clipTrack !== undefined &&
         JSON.stringify(sourceTrack.keys) === JSON.stringify(clipTrack.keys);

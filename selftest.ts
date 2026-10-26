@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { alphaClipInputs, writeAlphaClipFixture, ALPHA_CLIP_FIXTURE } from './fixtures/alpha_clip.ts';
-import { buildAlphaClipProof, proveAlphaClipBuild } from './tools/alpha_clip_proof.ts';
+import { alphaClipInputs, writeAlphaClipFixture, apertureDepthLevel, ALPHA_CLIP_FIXTURE } from './fixtures/alpha_clip.ts';
+import { buildAlphaClipProof, proveAlphaClipBuild, clipRoundingWorld, ALPHA_CLIP_BOUNDS } from './tools/alpha_clip_proof.ts';
 import { refuseClipCrossing, refuseClipDegeneracy, clipCarriers } from './src/alpha_clip.ts';
 import { segmentsMeet as meshSegmentsMeet } from './src/mesh.ts';
 import { splitRigSkin, type RigAlphaClip, type RigClippingAttachment } from './src/rig.ts';
@@ -36768,6 +36768,95 @@ function runAlphaClipSuite(): number {
       if (mode !== 'duplicate' || !(error instanceof CompileError) || error.code !== 'CE_COMPILE_ALPHA_CLIP_DEFORM' || !error.message.includes('source frame=world') || !error.message.includes('clip frame=bone:head')) frameFaults.push(String(error));
     }
     say(`${deformFrameCodes[mode]}_DEFORM_FRAME_${mode}`, frameFaults, `${mode}: actual DeformGeometry frame compatibility, nonidentity head bone`);
+  }
+  const authoredDepthCodes = { yaw: 'ALC26', pitch: 'ALC27' } as const;
+  for (const kind of ['yaw', 'pitch'] as const) {
+    const dir = mkdtempSync(join(harnessTemp(), 'alpha-clip-authored-depth-'));
+    const opts = writeAlphaClipFixture(dir, 'authored'), input = alphaClipInputs('authored');
+    const source = splitRigSkin(input.rig.skins!.default, 'fixture').attachments.aperture.aperture as import('./src/rig.ts').RigMeshAttachment;
+    source.depth = { image: 'depth.png', near: 'white', zScale: ALPHA_CLIP_FIXTURE.depthScale };
+    for (const [name, animation] of Object.entries(input.motion.animations)) {
+      const degrees = name.includes('minus') ? -15 : 15;
+      const keys = [0, 1].map((t) => ({ t, transform: { kind, degrees, depth: true as const } }));
+      animation.deform = [{ slot: 'aperture', attachment: 'aperture', keys }, { slot: 'clip', attachment: 'clip', keys }];
+    }
+    writeFileSync(opts.rigPath, JSON.stringify(input.rig)); writeFileSync(opts.motionPath, JSON.stringify(input.motion));
+    const faults: string[] = [], readings: string[] = [];
+    try {
+      const compiled = compile(opts), report = compiled.alphaClips?.[0];
+      if (!report || report.uvs.length < 3) throw new Error('authored depth clip has no measured UV boundary');
+      const data = new SkeletonJson(new AtlasAttachmentLoader(new TextureAtlas(compiled.atlasText)))
+        .readSkeletonData(JSON.parse(compiled.skeletonText));
+      const carriers = uvCarriers(source.uvs!, source.triangles!, report.uvs.map((uv) => ({ uv })), 'authored depth source boundary');
+      const bound = clipRoundingWorld(), f = ALPHA_CLIP_FIXTURE;
+      for (const [name, animation] of Object.entries(input.motion.animations)) {
+        const posed = poseAtSample(data, name, f.fps, f.sampleIndex);
+        const sourceSlot = posed.findSlot('aperture')!, clipSlot = posed.findSlot('clip')!;
+        const sourceAttachment = sourceSlot.appliedPose.attachment, clipAttachment = clipSlot.appliedPose.attachment;
+        if (!(sourceAttachment instanceof MeshAttachment) || !(clipAttachment instanceof ClippingAttachment)) throw new Error('authored source/clip runtime geometry absent');
+        const world = new Float32Array(sourceAttachment.worldVerticesLength), polygon = new Float32Array(clipAttachment.worldVerticesLength);
+        sourceAttachment.computeWorldVertices(posed, sourceSlot, 0, world.length, world, 0, 2);
+        clipAttachment.computeWorldVertices(posed, clipSlot, 0, polygon.length, polygon, 0, 2);
+        if (polygon.length !== carriers.length * 2 || world.length !== source.vertices!.length) throw new Error('source/clip cardinality changed');
+        if (![...world, ...polygon].every((v) => Number.isFinite(v) && Math.abs(v) <= ALPHA_CLIP_BOUNDS.coordinateMagnitude)) throw new Error('posed geometry exceeds frozen rounding magnitude');
+        // The source is an authored rectangle on the translated head. Its depth
+        // ramp is linear; at the rectangle's edges sampling clamps to end texels.
+        // This independent closed form also refuses a source-and-clip frame drift.
+        const transform = animation.deform![0].keys[0].transform!;
+        if (transform.kind !== 'yaw' && transform.kind !== 'pitch') throw new Error('depth turn control lost its transform');
+        const radians = transform.degrees * Math.PI / 180, along = kind === 'yaw' ? 0 : 1;
+        let sourceError = 0;
+        for (let v = 0; v < world.length / 2; v++) {
+          const x = source.vertices![2 * v], y = source.vertices![2 * v + 1];
+          const texel = Math.max(0, Math.min(f.width - 1, x + f.width / 2 - 0.5));
+          const z = apertureDepthLevel(texel) / 255 * f.depthScale;
+          const expected = [x + f.sourceBone[0], y + f.sourceBone[1]];
+          expected[along] = expected[along] * Math.cos(radians) - z * Math.sin(radians);
+          sourceError = Math.max(sourceError, Math.hypot(world[2 * v] - expected[0], world[2 * v + 1] - expected[1]));
+        }
+        let projectionError = 0, firstVertexError = 0;
+        carriers.forEach((carrier, v) => {
+          if (carrier === null) throw new Error(`source UV boundary vertex ${v} is uncarried`);
+          const expected = [0, 0];
+          carrier.corners.forEach((corner, k) => {
+            expected[0] += carrier.bary[k] * world[2 * corner];
+            expected[1] += carrier.bary[k] * world[2 * corner + 1];
+          });
+          const error = Math.hypot(polygon[2 * v] - expected[0], polygon[2 * v + 1] - expected[1]);
+          if (v === 0) firstVertexError = error;
+          projectionError = Math.max(projectionError, error);
+        });
+        const detail = `${name}: source closed-form error=${sourceError}, source-to-clip projection error=${projectionError}, first clip vertex mismatch=${firstVertexError}, frozen bound=${bound}, source vertices=${world.length / 2}, clip vertices=${polygon.length / 2}`;
+        readings.push(detail);
+        if (sourceError > bound || projectionError > bound) faults.push(detail);
+      }
+    } catch (error) { faults.push(error instanceof Error ? error.message : String(error)); }
+    say(`${authoredDepthCodes[kind]}_AUTHORED_DEPTH_${kind}_SOURCE_BOUNDARY`, faults, readings.join('; '));
+  }
+  {
+    const dir = mkdtempSync(join(harnessTemp(), 'alpha-clip-depth-mixed-frame-'));
+    const opts = writeAlphaClipFixture(dir, 'authored'), input = alphaClipInputs('authored');
+    const source = splitRigSkin(input.rig.skins!.default, 'fixture').attachments.aperture.aperture as import('./src/rig.ts').RigMeshAttachment;
+    const xy = source.vertices!;
+    delete source.vertices;
+    source.weights = Array.from({ length: xy.length / 2 }, (_, v) =>
+      [0.5, 0.5].map((weight) => ({ bone: 'head', x: xy[2 * v], y: xy[2 * v + 1], weight })));
+    source.depth = { image: 'depth.png', near: 'white', zScale: ALPHA_CLIP_FIXTURE.depthScale };
+    for (const animation of Object.values(input.motion.animations)) {
+      const keys: import('./src/types.ts').MotionDeformKey[] = [
+        { t: 0, transform: { kind: 'yaw', degrees: 15, depth: true } },
+        { t: 1, transform: { kind: 'affine', scale: [1.1, 1.05] } },
+      ];
+      animation.deform = [{ slot: 'aperture', attachment: 'aperture', keys }, { slot: 'clip', attachment: 'clip', keys }];
+    }
+    writeFileSync(opts.rigPath, JSON.stringify(input.rig)); writeFileSync(opts.motionPath, JSON.stringify(input.motion));
+    let caught = '';
+    try { compile(opts); } catch (error) {
+      if (error instanceof CompileError && error.code === 'CE_COMPILE_ALPHA_CLIP_DEFORM' &&
+        error.message.includes('source frame=world') && error.message.includes('clip frame=bone:head')) caught = error.code;
+      else caught = String(error);
+    }
+    say('ALC28_AUTHORED_DEPTH_MIXED_KEYS_KEEP_AFFINE_FRAME', caught === 'CE_COMPILE_ALPHA_CLIP_DEFORM' ? [] : [`affine world-source/bind-clip key was not named: ${caught || 'accepted'}`], 'first depth:true key shares setup-world; later affine key retains the incompatible ordinary frame');
   }
   // Compile failures on both public build entry points must leave no new skeleton/atlas/model artifact.
   const dir = mkdtempSync(join(harnessTemp(), 'alpha-clip-gate-')), opts = writeAlphaClipFixture(dir, 'region');

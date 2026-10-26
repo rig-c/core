@@ -5120,7 +5120,9 @@ function resolveAlphaClips(
       filed.vertices = out.vertices;
       filed.vertexCount = out.vertexCount;
     }
-    const z = ctx.depths.get(depthKey);
+    // Since #1590 an authored source may carry `{ z, geometry }`; the clip reads its per-vertex z and derives its own frame below.
+    const sourceDepth = ctx.depths.get(depthKey);
+    const z = sourceDepth === undefined || Array.isArray(sourceDepth) ? sourceDepth : sourceDepth.z;
     if (z !== undefined) {
       const depths = carried.carriers.map((carrier) =>
         carrier.corners.reduce((sum, vertex, i) => sum + carrier.bary[i] * z[vertex], 0));

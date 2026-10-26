@@ -2200,8 +2200,8 @@ export function runtimeRow(name: string, outDir: string, plant: RuntimePlant = {
 }
 
 /** `runtimeRow` over the model and atlas texts, for a document a control wrote itself (an empty atlas text: no page UVs on either side). */
-export function runtimeOfTexts(name: string, modelText: string, atlasText: string, plant: RuntimePlant = {}): RuntimeRow {
-  const options = rawOptions(GATE_OPTIONS, true);
+export function runtimeOfTexts(name: string, modelText: string, atlasText: string, plant: RuntimePlant = {}, skin = 'all'): RuntimeRow {
+  const options = { ...rawOptions(GATE_OPTIONS, true), skin };
   const empty = (verdict: GateVerdict, why: string, refusedAtLoad: readonly RuntimeMissing[] | null = null): RuntimeRow => ({ name, verdict, why, refusedAtLoad, covered: [], refusedAnimations: [], poses: 0, values: 0, eventsNotFired: false });
   let rt: RuntimeDump;
   let oracle: OracleDocument;

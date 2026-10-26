@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 0): one
+ * The runtime poser's per-instance half (issue #1591, stage 1): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -71,6 +71,7 @@ import {
   W_Y,
   WORLDS,
   type RuntimeAnimation,
+  type RuntimeEvent,
   type RuntimeIk,
   type RuntimeModel,
   type RuntimeTransform,
@@ -113,6 +114,11 @@ export class RuntimePose {
   /** The running sum of `step`'s steps, and the animation time the last pose was posed at. */
   trackTime = 0;
   time = 0;
+
+  private readonly fired: RuntimeEvent[] = [];
+  /** Borrowed immutable event records, in delivery order, until the next apply/step. */
+  get events(): readonly RuntimeEvent[] { return this.fired; }
+  private eventTime = -1;
 
   private current: RuntimeAnimation | null = null;
   private readonly cursors: Int32Array;
@@ -160,12 +166,30 @@ export class RuntimePose {
     this.cursors.fill(-1);
     this.trackTime = 0;
     this.time = 0;
+    this.eventTime = -1;
+    this.fired.length = 0;
+  }
+
+  /**
+   * Restore one animation's two clocks without delivering keys already passed.
+   * A skin/view replacement uses the old pose's trackTime and wrapped time.
+   * Unlike setAnimation + apply, restoration never replays the initial interval.
+   */
+  restore(name: string, trackTime: number, animationTime: number): void {
+    if (!Number.isFinite(trackTime)) throw new RuntimeInputError(`restore: track time ${trackTime} is not finite`);
+    if (!Number.isFinite(animationTime)) throw new RuntimeInputError(`restore: animation time ${animationTime} is not finite`);
+    this.setAnimation(name);
+    this.trackTime = trackTime;
+    if (!this.model.restoreEventsFromStart) this.eventTime = animationTime;
+    this.apply(animationTime);
   }
 
   /** The setup pose: every constraint applied with its own values, every slot as it is set up. */
   setupPose(): void {
     this.current = null;
     this.time = 0;
+    this.eventTime = -1;
+    this.fired.length = 0;
     this.locals.set(this.model.setup);
     this.hierarchy();
     this.constraintValues(null, 0);
@@ -178,6 +202,7 @@ export class RuntimePose {
     const anim = this.current;
     if (anim === null) throw new RuntimeInputError('apply: no animation is set (setAnimation first)');
     if (!Number.isFinite(t)) throw new RuntimeInputError(`apply: the time ${t} is not finite`);
+    this.collectEvents(anim, t);
     this.time = t;
     this.boneTimelines(anim, t);
     this.hierarchy();
@@ -192,6 +217,21 @@ export class RuntimePose {
     if (anim === null) throw new RuntimeInputError('step: no animation is set (setAnimation first)');
     this.trackTime += dt;
     this.apply(anim.duration === 0 ? 0 : this.trackTime % anim.duration);
+  }
+
+  /** The oracle interval (last,t], tail then head on a wrap; never copies a payload. */
+  private collectEvents(anim: RuntimeAnimation, t: number): void {
+    const last = this.eventTime;
+    const wrapped = t < last;
+    const keys = anim.eventKeys;
+    let count = 0;
+    if (wrapped) for (let i = 0; i < keys.length; i++) if (keys[i].time > last) this.fired[count++] = keys[i];
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (key.time <= t && (wrapped ? !this.model.eventWrapOffByOne || key.time > 0 : key.time > last)) this.fired[count++] = key;
+    }
+    this.fired.length = count;
+    this.eventTime = t;
   }
 
   // ---------------------------------------------------------------------------

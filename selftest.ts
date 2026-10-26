@@ -16927,6 +16927,7 @@ function runPhysicsParameters1541Suite(): number {
 // the runtime poser (issue #1591)
 // ---------------------------------------------------------------------------
 import { runtimePoserCases } from './tools/runtime_poser_cases.ts';
+import { runtimeStage1Cases } from './tools/runtime_stage1_cases.ts';
 function runRuntimePoserSuite(): number {
   console.log('\n── the runtime poser: a production in-place poser held equal to the oracle at tolerance 0 by core_gate\'s third dumper (issue #1591) ──');
   let bad = 0;
@@ -16937,6 +16938,7 @@ function runRuntimePoserSuite(): number {
   const root = import.meta.dir;
   const work = mkdtempSync(join(harnessTemp(), 'rigc-runtime-poser-'));
   try {
+    runtimeStage1Cases(say);
     runtimePoserCases(say, { root, work, random: seededRandom });
   } finally {
     rmSync(work, { recursive: true, force: true });

@@ -1662,3 +1662,10 @@ create a fine-grained personal access token scoped to `rig-c/core` with
 the repository secret `RELEASE_PLEASE_TOKEN`, and the workflow picks it up
 (`secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN`). The cost is a
 credential to rotate.
+
+## Queued for 3.0.0
+
+A major is cut when this list is worth cutting, not on a schedule.
+
+1. **Removing the `./*.ts` courtesy keys from `exports`** ([#1212](https://github.com/rig-c/core/issues/1212), [The import surface](#the-import-surface)) — removing the pattern keys (`./*`, `./*.ts`, `./*.mjs`, `./*.cjs`, `./*.json`, `./*.md`) breaks every deep import by path, so it is reserved for a major rather than any `2.x` release.
+2. **Removing the `--profile spine-html` alias** ([#1277](https://github.com/rig-c/core/issues/1277) / [#1405](https://github.com/rig-c/core/pull/1405) / [#1586](https://github.com/rig-c/core/issues/1586)) — removing a CLI `--profile` value (and `PROFILE_ALIASES` entry) that consumer scripts pass is a breaking change; `2.x` accepts it as `--profile rig-play` and prints the deprecation line on stderr until the next major release.

@@ -67400,31 +67400,64 @@ function runCliSuite(): number {
         'every rule it always was, not a weakened copy',
     );
 
-    // --- issue #1277: the profile is `rig-play`, and its former name is an alias for one minor ---
+    // --- issues #1277 and #1586: the profile is `rig-play`, and its former name is an alias until the next major ---
     //
     // ⭐ The deprecation line is stated here as text, not read from `profileAliasLine`: a
     // control that built its expectation with the printer would go on passing whatever
-    // the printer said. The printer is compared to it as well, so the two cannot drift.
-    const DEPRECATION = 'rigc: --profile spine-html is deprecated and reads as --profile rig-play, the same rules; it is accepted until the next minor release — pass --profile rig-play';
+    // the printer said. The printer and `docs/AUTHORING.md`'s `--profile` row are compared
+    // to it as well, so the three places cannot drift (#1586).
+    const DEPRECATION = 'rigc: --profile spine-html is deprecated and reads as --profile rig-play, the same rules; it is accepted until the next major release — pass --profile rig-play';
     const [former, target] = Object.entries(PROFILE_ALIASES)[0] ?? ['(no alias)', 'spine'];
     const aliased = runCli(args(['--profile', former]));
     const aliasErr = aliased.stderr.split('\n');
+    const authoringProfileRow =
+      readFileSync(join(import.meta.dir, 'docs', 'AUTHORING.md'), 'utf8')
+        .split('\n')
+        .find((line) => line.startsWith('| `--profile` |')) ?? '';
+    const releasingQueued =
+      readFileSync(join(import.meta.dir, 'RELEASING.md'), 'utf8').split(/^## Queued for 3\.0\.0\b/m)[1] ?? '';
+    const checkNoticeCopies = (printerLine: string, stderrLine: string, guideRow: string, queuedSection: string): string[] => {
+      const faults: string[] = [];
+      if (printerLine !== DEPRECATION) faults.push(`profileAliasLine !== DEPRECATION (${JSON.stringify(printerLine)})`);
+      if (stderrLine !== DEPRECATION) faults.push(`stderr[0] !== DEPRECATION (${JSON.stringify(stderrLine)})`);
+      if (!guideRow.includes(`\`${DEPRECATION}\``)) faults.push('AUTHORING.md `--profile` row does not quote DEPRECATION verbatim');
+      if (!guideRow.includes('until the next major release') || guideRow.includes('next minor release')) {
+        faults.push('AUTHORING.md `--profile` row does not state "until the next major release"');
+      }
+      if (!queuedSection.includes('not on a schedule')) faults.push('RELEASING.md Queued for 3.0.0 does not state "not on a schedule"');
+      if (!queuedSection.includes('./*.ts') || !queuedSection.includes('#1212')) {
+        faults.push('RELEASING.md Queued for 3.0.0 does not list the `./*.ts` courtesy keys (#1212)');
+      }
+      if (!queuedSection.includes('--profile spine-html') || !queuedSection.includes('#1277') || !queuedSection.includes('#1405') || !queuedSection.includes('#1586')) {
+        faults.push('RELEASING.md Queued for 3.0.0 does not list `--profile spine-html` (#1277 / #1405 / #1586)');
+      }
+      return faults;
+    };
+    const noticeFaults = checkNoticeCopies(profileAliasLine(former, target), aliasErr[0] ?? '', authoringProfileRow, releasingQueued);
+    const plantedAuthoringDrift = checkNoticeCopies(
+      profileAliasLine(former, target),
+      aliasErr[0] ?? '',
+      authoringProfileRow.replaceAll('until the next major release', 'until the next minor release'),
+      releasingQueued,
+    );
     say(
       'CLI110_THE_FORMER_PROFILE_NAME_READS_AS_RIG_PLAY_AND_SAYS_SO_ON_ITS_FIRST_STDERR_LINE',
       Object.keys(PROFILE_ALIASES).length === 1 &&
         target === 'rig-play' &&
-        profileAliasLine(former, target) === DEPRECATION &&
-        aliasErr[0] === DEPRECATION &&
+        noticeFaults.length === 0 &&
+        plantedAuthoringDrift.length === 2 &&
         aliased.status === opted.status &&
         aliased.stdout === opted.stdout &&
         aliasErr.slice(1).join('\n') === opted.stderr &&
         !opted.stderr.includes('deprecated'),
       `--profile ${former}: exit ${String(aliased.status)} (rig-play: ${String(opted.status)}), first stderr line ` +
-        `${JSON.stringify(aliasErr[0])}, stdout ${aliased.stdout === opted.stdout ? 'identical to' : 'DIFFERENT from'} --profile rig-play's, ` +
+        `${JSON.stringify(aliasErr[0])}, notice copies (report.ts / selftest.ts / AUTHORING.md + RELEASING.md Queued for 3.0.0): ` +
+        `${noticeFaults.length === 0 ? 'all match' : noticeFaults.join('; ')} (planted AUTHORING drift: ${plantedAuthoringDrift.length} fault(s)), ` +
+        `stdout ${aliased.stdout === opted.stdout ? 'identical to' : 'DIFFERENT from'} --profile rig-play's, ` +
         `the rest of stderr ${aliasErr.slice(1).join('\n') === opted.stderr ? 'identical' : 'DIFFERENT'}; ` +
         `--profile rig-play prints ${opted.stderr.includes('deprecated') ? 'A' : 'no'} deprecation line`,
-      "a consumer's scripts carry the old flag, so it has to keep selecting the same rules for one minor and say, " +
-        'on the stream a report does not use, which name to pass instead (#1277)',
+      "a consumer's scripts carry the old flag, so it has to keep selecting the same rules until the next major release and say, " +
+        'on the stream a report does not use, which name to pass instead (#1277, #1586)',
     );
 
     const typo = runCli(args(['--profile', 'spine-htlm']));
@@ -67523,7 +67556,7 @@ function runCliSuite(): number {
         `and ${underSpine !== underTarget ? 'differ' : 'DO NOT differ'} from "spine"'s; unknown: ${JSON.stringify(unknownRefused)}; ` +
         `planted (resolution removed): "${former}" runs ${unresolved.length} of ${ASSERTION_NAMES.length} rules — the ${validityOnly.length} validity ones`,
       'the kind rule reads any name but rig-play as validity-only, so a former name that reached it unresolved would run a ' +
-        'weaker gate in silence; a courtesy-key caller of the release before keeps its rules for the minor the alias lives (#1277)',
+        'weaker gate in silence; a courtesy-key caller of the release before keeps its rules until the next major release (#1277, #1586)',
     );
   }
 

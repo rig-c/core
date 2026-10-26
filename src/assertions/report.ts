@@ -20,7 +20,7 @@ export const VALIDATE_PROFILES: readonly AssertionProfile[] = ['spine', 'rig-pla
  * the target and never the alias.
  */
 export function profileAliasLine(alias: string, target: AssertionProfile): string {
-  return `rigc: --profile ${alias} is deprecated and reads as --profile ${target}, the same rules; it is accepted until the next minor release — pass --profile ${target}`;
+  return `rigc: --profile ${alias} is deprecated and reads as --profile ${target}, the same rules; it is accepted until the next major release — pass --profile ${target}`;
 }
 
 /**

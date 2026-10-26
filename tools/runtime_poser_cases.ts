@@ -19,13 +19,53 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readModel, underNoSkin } from '../src/core/index.ts';
 import { openTrack } from '../src/core/track.ts';
-import { compileRuntime, RUNTIME_FEATURES, RuntimeInputError, RuntimePose, RuntimeRefusal, L_ROTATION, WORLDS, type RuntimeFeature, type RuntimeModel, type RuntimePlant } from '../src/runtime/index.ts';
+import { compileRuntime, RUNTIME_FEATURES, RuntimeInputError, RuntimePose, RuntimeRefusal, L_ROTATION, WORLDS, type RuntimeFeature, type RuntimeModel, type RuntimePlant, type RuntimeAttachment } from '../src/runtime/index.ts';
 import { MODEL_DOCUMENT_FILE } from '../src/model.ts';
 import { galleryRecipe, runRecipe } from './emit_hashes.ts';
 import { runtimeLines, runtimeOfTexts, runtimeRow, type RuntimeRow } from './core_gate.ts';
 
 type Obj = Record<string, unknown>;
 type Say = (name: string, problems: string[], detail: string) => void;
+
+/** Exact attachment identity even when display names collide (issue #1596). */
+export function runtimeAttachmentIdentityCase(): { problems: string[]; detail: string } {
+  const mesh = (x: number): Obj => ({ kind: 'mesh', name: 'shared', uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2], vertices: { weighted: false, xy: [x, 0, x + 10, 0, x, 10] } });
+  const doc = underNoSkin(readModel(probeModel({
+    bones: [{ name: 'root' }], slots: [{ name: 's', bone: 'root', setup: 'first' }],
+    attachments: { s: { first: mesh(0), second: mesh(20) } },
+    animations: [{ name: 'switch', duration: 1, slots: [{ name: 's', timelines: [{ name: 'attachment', keys: [{ time: 0, name: 'first' }, { time: 0.5, name: 'second' }] }] }] }],
+  })));
+  const model = compileRuntime(doc);
+  const problems: string[] = [];
+  const validate = (attachments: readonly RuntimeAttachment[]): string[] => {
+    const errors: string[] = [];
+    for (const attachment of attachments) {
+      const slot = model.slots[attachment.slot].name;
+      const record = doc.skins.find(skin => skin.name === attachment.skin)?.attachments[slot]?.[attachment.placeholder];
+      const where = `attachment "${attachment.name}" of slot "${slot}" at ${attachment.skin}/${attachment.placeholder}`;
+      if (!record) { errors.push(`${where}: no source record`); continue; }
+      const geometry = record.geometry;
+      if (geometry?.kind !== 'mesh' || geometry.vertices.weighted) { errors.push(`${where}: expected unweighted mesh source`); continue; }
+      if (geometry.vertices.xy.length !== attachment.count || geometry.vertices.xy.some((value, i) => !Object.is(Math.fround(value), attachment.local[i]))) errors.push(`${where}: source geometry differs from compiled attachment`);
+    }
+    return errors;
+  };
+  if (model.attachments.length !== 2 || model.attachments.some(attachment => attachment.name !== 'shared')) problems.push(`expected two compiled attachments named shared; found ${model.attachments.map(attachment => attachment.name).join(', ')}`);
+  if (new Set(model.attachments.map(attachment => attachment.placeholder)).size !== 2) problems.push('the two display-name twins lost their distinct table placeholders');
+  problems.push(...validate(model.attachments));
+  const plants: Array<[string, readonly RuntimeAttachment[]]> = [
+    ['name-as-placeholder', model.attachments.map(attachment => ({ ...attachment, placeholder: attachment.name }))],
+    ['wrong-skin', model.attachments.map(attachment => ({ ...attachment, skin: 'absent' }))],
+    ['swapped-placeholder', model.attachments.map(attachment => ({ ...attachment, placeholder: attachment.placeholder === 'first' ? 'second' : 'first' }))],
+  ];
+  const red: string[] = [];
+  for (const [name, attachments] of plants) {
+    const errors = validate(attachments);
+    if (errors.length === 0 || errors.some(error => !error.includes('attachment "shared" of slot "s"'))) problems.push(`${name}: mutant survived or failed without naming attachment and slot`);
+    else red.push(`${name}: ${errors[0]}`);
+  }
+  return { problems, detail: `two placeholders first/second share display name shared; both resolve by skin/slot/placeholder to their own compiled mesh values; ${red.join('; ')}` };
+}
 
 /** What the suite hands the cases: the checkout, a scratch directory, and the selftest's seeded generator (every population draws from it). */
 export interface RuntimeCasesInput {
@@ -352,6 +392,8 @@ function refusalOf(text: string, options: { ignore?: readonly 'events'[] } = {})
 
 /** The runtime poser's controls (the suite's `runtime-poser`). */
 export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
+  const identity = runtimeAttachmentIdentityCase();
+  say('RP12_ATTACHMENT_SOURCE_IDENTITY_SURVIVES_SHARED_DISPLAY_NAMES', identity.problems, identity.detail);
   const { built, problems: buildProblems } = buildGallery(input.root, join(input.work, 'gallery'));
   const gallery = built.map((b) => runtimeRow(b.name, b.out));
 

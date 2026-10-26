@@ -45252,8 +45252,236 @@ function runDeformTransformSuite(): number {
       'the way a symmetric shell does, so `"narrowing": false` drops `u·(cos t − 1)` and keeps `−z·sin t` alone',
   );
 
+  runAuthoredDepthCases(say);
   runDeformEnvelopeCases(say);
   return bad;
+}
+
+
+/** Authored three-bone strip: the oracle reads the emitted binds and runtime
+ * matrices, projects independently, then poses the transcribed offsets. No
+ * compiler sampler, transform evaluator or inverse helper supplies a number. */
+function runAuthoredDepthCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = mkdtempSync(join(harnessTemp(), 'rigc-authored-depth-'));
+  const width = 32, height = 80, scale = 12;
+  const art = new Plate(width, height), sheet = new Plate(width, height);
+  const level = (x: number, y: number): number => 40 + 3 * x + y;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    art.set(x, y, (Math.floor(x / 4) + Math.floor(y / 4)) % 2 === 0 ? [60, 90, 120, 255] : [180, 190, 210, 255]);
+    const l = level(x, y); sheet.set(x, y, [l, l, l, 255]);
+  }
+  for (const [i, letter] of [...'PLACEHOLDER'].entries()) art.text(letter, 1, i * 7, 1, [240, 110, 50, 255]);
+  art.writePng(join(dir, 'strip.png')); sheet.writePng(join(dir, 'depth.png'));
+  const bones = [
+    { name: 'root', x: 21, y: 37, rotation: 23, scaleX: 1.2, scaleY: 0.8 },
+    { name: 'strand0', parent: 'root', x: 3, y: -2, rotation: 17 },
+    { name: 'strand1', parent: 'strand0', y: -10, rotation: -31, scaleX: 0.9, scaleY: 1.1 },
+    { name: 'strand2', parent: 'strand1', y: -10, rotation: 26 },
+  ];
+  const setupBones = computeWorldTransforms(bones);
+  const anchor = setupBones.get('strand0')!;
+  const points = [[-6, 0], [-6, -8], [-6, -16], [-6, -24], [6, -24], [6, -16], [6, -8], [6, 0]];
+  const triangles = [0, 1, 6, 0, 6, 7, 1, 2, 5, 1, 5, 6, 2, 3, 4, 2, 4, 5];
+  const shares = [[1, 0, 0], [0.5, 0.5, 0], [0, 0.5, 0.5], [0, 0, 1]];
+  const weights = points.map(([x, y], v) => shares[Math.min(v, 7 - v)].flatMap((weight, b) => {
+    if (weight === 0) return [];
+    const bone = `strand${b}`, m = setupBones.get(bone)!;
+    const px = anchor.worldX + x - m.worldX, py = anchor.worldY + y - m.worldY;
+    const det = m.a * m.d - m.b * m.c;
+    return [{ bone, x: (px * m.d - py * m.b) / det, y: (py * m.a - px * m.c) / det, weight }];
+  }));
+  const attachment = { type: 'mesh', image: 'strip.png', width, height, uvs: points.flatMap(([x, y]) => [(width / 2 - x) / width, (height / 2 - y) / height]), triangles, weights, hull: 8,
+    depth: { image: 'depth.png', near: 'white', zScale: scale } };
+  const rig = { spec: 'rigc-rig/1', name: 'depth_probe', skeleton: { width: 96, height: 128 }, bones,
+    slots: [{ name: 'strand', bone: 'strand0', attachment: 'strand' }],
+    skins: { default: { strand: { strand: attachment } } } };
+  const rigPath = join(dir, 'rig.json'), motionPath = join(dir, 'motion.json');
+  const outDir = join(dir, 'spine');
+  const tracks = bones.slice(1).map((b, i) => ({ bone: b.name, property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [[11, -19, 27][i]] }] }));
+  const build = (kind: 'yaw' | 'pitch', degrees: number, narrowing: boolean, run?: number[], chain = true): CompileResult => {
+    writeFileSync(rigPath, JSON.stringify(rig));
+    writeFileSync(motionPath, JSON.stringify({ spec: 'rigc-motion/1', archetype: rig.name, cut: rig.name, easings: {},
+      animations: { move: { duration: 1, loop: false, tracks: chain ? tracks : [],
+        deform: [{ slot: 'strand', attachment: 'strand', keys: [{ t: 0 }, { t: 1,
+          ...(run === undefined ? { transform: { kind, depth: true, degrees, narrowing } } : { vertices: run }) }] }] } } }));
+    return compile({ rigPath, motionPath, imagesDir: dir, outDir });
+  };
+  const first = build('yaw', 0, true);
+  const posable = (b: CompileResult): Posable => posableFromText(b.skeletonText, b.atlasText, outDir);
+  const rest = new Skeleton(posable(first).data); rest.setupPose(); rest.updateWorldTransform(Physics.reset);
+  type Bind = { bone: number; x: number; y: number; weight: number };
+  const emitted = first.skeleton.skins[0].attachments.strand.strand;
+  if (!('type' in emitted) || emitted.type !== 'mesh' || !('vertices' in emitted)) throw new Error('the authored strip emitted no mesh vertices');
+  const raw = emitted.vertices;
+  const binds: Bind[][] = [];
+  for (let at = 0; at < raw.length;) {
+    const count = raw[at++], row: Bind[] = [];
+    for (let i = 0; i < count; i++, at += 4) row.push({ bone: raw[at], x: raw[at + 1], y: raw[at + 2], weight: raw[at + 3] });
+    binds.push(row);
+  }
+  const world = (row: Bind[], pose: Skeleton): [number, number] => {
+    let x = 0, y = 0;
+    for (const b of row) { const m = pose.bones[b.bone].appliedPose;
+      x += (m.a * b.x + m.b * b.y + m.worldX) * b.weight;
+      y += (m.c * b.x + m.d * b.y + m.worldY) * b.weight;
+    } return [x, y];
+  };
+  const origin = rest.findBone('strand0')!.appliedPose;
+  // An affine sheet has an independent exact interpolant in pixel-centre
+  // coordinates. Clamp first; no production bilinear or tone function is read.
+  const oracle = (kind: 'yaw' | 'pitch', degrees: number, narrowing: boolean, plant = '', pose = rest, rows = binds): number[] => {
+    const radians = degrees * Math.PI / 180;
+    return rows.flatMap((row) => {
+      const xy = world(row, pose);
+      const px = xy[0] - (plant === 'origin' ? 0 : origin.worldX) + width / 2;
+      const py = height / 2 - (xy[1] - (plant === 'origin' ? 0 : origin.worldY));
+      const l = 40 + 3 * Math.max(0, Math.min(width - 1, px - 0.5)) + Math.max(0, Math.min(height - 1, py - 0.5));
+      const z = l / 255 * scale;
+      const u = xy[kind === 'yaw' ? 0 : 1];
+      const projected = (narrowing ? u * Math.cos(radians) : u) - z * Math.sin(radians);
+      const d = f32(Math.round((projected - u) * 1e6) / 1e6);
+      const [dx, dy] = kind === 'yaw' ? [d, 0] : [0, d];
+      return row.flatMap((b) => {
+        if (plant === 'inverse') return [f32(dx), f32(dy)];
+        const m = rest.bones[b.bone].appliedPose, det = m.a * m.d - m.b * m.c;
+        return [f32((dx * m.d - dy * m.b) / det), f32((dy * m.a - dx * m.c) / det)];
+      });
+    });
+  };
+  const failures: string[] = [];
+  let comparisons = 0;
+  for (const kind of ['yaw', 'pitch'] as const) for (const degrees of [-15, 0, 15]) for (const narrowing of [true, false]) {
+    const b = build(kind, degrees, narrowing), want = oracle(kind, degrees, narrowing);
+    const got = emittedDeformRun(b, 'move', 'strand', 1);
+    // An all-zero key is emitted as the reset/empty run by both spellings.
+    if (JSON.stringify(got.map(Math.fround)) !== JSON.stringify(want.map(Math.fround))) failures.push(`${kind}/${degrees}/${narrowing}: run differs`);
+    const expected = build(kind, degrees, narrowing, want);
+    const actualPose = poseAtSample(posable(b).data, 'move', 30, 30);
+    const expectedPose = poseAtSample(posable(expected).data, 'move', 30, 30);
+    for (let v = 0; v < binds.length; v++) {
+      const a = worldVertex(actualPose, 'strand', v), e = worldVertex(expectedPose, 'strand', v);
+      if (a[0] !== e[0] || a[1] !== e[1]) failures.push(`${kind}/${degrees}/${narrowing}/v${v}: pose differs`);
+      comparisons += 2;
+    }
+  }
+  say('AD00_AUTHORED_DEPTH_CHAIN_EQUALS_INDEPENDENT_PROJECTION_AT_TOLERANCE_ZERO', failures.length === 0,
+    `${comparisons} posed coordinates, 12 runs; ${failures.join('; ') || 'all equal at tolerance 0'}`,
+    'setup positions, part origin, both axes and narrowing must survive three transformed bones; the expected run is independently projected and posed');
+  const positive = build('yaw', 15, true), good = oracle('yaw', 15, true);
+  const moved = poseAtSample(posable(positive).data, 'move', 30, 30);
+  const plants = [oracle('yaw', 15, true, 'origin'), oracle('yaw', 15, true, 'inverse'), oracle('yaw', 15, true, '', moved)];
+  const rejected = plants.map((p) => JSON.stringify(p) !== JSON.stringify(good));
+  say('AD01_WRONG_ORIGIN_NO_INVERSE_AND_POSED_SAMPLING_ARE_REJECTED', rejected.every(Boolean), JSON.stringify(rejected),
+    'a positive result alone cannot distinguish a copied oracle; each distinct coordinate mistake must disagree');
+  // Physics is stepped by the official runtime on both independently authored
+  // tables; its measured motion must be nonzero and composition bit-identical.
+  const physics = { type: 'physics', name: 'strand_physics', bone: 'strand2', rotate: 1, inertia: 0.5, strength: 80, damping: 0.85, mass: 1, mix: 1 };
+  const physicsRig = rig as typeof rig & { constraints?: Array<typeof physics> };
+  physicsRig.constraints = [physics];
+  const pb = build('pitch', -15, false), pe = build('pitch', -15, false, oracle('pitch', -15, false));
+  const pa = poseAtSample(posable(pb).data, 'move', 60, 60), px = poseAtSample(posable(pe).data, 'move', 60, 60);
+  delete physicsRig.constraints;
+  const noPhysics = poseAtSample(posable(build('pitch', -15, false)).data, 'move', 60, 60);
+  let offsetAt = 0;
+  const independentRun = oracle('pitch', -15, false);
+  const manual = binds.map((row) => {
+    let x = 0, y = 0;
+    for (const b of row) {
+      const m = pa.bones[b.bone].appliedPose;
+      const vx = Math.fround(b.x) + Math.fround(independentRun[offsetAt++]);
+      const vy = Math.fround(b.y) + Math.fround(independentRun[offsetAt++]);
+      x += (vx * m.a + vy * m.b + m.worldX) * Math.fround(b.weight);
+      y += (vx * m.c + vy * m.d + m.worldY) * Math.fround(b.weight);
+    }
+    return [x, y];
+  });
+  const manualEqual = manual.every((xy, v) => JSON.stringify(xy) === JSON.stringify(worldVertex(pa, 'strand', v)));
+  const physicsEqual = binds.every((_, v) => JSON.stringify(worldVertex(pa, 'strand', v)) === JSON.stringify(worldVertex(px, 'strand', v)));
+  const physicsMoved = binds.some((_, v) => JSON.stringify(worldVertex(pa, 'strand', v)) !== JSON.stringify(worldVertex(noPhysics, 'strand', v)));
+  say('AD02_CHAIN_PHYSICS_COMPOSES_WITH_THE_INDEPENDENT_DEPTH_TABLE', physicsEqual && physicsMoved && manualEqual,
+    `identical=${physicsEqual}, independent posed sum=${manualEqual}, physics changes vertices=${physicsMoved}`, 'physics must remain active and compose with the turn rather than replacing or cancelling it');
+  // On this affine field, zScale=2*255 makes |dz/dy|=2 and
+  // |dz/dx|=6, so both axes have a finite no-narrowing ceiling.
+  // The +/-15 composition controls above retain their separate scale.
+  attachment.depth.zScale = 2 * 255;
+  const ceilingFailures: string[] = [];
+  let ceilingChecks = 0;
+  for (const kind of ['yaw', 'pitch'] as const) for (const narrowing of [true, false]) {
+    const control = build(kind, 0, narrowing, undefined, false);
+    for (const side of ['positive', 'negative'] as const) {
+      const limit = control.meshes[0].depth!.ceiling[kind][side];
+      if (limit === null) continue;
+      const sign = side === 'positive' ? 1 : -1;
+      for (const [delta, fold] of [[-0.01, false], [0.01, true]] as const) {
+        const b = build(kind, sign * (limit.degrees + delta), narrowing, undefined, false);
+        const input = { skeletonText: b.skeletonText, atlasText: b.atlasText, atlasDir: outDir, modelText: threadedModel(b, b.atlasText)!, rig: b.rig, declaredDurations: b.declaredDurations, profile: 'rig-play' as const };
+        const spine = validate(input), core = validateModel(modelInputOf(input, input.modelText));
+        ceilingChecks++;
+        const refused = (r: { failures: ReadonlyArray<{ assertion: string }> }): boolean => r.failures.some((f) => f.assertion === A39);
+        if (refused(spine) !== fold || refused(core) !== fold) ceilingFailures.push(`${kind}/${side}/${narrowing}/${delta}: ${refused(spine)}/${refused(core)}`);
+      }
+    }
+  }
+  say('AD03_WEIGHTED_TURN_CEILING_AND_BOTH_A39_SUPPLIERS_AGREE', ceilingFailures.length === 0 && ceilingChecks > 0,
+    ceilingFailures.join('; ') || `${ceilingChecks} checks: both sides of every finite yaw/pitch ceiling agree on both suppliers`,
+    'the ceiling is a setup-world report; the artifact-side winding gate must see each predicted fold');
+  attachment.depth.zScale = scale;
+  const refusals: string[] = [];
+  const refuse = (label: string, edit: () => void, restore: () => void, code: string): void => {
+    edit(); let found = '';
+    try { build('yaw', 15, true); } catch (error) { found = error instanceof CompileError ? error.code ?? error.message : String(error); }
+    finally { restore(); }
+    if (found !== code) refusals.push(`${label}: ${found || 'accepted'}`);
+  };
+  refuse('size', () => { new Plate(width - 1, height).writePng(join(dir, 'depth.png')); }, () => sheet.writePng(join(dir, 'depth.png')), 'CE_COMPILE_GREY_SHEET_SIZE_MISMATCH');
+  const image = attachment.image;
+  refuse('image', () => { delete (attachment as { image?: string }).image; }, () => { attachment.image = image; }, 'CE_COMPILE_DEPTH_IMAGE_REQUIRED');
+  const generated = attachment as typeof attachment & { generator?: { kind: string; cols: number; rows: number } };
+  refuse('generator', () => { generated.generator = { kind: 'grid', cols: 2, rows: 2 }; }, () => { delete generated.generator; }, 'CE_COMPILE_MESH_AUTHORED_AND_GENERATED');
+  say('AD04_AUTHORED_DEPTH_REFUSES_SIZE_MISMATCH_AND_MISSING_IMAGE_BY_NAME', refusals.length === 0, refusals.join('; ') || 'size, image and mixed geometry refused by name',
+    'a sheet belongs to one part grid and cannot silently sample another image or geometry');
+  const mutable = attachment as { weights?: typeof weights; vertices?: number[]; depth?: typeof attachment.depth; uvs?: number[]; triangles?: number[]; generator?: { kind: string; cols: number; rows: number } };
+  const originalUvs = attachment.uvs;
+  const originalTriangles = attachment.triangles;
+  refuse('generator depth location', () => {
+    delete mutable.weights; delete mutable.uvs; delete mutable.triangles;
+    mutable.generator = { kind: 'grid', cols: 2, rows: 2 };
+  }, () => {
+    mutable.weights = weights; mutable.uvs = originalUvs; mutable.triangles = originalTriangles; delete mutable.generator;
+  }, 'CE_COMPILE_DEPTH_AUTHORED_REQUIRED');
+  say('AD05_ATTACHMENT_DEPTH_BESIDE_A_GENERATOR_IS_REFUSED', refusals.length === 0,
+    refusals.join('; ') || 'top-level depth on generated geometry refused by name',
+    'the new spelling cannot be silently ignored or override a generator sheet');
+  const rigidFailures: string[] = [];
+  const rigidRows = points.map(([x, y]) => [{ bone: rest.bones.indexOf(rest.findBone('strand0')!), x, y, weight: 1 }]);
+  const depthSpec = attachment.depth;
+  let rigidCoordinates = 0;
+  for (const weighted of [false, true]) {
+    if (weighted) mutable.weights = points.map(([x, y]) => [{ bone: 'strand0', x, y, weight: 1 }]);
+    else { delete mutable.weights; mutable.vertices = points.flat(); }
+    for (const kind of ['yaw', 'pitch'] as const) for (const degrees of [-15, 15]) for (const narrowing of [true, false]) {
+      const b = build(kind, degrees, narrowing);
+      const want = oracle(kind, degrees, narrowing, '', rest, rigidRows);
+      const expected = build(kind, degrees, narrowing, want);
+      if (JSON.stringify(emittedDeformRun(b, 'move', 'strand', 1)) !== JSON.stringify(want)) rigidFailures.push(`${weighted}/${kind}/${degrees}/${narrowing}: run differs`);
+      const a = poseAtSample(posable(b).data, 'move', 30, 30), e = poseAtSample(posable(expected).data, 'move', 30, 30);
+      for (let v = 0; v < points.length; v++) {
+        if (JSON.stringify(worldVertex(a, 'strand', v)) !== JSON.stringify(worldVertex(e, 'strand', v))) rigidFailures.push(`${weighted}/${kind}/v${v}: pose differs`);
+        rigidCoordinates += 2;
+      }
+    }
+    const withSheet = build('yaw', 0, true, points.flatMap(() => [0, 0]));
+    delete mutable.depth;
+    const withoutSheet = build('yaw', 0, true, points.flatMap(() => [0, 0]));
+    if (withSheet.skeletonText !== withoutSheet.skeletonText || withSheet.atlasText !== withoutSheet.atlasText) rigidFailures.push(`${weighted}: an unread sheet moved output bytes`);
+    mutable.depth = depthSpec;
+    delete mutable.vertices;
+  }
+  mutable.weights = weights;
+  say('AD06_UNWEIGHTED_AND_RIGID_WEIGHTED_DEPTH_USE_WORLD_AND_UNREAD_SHEETS_MOVE_NO_BYTES', rigidFailures.length === 0,
+    `${rigidCoordinates} posed coordinates at tolerance 0; ${rigidFailures.join('; ') || 'both rigid encodings and inert-sheet byte controls agree'}`,
+    'one bone still has a transformed bind frame, so the world-depth path must also invert that frame; an unread sheet must change no emitted skeleton or atlas byte');
+
 }
 
 /**

@@ -3011,7 +3011,7 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
   const meshes: CompileResult['meshes'] = [];
   // `skin/slot/attachment` -> per-vertex z, for the attachments that named a
   // depth map. Read at deform-key time; never emitted. See `AttachmentContext`.
-  const attachmentDepths = new Map<string, number[]>();
+  const attachmentDepths = new Map<string, number[] | { z: number[]; geometry: DeformGeometry }>();
   // The same for a `soft` mask's per-vertex level, which a deform envelope's
   // `mask` reads (issue #1413). Never emitted either.
   const attachmentSoftMasks = new Map<string, DeformSoftMask>();
@@ -3729,6 +3729,7 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
         if (deformTimelines.get(skinName)?.get(track.slot)?.has(track.attachment)) {
           throw new CompileError(`${at}: two deform timelines on one attachment; merge them into one`, 'CE_COMPILE_DEFORM_TIMELINE_DUPLICATE');
         }
+        const sampledDepth = attachmentDepths.get(`${skinName}/${track.slot}/${track.attachment}`);
         const keys = compileDeformTrack(
           track,
           motion,
@@ -3736,10 +3737,11 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
           anim.duration,
           {
             ...deformGeometryOf(attachment, at, transforms),
-            depth: attachmentDepths.get(`${skinName}/${track.slot}/${track.attachment}`) ?? null,
+            depth: (Array.isArray(sampledDepth) ? sampledDepth : sampledDepth?.z) ?? null,
             soft: attachmentSoftMasks.get(`${skinName}/${track.slot}/${track.attachment}`) ?? null,
           },
           deformTransforms,
+          sampledDepth !== undefined && !Array.isArray(sampledDepth) ? sampledDepth.geometry : null,
         );
         for (const key of keys) compiledDuration = Math.max(compiledDuration, key.time);
         attachmentTimelinesOf(skinName, track.slot).set(track.attachment, { deform: keys });
@@ -4367,7 +4369,7 @@ interface AttachmentContext {
    * round trip and then vanish — and the whole point of this table is to be
    * read by `evaluateDeformTransform` at key time and never emitted at all.
    */
-  depths: Map<string, number[]>;
+  depths: Map<string, number[] | { z: number[]; geometry: DeformGeometry }>;
   /**
    * A `soft` mask's file and its sampled level per vertex, keyed like `depths`
    * — what a deform envelope's `mask` reads at key time (issue #1413). Never
@@ -5755,7 +5757,12 @@ function buildRigMesh(
   if (authored && att.generator) {
     throw new CompileError(`${where}: a mesh is either authored geometry or a generator, never both`, 'CE_COMPILE_MESH_AUTHORED_AND_GENERATED');
   }
-  if (att.generator) return buildGeneratedMesh(att, att.generator, placeholder, where, ctx);
+  if (att.generator) {
+    if (att.depth !== undefined) {
+      throw new CompileError(`${where}: attachment "depth" describes authored geometry; a generated mesh states its depth on the contour or grid generator instead`, 'CE_COMPILE_DEPTH_AUTHORED_REQUIRED');
+    }
+    return buildGeneratedMesh(att, att.generator, placeholder, where, ctx);
+  }
   if (att.vertices && att.weights) {
     throw new CompileError(
       `${where}: a mesh gives geometry as "vertices" or as "weights", never both — "weights" is the by-name form of the same data`, 'CE_COMPILE_MESH_GEOMETRY_SOURCES_CONFLICT',
@@ -5833,6 +5840,35 @@ function buildRigMesh(
     height: f32(height),
   };
   if (att.sequence !== undefined) out.sequence = buildSequence(att.sequence);
+  let depth: ReturnType<typeof sampleMeshDepth> | undefined;
+  if (att.depth !== undefined) {
+    if (img === undefined) {
+      throw new CompileError(`${where}: an authored mesh with "depth" needs an "image" to locate the part's pixel grid`, 'CE_COMPILE_DEPTH_IMAGE_REQUIRED');
+    }
+    const anchor = ctx.transforms.get(ctx.anchorBone);
+    if (!anchor) throw new CompileError(`${where}: slot bone "${ctx.anchorBone}" has no setup transform`, 'CE_COMPILE_SLOT_SETUP_TRANSFORM_MISSING');
+    const geometry = deformGeometryOf(out, where, ctx.transforms, anchor);
+    if (geometry.setup === null) {
+      throw new CompileError(`${where}: depth needs resolved setup positions — ${geometry.setupWhy}`, 'CE_COMPILE_DEFORM_TRANSFORM_SETUP_UNRESOLVED');
+    }
+    const world = geometry.setup;
+    const plate = partPlate(img);
+    const toArt = img.width / plate.width;
+    // The generator's window is centred on the slot bone's setup WORLD origin.
+    // UVs describe texture placement, not a vertex's position in that window.
+    const points: Array<[number, number]> = [];
+    for (let v = 0; v < world.length; v += 2) {
+      points.push([(world[v] - anchor.worldX + img.width / 2) / toArt,
+        (img.height / 2 - (world[v + 1] - anchor.worldY)) / toArt]);
+    }
+    depth = sampleMeshDepth(att.depth, 'authored', points, att.triangles,
+      (px, py) => [anchor.worldX + px * toArt - img.width / 2, anchor.worldY + img.height / 2 - py * toArt],
+      img.pageGrid === undefined ? plateAlpha(plate) : { unlocated: img.pageGrid.said },
+      sheetGridOf(img, plate), where, ctx,
+      Array.from({ length: world.length / 2 }, (_, v) => [world[2 * v], world[2 * v + 1]]));
+    geometry.depth = depth.z;
+    ctx.depths.set(`${ctx.skinName}/${ctx.slotName}/${placeholder}`, { z: depth.z, geometry });
+  }
   // Register it as `authored`: geometry rigc did not build and whose topology it
   // therefore gets to assume nothing about. The generator-topology assertions
   // read this and skip rather than measuring a ring that was never a ring.
@@ -5843,6 +5879,7 @@ function buildRigMesh(
   ctx.meshes.push({
     slot: ctx.slotName,
     kind: 'authored',
+    ...(depth === undefined ? {} : { depth: depth.summary }),
     attachments: [ctx.slotName],
     vertices: uvCount / 2,
     triangles: att.triangles.length / 3,
@@ -6204,8 +6241,8 @@ function buildGeneratedMesh(
  * not invent tolerances.
  */
 function sampleMeshDepth(
-  spec: NonNullable<Extract<NonNullable<RigMeshAttachment['generator']>, { kind: 'contour' }>['depth']>,
-  kind: 'contour' | 'grid',
+  spec: RigDepthMap,
+  kind: 'contour' | 'grid' | 'authored',
   points: ReadonlyArray<readonly [number, number]>,
   /** The mesh's own triangle list, for the turn ceiling. */
   triangles: ReadonlyArray<number>,
@@ -6244,6 +6281,8 @@ function sampleMeshDepth(
   grid: SheetGrid,
   where: string,
   ctx: AttachmentContext,
+  /** Authored setup-world vertices, already in the depth turn's evaluation space. */
+  turnPoints?: ReadonlyArray<readonly [number, number]>,
 ): {
   z: number[];
   /** The tone-curved 0..1 nearness per vertex, which `bind` thresholds. */
@@ -6327,7 +6366,9 @@ function sampleMeshDepth(
       kind === 'contour'
         ? 'A contour mesh puts every vertex ON the silhouette and pushes it out by the margin, so a sheet cut to ' +
           'the art stops short of every one of them. Dilate the sheet past the mesh margin, or lower the margin.'
-        : 'A grid spans the whole part window, corners included, while a sheet is usually cut to the art — so the ' +
+        : kind === 'authored'
+          ? 'The authored setup vertices reach outside the sheet coverage. Extend the sheet to cover their bilinear taps, or correct the setup geometry.'
+          : 'A grid spans the whole part window, corners included, while a sheet is usually cut to the art — so the ' +
           'lattice reaches past it wherever the art does not fill the window. Dilate the sheet to the window, or ' +
           'state "us"/"vs" that keep the lattice inside the art.';
     throw new CompileError(
@@ -6368,7 +6409,7 @@ function sampleMeshDepth(
       range: [f32(lo), f32(hi)],
       ...(partAlpha instanceof Uint8Array ? { undrawn } : { undrawn: null, unlocated: partAlpha.unlocated }),
       ceiling: turnCeiling(
-        points.map(([px, py]) => toBind(px, py)),
+        turnPoints ?? points.map(([px, py]) => toBind(px, py)),
         z,
         triangles,
         ctx.turnNarrowing === undefined ? undefined : { narrowing: ctx.turnNarrowing },
@@ -8737,7 +8778,7 @@ export interface DeformGeometry {
   /** Why `setup` is null, phrased for the refusal. Null when it is not. */
   setupWhy: string | null;
   /**
-   * Per-vertex `z`, when this attachment's generator named a depth map.
+   * Per-vertex `z`, when this attachment or its generator named a depth map.
    *
    * Not measured from the attachment like everything else here — there
    * is nowhere in the format to measure it FROM, which is the whole reason the
@@ -8771,6 +8812,8 @@ export function deformGeometryOf(
   where: string,
   /** Every bone's setup world transform, by name. */
   transforms: Map<string, BoneTransform>,
+  /** Force the world-offset path for an authored depth turn, including rigid meshes. */
+  depthAnchor?: BoneTransform,
 ): DeformGeometry {
   const type = att.kind;
   let worldVerticesLength: number;
@@ -8816,6 +8859,15 @@ export function deformGeometryOf(
   const vertices = att.vertices;
   const weighted = vertices.weighted;
   if (!vertices.weighted) {
+    if (depthAnchor !== undefined) {
+      return {
+        weighted, deformLength: worldVerticesLength, vertexCount: worldVerticesLength / 2,
+        boneCounts: Array(worldVerticesLength / 2).fill(1),
+        setup: setupWorldVertices(vertices, depthAnchor, transforms, where).flat(),
+        influenceBones: Array(worldVerticesLength / 2).fill(depthAnchor),
+        setupWhy: null, depth: null, soft: null,
+      };
+    }
     return {
       weighted,
       deformLength: worldVerticesLength,
@@ -8879,7 +8931,7 @@ export function deformGeometryOf(
   // the runtime's last bits (`b = −2.3e-8` on an unrotated bone) into its
   // offset, about 1e-6 on gallery/look's hair locks. Evaluating on the authored
   // positions instead would need them carried here from the binder.
-  if (boneCounts.every((n) => n === 1) && bones.size === 1) {
+  if (depthAnchor === undefined && boneCounts.every((n) => n === 1) && bones.size === 1) {
     return { ...common, setup: bindSpace, influenceBones: null, setupWhy: null };
   }
   // -- several influences, evaluated in world (issue #389) -------------------
@@ -9055,6 +9107,7 @@ function compileDeformTrack(
   duration: number,
   geometry: DeformGeometry,
   generated: CompileResult['deformTransforms'],
+  depthWorld: DeformGeometry | null = null,
 ): ModelKey[] {
   const skin = track.skin ?? 'default';
   const where = `animation "${animName}" deform ${skin}/${track.slot}/${track.attachment}`;
@@ -9080,6 +9133,7 @@ function compileDeformTrack(
     // definite, which the arithmetic does for any weighting that closes at 1 and
     // for no weighting that does not (issue #389).
     if (key.transform !== undefined) {
+      const evaluated = ('depth' in key.transform && key.transform.depth === true ? depthWorld : null) ?? geometry;
       if (key.vertices !== undefined && key.vertices !== null) {
         throw new CompileError(
           `${where} (t=${key.t}): the key carries both a "transform" and a "vertices" run, and they are two answers to ` +
@@ -9090,33 +9144,33 @@ function compileDeformTrack(
       if (key.offset !== undefined || key.fromVertex !== undefined) {
         throw new CompileError(
           `${where} (t=${key.t}): the key states a "transform" and a start index. A transform is a model of the whole ` +
-            `attachment and is evaluated over all ${geometry.vertexCount} of its vertices, so it always starts at deform ` +
+            `attachment and is evaluated over all ${evaluated.vertexCount} of its vertices, so it always starts at deform ` +
             'index 0. A model applied to part of a run leaves a step at the run\'s edge — write the partial run by hand ' +
             'if that is what you mean.', 'CE_COMPILE_DEFORM_TRANSFORM_START_INDEX',
         );
       }
-      if (geometry.setup === null) {
+      if (evaluated.setup === null) {
         throw new CompileError(
           `${where} (t=${key.t}): a "transform" states where every vertex of this attachment goes, and this one has a ` +
-            `vertex the arithmetic cannot place — ${geometry.setupWhy}. Fix the weights, or write the bind-space pairs ` +
+            `vertex the arithmetic cannot place — ${evaluated.setupWhy}. Fix the weights, or write the bind-space pairs ` +
             'yourself and start the run with "offset".', 'CE_COMPILE_DEFORM_TRANSFORM_SETUP_UNRESOLVED',
         );
       }
       const report = evaluateDeformTransform(
         key.transform,
-        geometry.setup,
+        evaluated.setup,
         onModelGrid,
         `${where} (t=${key.t})`,
-        geometry.depth,
-        geometry.soft,
+        evaluated.depth,
+        evaluated.soft,
       );
-      if (report.offsets.length !== geometry.vertexCount * 2) {
+      if (report.offsets.length !== evaluated.vertexCount * 2) {
         // Unreachable while `setup` is one pair per vertex, which is the whole
         // reason both are derived from the same walk. Stated rather than
         // assumed: a silent mismatch here is the overrun A35 exists for.
         throw new CompileError(
           `${where} (t=${key.t}): the transform produced ${report.offsets.length} numbers for ` +
-            `${geometry.vertexCount} vertices`, 'CE_COMPILE_DEFORM_TRANSFORM_OFFSET_COUNT',
+            `${evaluated.vertexCount} vertices`, 'CE_COMPILE_DEFORM_TRANSFORM_OFFSET_COUNT',
         );
       }
       // -- one displacement per vertex -> one pair per influence (issue #389) -
@@ -9128,11 +9182,11 @@ function compileDeformTrack(
       // displacement it expands is the ROUNDED one the report prints, so a
       // reader can reproduce every emitted pair from the audit rather than from
       // a second evaluation.
-      const run = expandDeformToInfluences(report.offsets, geometry);
-      if (run.length !== geometry.deformLength) {
+      const run = expandDeformToInfluences(report.offsets, evaluated);
+      if (run.length !== evaluated.deformLength) {
         throw new CompileError(
           `${where} (t=${key.t}): the transform expanded to ${run.length} numbers and this attachment's deform ` +
-            `array is ${geometry.deformLength} long`, 'CE_COMPILE_DEFORM_TRANSFORM_RUN_LENGTH',
+            `array is ${evaluated.deformLength} long`, 'CE_COMPILE_DEFORM_TRANSFORM_RUN_LENGTH',
         );
       }
       generated.push({
@@ -9148,14 +9202,14 @@ function compileDeformTrack(
         // other way to know they were not evaluated alike. Said only on the path
         // where it is not the attachment's own space, so every existing report
         // prints exactly the lines it printed before.
-        ...(geometry.influenceBones === null
+        ...(evaluated.influenceBones === null
           ? {}
           : {
               expanded: run,
               derived: [
                 ...report.derived,
-                `evaluated at setup WORLD positions, because ${geometry.vertexCount} vertices carry ` +
-                  `${geometry.deformLength / 2} influences; each displacement D is written into every influence as ` +
+                `evaluated at setup WORLD positions, because ${evaluated.vertexCount} vertices carry ` +
+                  `${evaluated.deformLength / 2} influences; each displacement D is written into every influence as ` +
                   'Mᵢ⁻¹·D, so the runtime composes Σwᵢ·Mᵢ·Mᵢ⁻¹·D = D',
               ],
             }),

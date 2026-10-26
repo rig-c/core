@@ -741,7 +741,7 @@ an install of an alias carries the same map, so `spine-rigc/plate` and
 | `rig-c/rig` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
 | `rig-c/mesh` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
 | `rig-c/errors` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
-| `rig-c/meshcompare` | [#1230](https://github.com/rig-c/core/issues/1230), by agreement | nothing |
+| `rig-c/meshcompare` | [#1230](https://github.com/rig-c/core/issues/1230), [#1595](https://github.com/rig-c/core/issues/1595), by agreement | nothing |
 | `rig-c/core` | [#1275](https://github.com/rig-c/core/issues/1275) | nothing |
 | `rig-c/runtime` | [#1591](https://github.com/rig-c/core/issues/1591), requested for play#200 — **experimental, not promised until it stabilises** | nothing |
 | `rig-c/cli` | [#859](https://github.com/rig-c/core/issues/859) | resolved and spawned rather than imported; which entry it runs is the table in *What an install has* above |
@@ -1050,6 +1050,14 @@ and the core poser at the installed version
 (`SMOKE_MESHCOMPARE_COMPARES_FROM_AN_INSTALL_WITH_NO_SPINE_CORE`, the
 contract's `MQ45`). Its line prints the comparison's frames, samples and wall
 time.
+
+[#1595](https://github.com/rig-c/core/issues/1595) also holds
+`prepareMotionReference` and `comparePreparedMotion`, with types
+`MotionReferenceInput` and `PreparedMotionReference`, on that runtime-free
+entry. The install smoke calls the pair and checks its self-comparison report
+against the one-shot bytes. A prepared handle binds the reference model,
+schedule, art bytes and every reference-side option; the candidate list is
+supplied separately for each call.
 
 🎞️ **An entry for the poser a browser player links**
 ([#1275](https://github.com/rig-c/core/issues/1275)). rig-play, the

@@ -172,6 +172,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { isDeepStrictEqual } from 'node:util';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { deflateSync } from 'node:zlib';
 // Imported for the gates that read this file as CODE rather than as text, and
@@ -53022,7 +53023,7 @@ function runMeshQualitySuite(): number {
 // (`SMOKE_MESHCOMPARE_COMPARES_FROM_AN_INSTALL_WITH_NO_SPINE_CORE`), because only
 // an install without spine-core can show the entry needs none.
 
-import { compareMeshesInMotion, compareMeshesInMotionPlanted, comparisonWalk, comparisonWalks, uvCarriers, type CompareAttachment, type ComparePlant, type MotionComparisonInput } from './src/meshcompare.ts';
+import { compareMeshesInMotion, compareMeshesInMotionPlanted, comparePreparedMotion, prepareMotionReference, comparisonWalk, comparisonWalks, uvCarriers, type CompareAttachment, type ComparePlant, type MotionComparisonInput, type MotionReferenceInput, type PreparedMotionReference } from './src/meshcompare.ts';
 import { CONTAINS, uvCarriersWith } from './src/meshcarriers.ts';
 
 /** The plate every compare fixture draws: a strip, opaque everywhere, so every pixel centre is a sample. */
@@ -54677,6 +54678,79 @@ function runMeshCompareSuite(child: MeshCompareChild | null = null): number {
         ),
         'issue #1254: ArtFitBounds is one type, so the comparison reads its declared absence as the measurement and the reduction do — measured, undeclared, never refusing a reference — and an omitted field stays refused',
       );
+    });
+    // --- MQ180–MQ182 (#1595): the prepared source is bound to every input and cannot be poisoned by a report reader ---
+    mcGuard('MQ180-MQ182', () => {
+      const schedule: NonNullable<MotionComparisonInput['schedule']> = { frames: ['setup', { animation: 'bend', times: [0, 1] }], phases: ['grid'], physics: { mode: 'none' }, selection: [] };
+      const input = mcInput(stillRef, [{ id: 'quad', model: stillQuad }], { schedule, bounds: { maxLocalDeformation: 1e9 }, perFrame: false, referenceArtFit: { ...loose }, candidateArtFit: { ...loose } });
+      const { candidates: _candidates, ...bound } = input;
+      const handle = prepareMotionReference(bound);
+      const legacy = compareMeshesInMotion(input);
+      const first = comparePreparedMotion(handle, input);
+      const same = JSON.stringify(first) === JSON.stringify(legacy) && isDeepStrictEqual(first, legacy);
+      say('MQ180_PREPARED_REFERENCE_AND_ONE_SHOT_REPORT_BYTES_ARE_IDENTICAL', same, `report bytes and deep values identical ${same}`, 'the candidate, schedule and all art inputs are the same; preparing the reference must not move a reported byte or a signed-zero value');
+
+      const refused = (h: PreparedMotionReference, changed: MotionComparisonInput): string => {
+        try { comparePreparedMotion(h, changed); return 'accepted'; }
+        catch (e) { return e instanceof MeshReductionError ? `${e.code}: ${e.message}` : `${(e as Error).name}: ${(e as Error).message}`; }
+      };
+      const altered = (edit: (next: MotionComparisonInput) => void): MotionComparisonInput => { const next = structuredClone(input); edit(next); return next; };
+      const mismatches = [
+        refused(handle, altered((x) => { x.reference.model += ' '; })),
+        refused(handle, altered((x) => { (x.schedule as NonNullable<MotionComparisonInput['schedule']>).selection.push('setup'); })),
+        refused(handle, altered((x) => { x.attachments[0].art.mask.alpha[0] ^= 1; })),
+        refused(handle, altered((x) => { x.attachments[0].art.mask.width += 1; })),
+        refused(handle, altered((x) => { x.attachments[0].art.threshold += 1; })),
+        refused(handle, altered((x) => { x.attachments[0].art.frame.width += 1; })),
+        refused(handle, altered((x) => { x.attachments[0].minArtSamples += 1; })),
+        refused(handle, altered((x) => { x.attachments[0].regions.push({ name: 'region', polygon: [[0, 0], [1, 0], [0, 1]], minArtSamples: 1 }); })),
+        refused(handle, altered((x) => { x.referenceArtFit.maxOvershoot = 0; })),
+        refused(handle, altered((x) => { x.candidateArtFit.maxOvershoot = 0; })),
+        refused(handle, altered((x) => { x.bounds.maxLocalDeformation += 1; })),
+        refused(handle, altered((x) => { x.motionRequired = false; })),
+        refused(handle, altered((x) => { x.perFrame = true; })),
+        refused(handle, altered((x) => { x.motionAmplitude = null; })),
+        refused(handle, altered((x) => { x.overBound = { maxSamples: 1, triangles: 'all' }; })),
+      ];
+      const names = ['reference', 'schedule', 'attachments', 'attachments', 'attachments', 'attachments', 'attachments', 'attachments', 'referenceArtFit', 'candidateArtFit', 'bounds', 'motionRequired', 'perFrame', 'motionAmplitude', 'overBound'];
+      const mismatchesNamed = mismatches.every((r, i) => r.startsWith('COMPARE_PREPARED_MISMATCH:') && r.includes(names[i]));
+      const forged = refused({ kind: 'prepared-motion-reference/1' } as PreparedMotionReference, input);
+      const mutation = structuredClone(input);
+      const mutableBound = (({ candidates: _unused, ...rest }) => rest)(mutation);
+      const mutableHandle = prepareMotionReference(mutableBound);
+      mutation.attachments[0].art.mask.alpha[0] ^= 1;
+      const mutationRefused = refused(mutableHandle, mutation);
+      say('MQ181_PREPARED_HANDLE_REFUSES_EVERY_CHANGED_BOUND_FIELD_AND_FORGED_HANDLES', mismatchesNamed && forged.startsWith('COMPARE_PREPARED_HANDLE:') && mutationRefused.includes('attachments'), `mismatches ${mismatches.map((r) => r.split(':')[0]).join(', ')}; forged ${forged.split(':')[0]}; mutated alpha ${mutationRefused.split(':')[0]}`, 'the handle cannot silently reuse a model, schedule, sampling option or an art byte after preparation');
+
+      const plusZero = altered((x) => { x.bounds.maxLocalDeformation = 0; });
+      const { candidates: _zeroCandidates, ...zeroBound } = plusZero;
+      const zeroHandle = prepareMotionReference(zeroBound);
+      const minusZero = structuredClone(plusZero);
+      minusZero.bounds.maxLocalDeformation = -0;
+      const zeroRefusal = refused(zeroHandle, minusZero);
+      const minusReport = compareMeshesInMotion(minusZero);
+      say('MQ184_SIGNED_ZERO_IN_A_BOUND_IS_NOT_A_DIGEST_ALIAS', zeroRefusal.startsWith('COMPARE_PREPARED_MISMATCH:') && zeroRefusal.includes('bounds') && Object.is(minusReport.effective.motionBounds?.maxLocalDeformation, -0), `+0 handle used with -0: ${zeroRefusal.split(':')[0]}; one-shot echoed -0 ${Object.is(minusReport.effective.motionBounds?.maxLocalDeformation, -0)}`, 'both signed zeros pass bounds validation, and the report keeps the declared bound; a JSON digest would silently reuse the wrong reference row');
+
+      const prepRefusal = (value: MotionReferenceInput): string => {
+        try { prepareMotionReference(value); return 'accepted'; }
+        catch (e) { return e instanceof MeshReductionError ? `${e.code}: ${e.message}` : `${(e as Error).name}: ${(e as Error).message}`; }
+      };
+      const malformedModel = prepRefusal({ ...bound, reference: { id: 'reference', model: 7 as unknown as string } });
+      const malformedSchedule = prepRefusal({ ...bound, schedule: { ...schedule, phases: ['bad' as 'grid'] } });
+      const uncloneable = structuredClone(bound) as MotionReferenceInput & { extra?: () => void };
+      uncloneable.extra = () => {};
+      const malformedClone = prepRefusal(uncloneable);
+      const malformedNamed = [malformedModel, malformedSchedule, malformedClone].every((r) => r.startsWith('COMPARE_INPUT_MISSING:'));
+      say('MQ183_PREPARE_REFUSES_MALFORMED_INPUTS_BY_NAME_BEFORE_OR_DURING_COPY', malformedNamed, `model ${malformedModel.split(':')[0]}, schedule ${malformedSchedule.split(':')[0]}, clone ${malformedClone.split(':')[0]}`, 'preparation is a public reader and must never leak a TypeError or DataCloneError');
+
+      if (first.reference?.geometry?.rows[0] !== undefined) first.reference.geometry.rows[0].value = -999;
+      if (first.reference?.motion?.rows[0] !== undefined) first.reference.motion.rows[0].value = -999;
+      if (first.reference?.perFrame?.[0] !== undefined) first.reference.perFrame[0].value = -999;
+      if (first.sourceCounts !== null) first.sourceCounts.triangles = -999;
+      if (first.effective.schedule !== null) first.effective.schedule.selection.push('poison');
+      const second = comparePreparedMotion(handle, structuredClone(input));
+      const unpoisoned = JSON.stringify(second) === JSON.stringify(legacy) && isDeepStrictEqual(second, legacy);
+      say('MQ182_RETURNED_REPORT_MUTATION_CANNOT_POISON_THE_PREPARED_REFERENCE', unpoisoned, `second report matches one-shot ${unpoisoned}`, 'every returned reference row, count, schedule and option is a defensive copy; the hidden prepared state survives a caller editing a prior report');
     });
   });
 

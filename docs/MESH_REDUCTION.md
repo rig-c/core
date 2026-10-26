@@ -2127,6 +2127,23 @@ with `operation: 'compare'`, written by `writeMeshQualityReport` — no second
 format. The contract left the following to the implementation; each is what the
 tree does.
 
+[#1595](https://github.com/rig-c/core/issues/1595) adds
+`prepareMotionReference(input: MotionReferenceInput)` and
+`comparePreparedMotion(handle, input: MotionComparisonInput)` on the same
+`rig-c/meshcompare` entry. The first call parses and measures the reference,
+plans the schedule, samples the art and poses the reference once. The second
+call supplies candidates on that exact reference, schedule, attachments and
+options. An opaque handle keeps the prepared data private; a SHA-256 digest of
+each bound field, including every mask alpha byte and the sign of numeric zero, refuses changed inputs as
+`COMPARE_PREPARED_MISMATCH`. A forged handle is `COMPARE_PREPARED_HANDLE`.
+Each returned report is copied so an edited report cannot alter later reads.
+The one-shot and prepared paths use the same comparison implementation and
+write the same report bytes. The one-shot entry retains its validation and
+refusal order; preparing is explicit for callers with several candidates
+arriving sequentially. A changed whole or split schedule requires another
+handle. Candidate input, candidate art fit and all acceptance rows remain
+measured on every comparison.
+
 **The input.** §3's `MotionComparisonInput`, with three fields the agreed text
 requires an input for and the interface had no place for: `motionRequired`
 (P6), `perFrame` (P7's opt-in) and `schedule: MotionSchedule | null` (P6: no

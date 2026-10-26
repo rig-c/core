@@ -1946,3 +1946,22 @@ a different document and a different measurement. Everything here is one head
 turning, blinking and looking — and the one general lesson that might carry into
 that work is §7's: **allocate the channels before the first key, because Spine
 blends and does not add.**
+
+### A measured alpha aperture
+
+A named socket plate can supply an `alphaClip` clipping attachment (AUTHORING,
+**Alpha-derived clipping**). This also accepts a generated grid/contour source
+with a depth sheet: the clip is carried by the source's UV/setup bindings and
+sampled depths, independent of the clip slot's own bone. Give source and clip
+explicit matching existing depth-yaw transform keys; a weight does not inherit
+another attachment's deformation. Source-triangle crossings become clip vertices
+and count against the declared budget. Do not replace this turn with a cosine-only
+stand-in, fill a source hole, or infer threshold/tolerance from an appearance.
+
+`tools/alpha_clip_proof.ts --out <evidence>` builds a controlled painted ellipse
+and measures four gazes at yaw ±15°, with separate threshold/soft-edge error and
+source-boundary checks beside core/SkeletonClipping pixel parity. Fixed framing
+prevents a shifted clip from being hidden by automatic crop changes. These are
+controlled CPU-render/geometry observations when actually run; they do not certify
+production art, editor operation or browser/GPU playback. The actual editor trip
+must preserve the clip's end, bindings and nonempty per-state render figures too.

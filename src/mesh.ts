@@ -930,7 +930,9 @@ export function segmentsMeet(
   const o2 = o(a, b, d);
   const o3 = o(c, d, a);
   const o4 = o(c, d, b);
-  if (o1 !== o2 && o3 !== o4) return true;
+  // An epsilon-zero orientation is not a strict side of a line. In that case
+  // only the endpoint tests below can establish contact (including the bounds).
+  if (o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4) return true;
   return onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b);
 }
 

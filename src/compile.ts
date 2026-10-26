@@ -34,6 +34,8 @@ import {
   type DepthTone,
 } from './depth.ts';
 import { CompileError, NotImplementedError } from './errors.ts';
+import { alphaClipOutline, clipCarriers, refuseClipCrossing, refuseClipDegeneracy } from './alpha_clip.ts';
+import { regionCorners } from './core/vertices.ts';
 import { parseJsonWithPosition } from './json-position.ts';
 import { hypot2 } from './numeric.ts';
 // The "did you mean" list on a missing atlas region, from the one implementation
@@ -60,6 +62,7 @@ import {
   type RigBone,
   type RigBoundingBoxAttachment,
   type RigClippingAttachment,
+  type RigAlphaClip,
   type RigEvent,
   type RigLinkedMeshAttachment,
   type RigMeshAttachment,
@@ -2296,7 +2299,7 @@ function manifestShapeVisits(manifest: unknown): ShapeVisit[] {
  */
 export function compile(opts: CompileOptions): CompileResult {
   return withDroppedStates((droppedStates) => {
-    const { model, header, atlasText, declaredDurations } = compileInto(opts, droppedStates);
+    const { model, header, atlasText, declaredDurations, alphaClips } = compileInto(opts, droppedStates);
     // The skeleton: the Spine emitter's one entry (issue #922), which writes
     // every section from the model, in the order and under the spellings the
     // file has, and runs the parser-default and key-order passes on the
@@ -2314,6 +2317,7 @@ export function compile(opts: CompileOptions): CompileResult {
       atlasText,
       declaredDurations,
       ...carriedOf(model),
+      ...(alphaClips?.length ? { alphaClips } : {}),
       model,
     };
   });
@@ -2391,6 +2395,7 @@ export function headerBoundsOf(model: CompiledModel, atlasText: string): { box: 
  * beside it to gate it, write its document and — if it asks — emit it.
  */
 export interface CompiledBuild {
+  alphaClips?: CompileResult['alphaClips'];
   /** The compiled model (`src/model.ts`), `stage` and `editorOrder` included (issue #1026). */
   model: CompiledModel;
   /** The rest of the Spine header the model does not hold (`SkeletonHeader`): what `compile` hands the emitter beside the model. */
@@ -3012,6 +3017,7 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
   // `skin/slot/attachment` -> per-vertex z, for the attachments that named a
   // depth map. Read at deform-key time; never emitted. See `AttachmentContext`.
   const attachmentDepths = new Map<string, number[] | { z: number[]; geometry: DeformGeometry }>();
+  const pendingAlphaClips: PendingAlphaClip[] = [];
   // The same for a `soft` mask's per-vertex level, which a deform envelope's
   // `mask` reads (issue #1413). Never emitted either.
   const attachmentSoftMasks = new Map<string, DeformSoftMask>();
@@ -3212,6 +3218,7 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
         const where = `skin "${skinName}" slot "${rigSlot.name}" attachment "${placeholder}"`;
         const built = buildRigAttachment(att, placeholder, where, {
           images,
+          pendingAlphaClips,
           bones,
           transforms,
           exactFrames,
@@ -3241,6 +3248,7 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
   // line a linked mesh is the one construct in a rig spec whose name has not been
   // resolved yet.
   resolveLinkedMeshes(pendingLinks, skinTables);
+  const alphaClips = resolveAlphaClips(pendingAlphaClips, skinTables, rig, motion);
   // 📐 The implicit budget of 0 is a statement about rigc's own GENERATORS:
   // geometry rigc built is geometry rigc will not ship unmeasured, and
   // `A13_MESH_BUDGET` has nothing to measure a generated mesh against until the
@@ -3920,6 +3928,7 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
     header,
     atlasText,
     declaredDurations,
+    ...(alphaClips.length ? { alphaClips } : {}),
   };
 }
 
@@ -4342,6 +4351,7 @@ function refuseDefaultSkinContests(skinNames: readonly string[], skinParts: Map<
 // ---------------------------------------------------------------------------
 
 interface AttachmentContext {
+  pendingAlphaClips: PendingAlphaClip[];
   images: CompiledImage[];
   bones: ModelBone[];
   transforms: Map<string, BoneTransform>;
@@ -4933,6 +4943,273 @@ function buildRigBoundingBox(
   return out;
 }
 
+interface PendingAlphaClip {
+  spec: RigAlphaClip;
+  out: ModelClippingAttachment;
+  where: string;
+  ctx: AttachmentContext;
+}
+
+/** Resolve after all sources/links exist: draw order cannot decide whether a source can be measured. */
+function resolveAlphaClips(
+  pending: PendingAlphaClip[],
+  tables: Map<string, SkinTable>,
+  rig: RigSpec,
+  motion: MotionSpec,
+): NonNullable<CompileResult['alphaClips']> {
+  const reports: NonNullable<CompileResult['alphaClips']> = [];
+  for (const { spec, out, where, ctx } of pending) {
+    const targetTable = tables.get(ctx.skinName)?.[ctx.slotName];
+    const target = Object.entries(targetTable ?? {}).find(([, value]) => value === out)?.[0];
+    // withStatedName can return a fresh object when name was declared.
+    const targetKey = target ?? Object.entries(targetTable ?? {}).find(([, value]) => value.kind === 'clipping' && value.vertices === out.vertices)?.[0];
+    if (targetKey === undefined) {
+      throw new CompileError(
+        `${where}: generated clipping target was not filed in its skin; required a resolved attachment.`,
+        'CE_COMPILE_ALPHA_CLIP_SOURCE',
+      );
+    }
+    for (const key of ['slot', 'skin', 'attachment'] as const) {
+      if (typeof spec[key] !== 'string' || spec[key].length === 0) {
+        throw new CompileError(
+          `${where}: alphaClip.${key} is ${JSON.stringify(spec[key])}; required an explicit nonempty source name.`,
+          'CE_COMPILE_ALPHA_CLIP_SOURCE',
+        );
+      }
+    }
+    const sourceWhere = `${spec.skin}/${spec.slot}/${spec.attachment}`;
+    const label = `${where} alphaClip from "${sourceWhere}"`;
+    const source = tables.get(spec.skin)?.[spec.slot]?.[spec.attachment];
+    const sourceSlot = rig.slots.find((slot) => slot.name === spec.slot);
+    if (!source || !sourceSlot) {
+      throw new CompileError(
+        `${label}: source attachment is absent; required a declared slot/skin/attachment.`,
+        'CE_COMPILE_ALPHA_CLIP_SOURCE',
+      );
+    }
+    if (source.kind !== 'region' && source.kind !== 'mesh' && source.kind !== 'linkedmesh') {
+      throw new CompileError(
+        `${label}: source kind is ${source.kind}; required a region or resolved mesh with pixels.`,
+        'CE_COMPILE_ALPHA_CLIP_SOURCE',
+      );
+    }
+    let geometry: SkinTableEntry = source;
+    let depthKey = sourceWhere;
+    if (geometry.kind === 'linkedmesh') {
+      depthKey = `${geometry.skin}/${geometry.slot}/${geometry.source}`;
+      const base = tables.get(geometry.skin)?.[geometry.slot]?.[geometry.source];
+      if (!base || base.kind !== 'mesh') {
+        throw new CompileError(
+          `${label}: linked source resolves to ${base?.kind ?? 'nothing'}; required a resolved mesh.`,
+          'CE_COMPILE_ALPHA_CLIP_SOURCE',
+        );
+      }
+      geometry = base;
+    }
+    if (geometry.kind !== 'region' && geometry.kind !== 'mesh') {
+      throw new CompileError(
+        `${label}: source is ${(geometry as SkinTableEntry).kind}; required region or mesh geometry with a plate (a clipping source would be a dependency cycle).`,
+        'CE_COMPILE_ALPHA_CLIP_SOURCE',
+      );
+    }
+    if (source.sequence !== undefined) {
+      throw new CompileError(
+        `${label}: source has a ${source.sequence.count}-frame sequence; required one immutable source plate. Select a separate named attachment for the measured frame.`,
+        'CE_COMPILE_ALPHA_CLIP_SOURCE',
+      );
+    }
+    const region = source.path ?? source.name ?? spec.attachment;
+    const img = ctx.images.find((image) => image.region === region);
+    if (!img) {
+      throw new CompileError(
+        `${label}: region "${region}" has no source plate; required image/atlas pixels.`,
+        'CE_COMPILE_ALPHA_CLIP_SOURCE',
+      );
+    }
+    if (img.pageGrid !== undefined) {
+      throw new CompileError(
+        `${label}: source plate grid cannot be located. ${img.pageGrid.sentence}`,
+        'CE_COMPILE_ALPHA_CLIP_SOURCE',
+      );
+    }
+    const plate = partPlate(img);
+    const mask = { width: plate.width, height: plate.height, alpha: plateAlpha(plate) };
+    const traced = alphaClipOutline(mask, spec, label, img.atlasScale ?? 1);
+    const ring = traced.points.map(([x, y]): [number, number] => [x / plate.width, y / plate.height]);
+    const anchor = ctx.transforms.get(sourceSlot.bone)!;
+    let sourceBindings: ModelBinding[][];
+    let uvs: number[];
+    let triangles: number[];
+    if (geometry.kind === 'region') {
+      // Full restored plate, not trimmed page rectangle: source crop pixels remain the coordinates.
+      const corners = regionCorners({ ...geometry, atlas: { width: img.width, height: img.height, originalWidth: img.width, originalHeight: img.height, offsetX: 0, offsetY: 0 } }, anchor);
+      uvs = [0, 1, 0, 0, 1, 0, 1, 1];
+      triangles = [0, 1, 2, 2, 3, 0];
+      sourceBindings = Array.from({ length: 4 }, (_, i) => {
+        const [x, y] = toBoneLocal(anchor, corners[2 * i], corners[2 * i + 1]);
+        return [{ bone: sourceSlot.bone, x, y, weight: 1 }];
+      });
+    } else {
+      uvs = geometry.uvs;
+      triangles = geometry.triangles;
+      const vertices = geometry.vertices;
+      sourceBindings = vertices.weighted ? vertices.bindings :
+        Array.from({ length: vertices.xy.length / 2 }, (_, i) => [{
+          bone: sourceSlot.bone, x: vertices.xy[2 * i], y: vertices.xy[2 * i + 1], weight: 1,
+        }]);
+    }
+    const carried = clipCarriers(ring, uvs, triangles, label);
+    if (carried.points.length > spec.maxVertices) {
+      throw new CompileError(
+        `${label}: polygonoverdeclaredvertexbudget: ${carried.points.length} vertices after source carrier crossings (${traced.points.length} simplified), required <=${spec.maxVertices}. Raise the declared budget or simplify the source/outline.`,
+        'CE_COMPILE_ALPHA_CLIP_VERTEX_BUDGET',
+      );
+    }
+    // Per-bone first moments preserve Σβ Σw M(bind) for every bone matrix; no solver or new pose model.
+    const bindings: ModelBinding[][] = carried.carriers.map((carrier) => {
+      const moments = new Map<string, { weight: number; x: number; y: number }>();
+      carrier.corners.forEach((index, corner) => {
+        for (const binding of sourceBindings[index]) {
+          const share = carrier.bary[corner] * binding.weight;
+          const row = moments.get(binding.bone) ?? { weight: 0, x: 0, y: 0 };
+          row.weight += share;
+          row.x += share * binding.x;
+          row.y += share * binding.y;
+          moments.set(binding.bone, row);
+        }
+      });
+      const result: ModelBinding[] = [];
+      for (const [bone, row] of moments) {
+        if (row.weight > 0) {
+          result.push({ bone, weight: f32(row.weight), x: f32(row.x / row.weight), y: f32(row.y / row.weight) });
+        }
+      }
+      return result;
+    });
+    out.vertices = { weighted: true, bindings };
+    out.vertexCount = bindings.length;
+    const mappedWorld = setupWorldVertices(out.vertices, anchor, ctx.transforms, label)
+      .map(([x, y]): [number, number] => [Math.fround(x), Math.fround(y)]);
+    refuseClipDegeneracy(mappedWorld, `${label} final float32 world coordinates`);
+    refuseClipCrossing(mappedWorld, label);
+    const sourceWorld = sourceBindings.map((vertex): [number, number] => {
+      let x = 0;
+      let y = 0;
+      for (const binding of vertex) {
+        const [wx, wy] = toWorld(ctx.transforms.get(binding.bone)!, binding.x, binding.y);
+        x += binding.weight * wx;
+        y += binding.weight * wy;
+      }
+      return [x, y];
+    });
+    let maxBindingDeviationWorld = 0;
+    carried.carriers.forEach((carrier, index) => {
+      let x = 0;
+      let y = 0;
+      carrier.corners.forEach((corner, k) => {
+        x += carrier.bary[k] * sourceWorld[corner][0];
+        y += carrier.bary[k] * sourceWorld[corner][1];
+      });
+      maxBindingDeviationWorld = Math.max(
+        maxBindingDeviationWorld,
+        hypot2(mappedWorld[index][0] - x, mappedWorld[index][1] - y),
+      );
+    });
+    const filed = targetTable![targetKey];
+    if (filed.kind === 'clipping') {
+      filed.vertices = out.vertices;
+      filed.vertexCount = out.vertexCount;
+    }
+    // Authored depth turns use setup-world geometry, even for a rigid source.
+    // Preserve that frame on the clip's own vertex/influence roster, not the source's.
+    const sourceDepth = ctx.depths.get(depthKey);
+    const z = sourceDepth === undefined || Array.isArray(sourceDepth) ? sourceDepth : sourceDepth.z;
+    let clipDepthGeometry: DeformGeometry | undefined;
+    if (z !== undefined) {
+      const depths = carried.carriers.map((carrier) =>
+        carrier.corners.reduce((sum, vertex, i) => sum + carrier.bary[i] * z[vertex], 0));
+      if (sourceDepth !== undefined && !Array.isArray(sourceDepth)) {
+        clipDepthGeometry = {
+          ...deformGeometryOf(out, label, ctx.transforms, ctx.transforms.get(ctx.anchorBone)!),
+          depth: depths,
+        };
+      }
+      ctx.depths.set(`${ctx.skinName}/${ctx.slotName}/${targetKey}`,
+        clipDepthGeometry === undefined ? depths : { z: depths, geometry: clipDepthGeometry });
+    }
+    // The helper, not the number of distinct bone names, defines the frame.
+    // Duplicate influences on one bone also take the world-space path.
+    const frameOf = (attachment: ModelVertexAttachment, unweightedBone: string, depthGeometry: DeformGeometry | undefined,
+      key: MotionDeformTrack['keys'][number] | undefined): {
+      name: string; geometry: DeformGeometry;
+    } => {
+      // Match compileDeformTrack's per-key choice, including authored depth:true.
+      const geometry = (key?.transform !== undefined && 'depth' in key.transform && key.transform.depth === true
+        ? depthGeometry : undefined) ?? deformGeometryOf(attachment, label, ctx.transforms);
+      const vertices = attachment.vertices;
+      const bone = vertices.weighted ? vertices.bindings[0]?.[0]?.bone : unweightedBone;
+      return { name: geometry.influenceBones === null ? `bone:${bone}` : 'world', geometry };
+    };
+    for (const [animationName, animation] of Object.entries(motion.animations ?? {})) {
+      const sourceIdentity = source.kind === 'linkedmesh' && source.timelines ? depthKey : sourceWhere;
+      const targetIdentity = `${ctx.skinName}/${ctx.slotName}/${targetKey}`;
+      const sourceTrack = animation.deform?.find((track) =>
+        `${track.skin ?? 'default'}/${track.slot}/${track.attachment}` === sourceIdentity);
+      const clipTrack = animation.deform?.find((track) =>
+        `${track.skin ?? 'default'}/${track.slot}/${track.attachment}` === targetIdentity);
+      if (!sourceTrack && !clipTrack) continue;
+      const sourceDepthGeometry = sourceDepth !== undefined && !Array.isArray(sourceDepth) ? sourceDepth.geometry : undefined;
+      const frames = (sourceTrack?.keys.length ? sourceTrack.keys : [undefined]).map((key, index) => ({
+        source: geometry.kind === 'mesh' ? frameOf(geometry, sourceSlot.bone, sourceDepthGeometry, key) : null,
+        clip: frameOf(out, ctx.anchorBone, clipDepthGeometry, clipTrack?.keys[index]),
+      }));
+      const compatible = frames.every(({ source, clip }) => source !== null && source.geometry.setup !== null &&
+        clip.geometry.setup !== null && source.name === clip.name);
+      const { source: sourceFrame, clip: clipFrame } = frames.find(({ source, clip }) =>
+        source === null || source.geometry.setup === null || clip.geometry.setup === null || source.name !== clip.name) ?? frames[0];
+      // With a world-space deform, varying per-vertex influence shares would
+      // correlate the deform with moving bone matrices. Constant shares commute
+      // with the affine/depth projection; no new deformation transfer is implied.
+      const sharesOf = (vertex: ModelBinding[]): string => {
+        const shares = new Map<string, number>();
+        for (const binding of vertex) {
+          shares.set(binding.bone, (shares.get(binding.bone) ?? 0) + binding.weight);
+        }
+        return JSON.stringify([...shares].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+      };
+      const constantWorldShares = !frames.some(({ source }) => source?.name === 'world') ||
+        sourceBindings.every((vertex) => sharesOf(vertex) === sharesOf(sourceBindings[0]));
+      const shared = sourceTrack !== undefined && clipTrack !== undefined &&
+        JSON.stringify(sourceTrack.keys) === JSON.stringify(clipTrack.keys);
+      const linear = sourceTrack?.keys.every((key) => {
+        const transform = key.transform;
+        return transform !== undefined && transform.envelope === undefined &&
+          (transform.kind === 'affine' || ((transform.kind === 'yaw' || transform.kind === 'pitch') &&
+            transform.depth === true && z !== undefined));
+      });
+      if (!shared || !linear || !compatible || !constantWorldShares) {
+        throw new CompileError(
+          `${label}: animation "${animationName}" has ${sourceTrack?.keys.length ?? 0} source and ` +
+            `${clipTrack?.keys.length ?? 0} clip keys; source frame=${sourceFrame?.name ?? 'no vertex geometry'}, ` +
+            `clip frame=${clipFrame.name}, constant world influence shares=${constantWorldShares}. ` +
+            'Required matching explicit affine/depth-yaw/pitch transforms in compatible DeformGeometry frames, ' +
+            'with constant shares for world-space transfer. Fix the named frame/keys or author corresponding clip motion.',
+          'CE_COMPILE_ALPHA_CLIP_DEFORM',
+        );
+      }
+    }
+    reports.push({
+      target: `${ctx.skinName}/${ctx.slotName}/${targetKey}`,
+      source: sourceWhere,
+      ...traced.report,
+      vertices: out.vertexCount,
+      uvs: carried.points,
+      maxBindingDeviationWorld,
+    });
+  }
+  return reports;
+}
+
 function buildRigClipping(
   att: RigClippingAttachment,
   where: string,
@@ -4956,9 +5233,15 @@ function buildRigClipping(
     ...(att.end !== undefined ? { end: att.end } : {}),
     ...(att.convex !== undefined ? { convex: att.convex } : {}),
     ...(att.inverse !== undefined ? { inverse: att.inverse } : {}),
-    vertexCount: att.vertexCount,
-    vertices: buildVertexGeometry(att, where, ctx),
+    vertexCount: att.vertexCount ?? 0,
+    vertices: att.alphaClip === undefined ? buildVertexGeometry({ ...att, vertexCount: att.vertexCount! }, where, ctx) : { weighted: false, xy: [] },
   };
+  if (att.alphaClip !== undefined) {
+    const fields = ['vertexCount', 'vertices', 'weights', 'boneIndexing'] as const;
+    const present = fields.filter((key) => att[key] !== undefined);
+    if (present.length || att.convex === true || att.inverse === true) throw new CompileError(`${where}: alphaClip conflicts with [${present.join(', ')}], convex=${att.convex}, inverse=${att.inverse}; required ordinary inside clipping with generated geometry only. Remove authored geometry/flags.`, 'CE_COMPILE_ALPHA_CLIP_CONFLICT');
+    ctx.pendingAlphaClips.push({ spec: att.alphaClip, out, where, ctx });
+  }
   if (att.color !== undefined) out.editorColor = att.color;
   return out;
 }

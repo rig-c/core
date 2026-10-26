@@ -374,7 +374,7 @@ export function evaluateDeformTransform(
   round: Rounder,
   where: string,
   /**
-   * Per-vertex `z` for this attachment, when its generator named a depth map.
+   * Per-vertex `z` for this attachment, when it or its generator named a depth map.
    * Null when it named none — which is what makes `"depth": true` refusable by
    * name rather than silently falling back to a cylinder.
    */
@@ -448,7 +448,7 @@ export function evaluateDeformTransform(
       if (fromDepth && depth === null) {
         throw new CompileError(
           `${where}: transform ${kind} says "depth": true and this attachment has no depth map. The map is named on ` +
-            'the attachment\'s generator, as `"depth": { "image": …, "near": …, "zScale": … }`, because it describes ' +
+            'an authored attachment or its contour/grid generator, as `"depth": { "image": …, "near": …, "zScale": … }`, because it describes ' +
             'the art rather than this key. Name it there, or give this key a radius.', 'CE_DEFORM_DEPTH_MAP_REQUIRED',
         );
       }

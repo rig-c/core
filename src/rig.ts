@@ -471,8 +471,8 @@ export interface RigDepthMap {
    */
   near: 'white' | 'black';
   /**
-   * How many world units the map's full 0..1 range spans, in the attachment's
-   * own units — the number `radius` used to carry.
+   * How many units the map's full 0..1 range spans: setup world units on an
+   * authored mesh, the generator's bind units on a generated mesh.
    *
    * Authored, never measured: 8 bits of level say nothing about scale, so a
    * compiler that picked one would be inventing the depth of the art.
@@ -971,6 +971,8 @@ export interface RigMeshAttachment {
   color?: string;
   /** Build the geometry instead of authoring it — see `RigMeshGenerator`. */
   generator?: RigMeshGenerator;
+  /** A setup-world depth turn over authored geometry; sampled in the part's pixel grid. */
+  depth?: RigDepthMap;
   /** A numbered image series over this one triangulation — see `RigSequence`. */
   sequence?: RigSequence;
 }
@@ -2077,7 +2079,7 @@ export const RIG_KEYS = {
   RigRegionAttachment: ['type', 'name', 'path', 'image', 'x', 'y', 'rotation', 'scaleX', 'scaleY', 'width', 'height', 'color', 'sequence'],
   RigMeshAttachment: [
     'type', 'name', 'path', 'image', 'uvs', 'triangles', 'vertices', 'weights', 'boneIndexing', 'hull', 'edges',
-    'width', 'height', 'color', 'generator', 'sequence',
+    'width', 'height', 'color', 'generator', 'depth', 'sequence',
   ],
   RigLinkedMeshAttachment: [
     'type', 'name', 'path', 'image', 'source', 'slot', 'skin', 'timelines', 'width', 'height', 'color', 'sequence',
@@ -2201,7 +2203,7 @@ export const RIG_TYPES = {
   RigMeshAttachment: {
     type: 'enum', name: 'string', path: 'string', image: 'string', uvs: 'number[]', triangles: 'number[]',
     vertices: 'number[]', weights: 'object[][]', boneIndexing: 'enum', hull: 'number', edges: 'number[]',
-    width: 'number', height: 'number', color: 'string', generator: 'object', sequence: 'object',
+    width: 'number', height: 'number', color: 'string', generator: 'object', depth: 'object', sequence: 'object',
   },
   RigLinkedMeshAttachment: {
     type: 'enum', name: 'string', path: 'string', image: 'string', source: 'string', slot: 'string', skin: 'string',
@@ -2557,6 +2559,7 @@ function checkRigSpecKeys(raw: Record<string, unknown>, where: string): Array<{ 
             at(binding, 'RigMeshBinding', `${who} weights[${i}][${j}]`, [...here, 'weights', i, j]);
           }
         }
+        at(att.depth, 'RigDepthMap', `${who} depth`, [...here, 'depth']);
         if (!isObj(att.generator)) continue;
         const gen = att.generator;
         const kind = RIG_GENERATOR_KINDS.find((k) => k === gen.kind);

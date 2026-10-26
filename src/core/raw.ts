@@ -113,8 +113,8 @@
  * naming why (`CoreInputError`): a renderer handed a pose with a block
  * missing would draw a different picture in silence.
  */
-import { activeBones, CoreInputError, drawWalkOf, poseSetup, rawNumber, readColour, shownAttachment, sourceOfDoc, underNoSkin, underSkin, type CompiledDocument, type CorePlant, type CoreSlotRow } from './index.ts';
-import { posedBoneWorld, posedBoneWorldAlone, posedSlots, type CoreAnimationTimelines, type LocalAdjust, type TimelinePlant } from './animation.ts';
+import { activeBones, CoreInputError, drawWalkOf, poseSetup, rawNumber, shownAttachment, sourceOfDoc, underNoSkin, underSkin, viewColours, WHITE, type CompiledDocument, type CorePlant, type CoreSlotRow } from './index.ts';
+import { posedBoneWorldAlone, posedSlots, type CoreAnimationTimelines, type LocalAdjust, type TimelinePlant } from './animation.ts';
 import { constraintsAbsentWhy, pathAnimationsWhy } from './constraints.ts';
 import { freshStepContext, rotatePhysics, steppedPreviousPassWhy, translatePhysics, DEFAULT_PHYSICS_ENVIRONMENT, type PhysicsEnvironment, type PhysicsStepContext } from './constraints_physics.ts';
 import { attachmentStates } from './deform.ts';
@@ -429,6 +429,8 @@ function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world:
   // coverage alone (issue #964, `Mesh.source` in src/render.ts).
   const rows = geometry.rows;
   const drawn: RawDrawn[] = [];
+  // Each record's stated colour, read once per view (`viewColours`) and copied into the pose's own tuple, as the pose's arrays are its own.
+  const stated = viewColours(doc);
   let k = 0;
   for (const s of shown) {
     const g = s.geometry;
@@ -436,7 +438,8 @@ function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world:
     const row = rows[k++];
     if (row === undefined || row[0] !== s.slot) throw new CoreInputError(`slot "${s.slot}": the attachment rows are not in the shown records' order`);
     const record = doc.skins.find((x) => x.name === s.skin)?.attachments[s.slot]?.[s.placeholder];
-    const colour = record?.color === undefined ? ([1, 1, 1, 1] as [number, number, number, number]) : readColour(record.color);
+    const read = record?.color === undefined ? WHITE : stated(record.color);
+    const colour: [number, number, number, number] = [read[0], read[1], read[2], read[3]];
     let uvs: readonly number[];
     let triangles: readonly number[];
     let hull: number | null = null;
@@ -785,12 +788,16 @@ interface WalkStep {
  * (`walkEach`) is one body: every number a pose carries is computed there and
  * in the two assemblers below, by the same calls, whatever the shape. A shape
  * chooses only what is assembled from what was posed — the scan drops the
- * readings, rows and copies nothing it reads is computed from — and keeps the
+ * readings and copies nothing it reads is computed from — and keeps the
  * order of every call that can refuse.
+ *
+ * No shape forms the oracle's bone rows: no walk pose carries them, and the
+ * rounding they are formed through refuses nothing, so every step poses the
+ * world alone (`posedBoneWorldAlone`). The rows are the sample's
+ * (`posedBoneRows`, `posedBoneWorld`), formed there as before. The core
+ * suite's `CO62` reads the walk's modules for a call that forms them.
  */
 interface PoseShape<P> {
-  /** Whether a step forms the oracle's bone rows beside its world (`posedBoneWorld`), which no walk pose carries; `false` poses the world alone (`posedBoneWorldAlone`). */
-  rows: boolean;
   /** The reset pose at the setup (`reset: 'setup'`). */
   setup: (doc: CompiledDocument, world: Map<string, CoreWorld>, slots: CoreSlotRow[], drawOrder: string[], shown: ShownGeometry[], plant: CorePlant, mode: WalkMode) => P;
   /** One step's pose. */
@@ -799,7 +806,6 @@ interface PoseShape<P> {
 
 /** The raw entry's pose, assembled as it always was: at the reset the bones, then the drawn rows; at a step the drawn rows, the events, then the bones. */
 const RAW_SHAPE: PoseShape<RawPose> = {
-  rows: true,
   setup: (doc, world, slots, drawOrder, shown, plant, mode) => ({ trackTime: 0, animationTime: 0, bones: rawBones(doc, world), slots, drawOrder, ...rawDrawn(doc, shown, world, drawOrder, plant, mode), events: [], shown: drawOrderOf(shown, drawOrder) }),
   step: (doc, p, plant, mode) => {
     const drawn = rawDrawn(doc, p.shown, p.world, p.drawOrder, plant, mode);
@@ -811,7 +817,6 @@ const RAW_SHAPE: PoseShape<RawPose> = {
 /** The scan's pose (`ScanPose`), in the raw shape's order: the scan's walk is a looping one, which fires no event. */
 function scanShape(scanPlant: ScanPlant): PoseShape<ScanPose> {
   return {
-    rows: false,
     setup: (doc, world, slots, drawOrder, shown, plant, mode) => {
       const bones = scanBones(doc, world);
       return { animationTime: 0, bones, slots, drawn: scanDrawn(doc, shown, world, drawOrder, plant, mode, scanPlant) };
@@ -908,7 +913,7 @@ function stepWalk<P>(track: TrackState<P>, dt: number, first = false): P {
   const keys = anim.timelines.events;
   const adjustment = adjust === undefined ? undefined : { callback: adjust, context: { trackTime, animation: anim.name, globalTime: trackTime } };
   const pose = poseStepFrom(doc, plant, resolve, shape, mode, ctx, first, trackTime, t, {
-    world: (sliders) => (shape.rows ? posedBoneWorld(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjustment }).world : posedBoneWorldAlone(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjustment })),
+    world: (sliders) => posedBoneWorldAlone(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjustment }),
     slots: (sliders, placeholders) => posedSlots(doc, anim.timelines, t, raw, sliders, placeholders),
     drawOrder: anim.timelines.drawOrder,
     at: t,

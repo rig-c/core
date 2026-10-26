@@ -1166,6 +1166,46 @@ export function readColour(hex: string): [number, number, number, number] {
   return [channel(0), channel(1), channel(2), hex.length === 8 ? channel(3) : 1];
 }
 
+/** A stated colour's channels, read once and shared (`viewColours`): read, or copied before a write — never handed out. */
+export type StatedColour = Readonly<[number, number, number, number]>;
+
+/** Each view's stated colours, by spelling, read once (`viewColours`). */
+const coloursOfView = new WeakMap<CompiledDocument, Map<string, StatedColour>>();
+
+/**
+ * The view's reader of a stated colour: `readColour(hex)` read the first time
+ * the view meets that spelling and kept, frozen, for every pose after it. The
+ * slot rows read every slot's colours on every pose, and a drawn row its
+ * record's (the parse was a measured share of a step). The reading is the
+ * spelling's alone, so the cache is keyed on the spelling rather than on a
+ * slot or a record — a colour respelled in place reads its new spelling, and
+ * a view built anew starts its own. The tuple is shared by every pose, so no
+ * caller hands it out or writes it (`StatedColour` is read-only): a pose's
+ * channels are copied out of it. It is not frozen because a frozen array is
+ * read several times slower under JavaScriptCore, measured on Bun 1.4.4, and
+ * the read is the whole of what the cache is for. The core suite's `CO63`
+ * holds a pose's colours to their spelling and to the pose.
+ */
+export function viewColours(doc: CompiledDocument): (hex: string) => StatedColour {
+  let kept = coloursOfView.get(doc);
+  if (kept === undefined) {
+    kept = new Map();
+    coloursOfView.set(doc, kept);
+  }
+  const colours = kept;
+  return (hex) => {
+    let c = colours.get(hex);
+    if (c === undefined) {
+      c = readColour(hex);
+      colours.set(hex, c);
+    }
+    return c;
+  };
+}
+
+/** A slot or record that states no light colour: white, opaque. */
+export const WHITE: StatedColour = [1, 1, 1, 1];
+
 /**
  * A slot's blend mode: `Normal` when it states none, else the stated
  * spelling folded (the header's measurement). `readModel` has already refused

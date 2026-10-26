@@ -160,7 +160,7 @@
  * every later call refuses naming the call it was refused at.
  */
 import type { ModelBone, ModelSlot, ModelVertices } from '../model.ts';
-import { activeBones, CoreInputError, rawNumber, readColour, shownAttachment, type CompiledDocument, type CoreShown } from './index.ts';
+import { activeBones, CoreInputError, rawNumber, shownAttachment, viewColours, WHITE, type CompiledDocument, type CoreShown, type StatedColour } from './index.ts';
 import { channelAt, keyIndexAt, SLOT_COLOUR_TIMELINES, slotRowsFrom, steppedLocalsWorld, type BoneTimelineKind, type CoreKey, type LocalAdjust, type SlotBase, type SlotColourKind, type TimelinePlant } from './animation.ts';
 import { deformAt, setupArray, type CoreAttachmentTimeline } from './deform.ts';
 import { eventsFired, type CoreEventKey, type CoreEventRow } from './events.ts';
@@ -440,6 +440,9 @@ function trackComplete(e: Entry): number {
 const signum = (v: number): number => (v > 0 ? 1 : v < 0 ? -1 : 0);
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
+/** A slot's setup dark colour where it states none: never read, since such a slot carries no dark channel and a two-colour timeline returns before it (`applyColour`). */
+const NO_DARK: readonly number[] = [0, 0, 0];
+
 // ---------------------------------------------------------------------------
 // one step's skeleton — the pose the entries are applied to
 // ---------------------------------------------------------------------------
@@ -473,6 +476,8 @@ class Pose {
   private readonly active: ReadonlySet<string>;
   private readonly live: boolean[];
   private readonly resolved = new Map<string, Resolved>();
+  /** The view's stated colours (`viewColours`). */
+  readonly stated: (hex: string) => StatedColour;
 
   constructor(
     private readonly doc: CompiledDocument,
@@ -480,12 +485,16 @@ class Pose {
   ) {
     this.bones = [...doc.bones];
     this.active = activeBones(doc);
-    const colour = plant.colour ?? readColour;
+    // The view's stated colours, read once (`viewColours`) and copied into the step's own channels; a planted reader of the light colour is called as it always was.
+    const stated = viewColours(doc);
+    this.stated = stated;
+    const colour = plant.colour ?? stated;
     const gate = plant.slotTimelines ?? slotTimelinesApply;
     this.live = doc.slots.map((s) => gate(doc, s, this.active));
     this.slots = doc.slots.map((slot): SlotState => {
-      const setupDark = slot.dark === undefined ? null : readColour(slot.dark);
-      return { placeholder: slot.setup, light: slot.color === undefined ? [1, 1, 1, 1] : colour(slot.color), dark: setupDark === null ? null : [setupDark[0], setupDark[1], setupDark[2]], deform: null, seen: [], attachmentState: ATTACH_NONE };
+      const setupDark = slot.dark === undefined ? null : stated(slot.dark);
+      const setupLight = slot.color === undefined ? WHITE : colour(slot.color);
+      return { placeholder: slot.setup, light: [setupLight[0], setupLight[1], setupLight[2], setupLight[3]], dark: setupDark === null ? null : [setupDark[0], setupDark[1], setupDark[2]], deform: null, seen: [], attachmentState: ATTACH_NONE };
     });
   }
 
@@ -1103,9 +1112,9 @@ class Mixer {
     const s = pose.slots[tl.slot];
     const l = s.light;
     const d = s.dark;
-    const sl = slot.color === undefined ? [1, 1, 1, 1] : (this.plant.colour ?? readColour)(slot.color);
-    const sdFull = slot.dark === undefined ? null : readColour(slot.dark);
-    const sd = sdFull === null ? [0, 0, 0] : [sdFull[0], sdFull[1], sdFull[2]];
+    // The setup colours, read only: the view's (`viewColours`), or a planted reader's light colour.
+    const sl = slot.color === undefined ? WHITE : (this.plant.colour ?? pose.stated)(slot.color);
+    const sd = slot.dark === undefined ? NO_DARK : pose.stated(slot.dark);
     const clampLight = (): void => {
       for (let k = 0; k < 4; k++) l[k] = clamp01(l[k]);
     };
@@ -1498,7 +1507,7 @@ class Tracks implements LiveTracks {
     };
     const mixed = new Map(doc.slots.map((s, k) => [s.name, { deform: pose.slots[k].deform, seen: pose.slots[k].seen }]));
     return path.step(first, this.time, animationTime, {
-      world: (sliders) => steppedLocalsWorld(doc, pose.bones, path.raw, sliders, { ctx, before, adjustment }, true),
+      world: (sliders) => steppedLocalsWorld(doc, pose.bones, path.raw, sliders, { ctx, before, adjustment }),
       slots: (sliders, placeholders) => slotRowsFrom(doc, path.raw, sliders, placeholders, (_slot, _live): SlotBase => {
         const s = pose.slots[doc.slots.indexOf(_slot)];
         return { placeholder: s.placeholder, light: s.light, dark: s.dark };

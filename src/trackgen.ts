@@ -113,6 +113,17 @@ export interface TrackDeriveTurn {
   carried?: number;
   /** Where the axis crosses the driving coordinate, in the members' shared parent's space. Default 0. */
   about?: number;
+  /**
+   * Whether the displacement includes the foreshortening of the member's setup
+   * position `(at − about)·(cos t − 1)`. Default `true`.
+   *
+   * When `false`, the displacement is `−(depth − carried)·sin t` — the depth
+   * shift alone, for a rig whose plate proportions are held at their front-view
+   * width across the turn (issue #1584). Valid on the displacement projection
+   * (`translatex` / `translatey`) only; refused on the foreshortening projection
+   * (`scalex` / `scaley`).
+   */
+  narrowing?: boolean;
 }
 
 export type TrackDerive = TrackDeriveTurn;
@@ -226,7 +237,16 @@ export function evaluateTrackDerive(
         `axis. "carried" belongs on the "${projections.shift}" track, whose shared shift is the thing it names.`, 'CE_TRACK_CARRIED_PROJECTION',
     );
   }
+  if (projection === 'foreshorten' && turn.narrowing !== undefined) {
+    throw new CompileError(
+      `${where}: derive ${kind} states narrowing=${JSON.stringify(turn.narrowing)} on a "${property}" track, and a ` +
+        `"${property}" track IS the foreshortening — its whole output is cos(α − t)/cos α. "narrowing" belongs on the ` +
+        `"${projections.shift}" track, where it drops (${projections.coordinate}−about)·(cos t − 1) from the displacement; ` +
+        `to turn without narrowing the plate's scale, omit the "${property}" track.`, 'CE_TRACK_NARROWING_PROJECTION',
+    );
+  }
   const carried = turn.carried === undefined ? 0 : num(turn.carried, 'carried', where);
+  const narrowing = turn.narrowing !== false;
 
   const rad = (degrees * Math.PI) / 180;
   const cosMinus1 = Math.cos(rad) - 1;
@@ -237,7 +257,7 @@ export function evaluateTrackDerive(
     const depth = depthOf(turn.depth, member.name, members, where, kind);
     const u = member.at - about;
     if (projection === 'shift') {
-      values.push({ member: member.name, at: u, depth, value: round(u * cosMinus1 - (depth - carried) * sin) });
+      values.push({ member: member.name, at: u, depth, value: round((narrowing ? u * cosMinus1 : 0) - (depth - carried) * sin) });
       continue;
     }
     // A part behind the axis has no patch of front surface to foreshorten, and
@@ -270,16 +290,19 @@ export function evaluateTrackDerive(
   const stated =
     `degrees=${degrees}` +
     (projection === 'shift' && turn.carried !== undefined ? ` carried=${carried}` : '') +
-    (turn.about === undefined ? '' : ` about=${about}`);
+    (turn.about === undefined ? '' : ` about=${about}`) +
+    (projection === 'shift' && !narrowing ? ' narrowing=false' : '');
   const formula =
     projection === 'shift'
-      ? `d${c} = (${c}−about)·(cos t − 1) − (depth − carried)·sin t`
+      ? narrowing
+        ? `d${c} = (${c}−about)·(cos t − 1) − (depth − carried)·sin t`
+        : `d${c} = −(depth − carried)·sin t`
       : `scale${c.toUpperCase()} = cos(α − t) / cos α,   α = atan2(${c}−about, depth)`;
   const derived =
     projection === 'shift'
       ? [
           `t = ${round(rad)} rad`,
-          `cos t − 1 = ${round(cosMinus1)}`,
+          ...(narrowing ? [`cos t − 1 = ${round(cosMinus1)}`] : []),
           `sin t = ${round(sin)}`,
           `shift the parent carries = −carried·sin t = ${round(-carried * sin)}`,
         ]

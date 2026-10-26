@@ -379,7 +379,7 @@ import {
   resolveBoneInherit,
   type RigSpec,
 } from './src/rig.ts';
-import { compareTurnFields, DEPTH_TONE_IDENTITY, depthStepLevels, foldPrecedes, turnCeiling, type FieldAgreement, type FoldLimit } from './src/depth.ts';
+import { compareTurnFields, DEPTH_TONE_IDENTITY, depthStepLevels, foldPrecedes, turnCeiling, turnDisplacement, type FieldAgreement, type FoldLimit } from './src/depth.ts';
 import {
   bindWeightedVertices,
   buildContourMesh,
@@ -39512,6 +39512,134 @@ function runContourMeshSuite(): number {
         'the report exists to say, before a key is written, what the gate will refuse and where; on a tie the two ' +
           'have to break it the same way, or the triangle an author is sent to fix is not the one the refusal names',
       );
+
+      // TC08 — with `"narrowing": false` (issue #1584), the deformed area is
+      // `A₀ − A_axis·sin t` (not `A₀·cos t − A_axis·sin t`), so the ceiling is
+      // `asin(|A₀ / A_axis|)` for `|A₀ / A_axis| < 1` and triangles with
+      // `|A₀ / A_axis| >= 1` do not fold at any real angle.
+      const turnMotionNoNarrow = (kind: 'yaw' | 'pitch', degrees: number): Record<string, unknown> => ({
+        ...CONTOUR_MOTION,
+        animations: {
+          turn: {
+            duration: 1,
+            tracks: [],
+            deform: [{ slot: 'blob', attachment: 'blob', keys: [{ t: 1, transform: { kind, depth: true, degrees, narrowing: false } }] }],
+          },
+        },
+      });
+      const bothNoNarrowMotion: Record<string, unknown> = {
+        ...CONTOUR_MOTION,
+        animations: {
+          turn_yaw: {
+            duration: 1,
+            tracks: [],
+            deform: [{ slot: 'blob', attachment: 'blob', keys: [{ t: 1, transform: { kind: 'yaw', depth: true, degrees: 5, narrowing: false } }] }],
+          },
+          turn_pitch: {
+            duration: 1,
+            tracks: [],
+            deform: [{ slot: 'blob', attachment: 'blob', keys: [{ t: 1, transform: { kind: 'pitch', depth: true, degrees: 5, narrowing: false } }] }],
+          },
+        },
+      };
+      const gateAtNoNarrow = (kind: 'yaw' | 'pitch', degrees: number) => {
+        const build = ceilingRig('dome', sheet, turnMotionNoNarrow(kind, degrees));
+        return validate({
+          skeletonText: build.result.skeletonText,
+          atlasText: build.result.atlasText,
+          atlasDir: build.opts.outDir,
+          declaredDurations: build.result.declaredDurations,
+          modelText: threadedModel(build.result, build.result.atlasText),
+          rig: build.result.rig,
+          profile: 'rig-play',
+        });
+      };
+      const reportedNoNarrow = ceilingRig('dome', sheet, bothNoNarrowMotion).result.meshes[0].depth?.ceiling;
+      const noNarrowAxes: Array<['yaw' | 'pitch', '+' | '-', FoldLimit | null, FoldLimit | null]> =
+        reported && reportedNoNarrow
+          ? [
+              ['yaw', '+', reportedNoNarrow.yaw.positive, reported.yaw.positive],
+              ['yaw', '-', reportedNoNarrow.yaw.negative, reported.yaw.negative],
+              ['pitch', '+', reportedNoNarrow.pitch.positive, reported.pitch.positive],
+              ['pitch', '-', reportedNoNarrow.pitch.negative, reported.pitch.negative],
+            ]
+          : [];
+      const tc08Probes: string[] = [];
+      const tc08Verdicts: string[] = [];
+      if (noNarrowAxes.length !== 4) tc08Probes.push('dome ceiling with narrowing=false was not reported');
+      for (const [kind, sign, limit, atanLimit] of noNarrowAxes) {
+        if (limit === null || atanLimit === null) {
+          tc08Probes.push(`${kind}${sign}: missing ceiling (${limit?.degrees ?? 'null'} vs atan ${atanLimit?.degrees ?? 'null'})`);
+          continue;
+        }
+        // Planted mutant check: a ceiling reader that ignores `narrowing: false`
+        // and reports the `atan` ceiling is strictly smaller than `asin` on every
+        // side (`asin(r) > atan(r)` for `0 < r < 1`) and counts triangles with
+        // `|A₀ / A_axis| >= 1` as foldable.
+        if (!(limit.degrees > atanLimit.degrees && limit.count < atanLimit.count)) {
+          tc08Probes.push(
+            `${kind}${sign}: narrowing=false reported ${limit.degrees}° over ${limit.count} triangle(s) where atan reported ${atanLimit.degrees}° over ${atanLimit.count}`,
+          );
+        }
+        const dir = sign === '+' ? 1 : -1;
+        const under = gateAtNoNarrow(kind, dir * (limit.degrees - NUDGE));
+        const over = gateAtNoNarrow(kind, dir * (limit.degrees + NUDGE));
+        const overHit = over.failures.find((f) => f.assertion === A39);
+        const named = overHit ? new RegExp(`triangle ${limit.triangle} \\[${limit.ids.join(',')}\\]`).test(overHit.detail) : false;
+        if (under.failures.some((f) => f.assertion === A39)) tc08Probes.push(`${kind}${sign}: A39 fired ${NUDGE}° under ${limit.degrees}°`);
+        if (overHit === undefined) tc08Probes.push(`${kind}${sign}: A39 stayed green ${NUDGE}° over ${limit.degrees}°`);
+        else if (!named) tc08Probes.push(`${kind}${sign}: A39 named ${overHit.detail} instead of triangle ${limit.triangle}`);
+        tc08Verdicts.push(`${kind}${sign}${limit.degrees.toFixed(3)}° (atan ${atanLimit.degrees.toFixed(3)}°, ${limit.count}/${atanLimit.count} tris)`);
+      }
+      // Also verify `turnDisplacement` with `narrowing = false` equals `-z * sin t` to tolerance 0,
+      // and a mutant keeping `u * (cos t - 1)` disagrees by `|u * (cos t - 1)|`.
+      const dispRad = (18 * Math.PI) / 180;
+      const dispGot = turnDisplacement(40, 25, dispRad, false);
+      const dispWant = -25 * Math.sin(dispRad);
+      const dispMutant = turnDisplacement(40, 25, dispRad, true);
+      if (dispGot !== dispWant) tc08Probes.push(`turnDisplacement(40, 25, 18°, false) returned ${dispGot}, wanted ${dispWant}`);
+      if (dispMutant === dispWant) tc08Probes.push('planted narrowing=true mutant agreed with narrowing=false on u=40');
+      let mixedDomeRefusal: string | null = null;
+      try {
+        ceilingRig('dome', sheet, {
+          ...CONTOUR_MOTION,
+          animations: {
+            turn_b: {
+              duration: 1,
+              tracks: [],
+              deform: [{ slot: 'blob', attachment: 'blob', keys: [{ t: 1, transform: { kind: 'yaw', depth: true, degrees: 5 } }] }],
+            },
+            turn_a: {
+              duration: 1,
+              tracks: [],
+              deform: [{ slot: 'blob', attachment: 'blob', keys: [{ t: 1, transform: { kind: 'yaw', depth: true, degrees: 5, narrowing: false } }] }],
+            },
+          },
+        });
+      } catch (err) {
+        mixedDomeRefusal = (err as Error).message;
+      }
+      if (
+        mixedDomeRefusal === null ||
+        !/deform default\/blob\/blob keys "yaw" with narrowing=false in animation "turn_a" and with narrowing=true in animation "turn_b"/.test(
+          mixedDomeRefusal,
+        )
+      ) {
+        tc08Probes.push(`mixed narrowing across animations on default/blob/blob refusal was ${JSON.stringify(mixedDomeRefusal)}`);
+      }
+      const tc08Held = tc08Probes.length === 0;
+      say(
+        'TC08_NARROWING_FALSE_RECOMPUTES_THE_CEILING_AS_ASIN_AND_MATCHES_A39',
+        tc08Held,
+        probeDetail(
+          tc08Held,
+          tc08Probes,
+          `4/4 asin ceiling(s) strictly above atan and held by A39 at ±${NUDGE}° (${tc08Verdicts.join('; ')}); ` +
+            `turnDisplacement(40, 25, 18°, false) = ${dispGot.toFixed(6)} (diff ${Math.abs(dispGot - dispWant)}, mutant diff ${Math.abs(dispMutant - dispWant).toFixed(6)})`,
+        ),
+        'issue #1584: without the u·(cos t − 1) term the deformed area is A₀ − A_axis·sin t, so a ceiling left on ' +
+          'atan(|A₀ / A_axis|) would report a lower angle than the one A39 actually refuses at',
+      );
     }
   }
 
@@ -45004,6 +45132,74 @@ function runDeformTransformSuite(): number {
       'nothing but a measurement of where the vertices actually go can tell them from the correct run',
   );
 
+  // --- DT12: `"narrowing": false` on `yaw` and `pitch` (issue #1584) --------
+  const noNarrowRow = (degrees: number): number[] => {
+    const t = (degrees * Math.PI) / 180;
+    return TURN_COLUMNS.flatMap((x) => {
+      const z = Math.sqrt(TURN_R * TURN_R - x * x);
+      return [round6(-z * Math.sin(t)), 0];
+    });
+  };
+  const noNarrowTranscribed = buildTurnRig(noNarrowRow(12));
+  const noNarrowStated = buildTurnRig([], { transform: { kind: 'yaw', radius: TURN_R, degrees: 12, narrowing: false } });
+  const noNarrowRun = emittedDeformRun(noNarrowStated.result, 'turn', 'head', 1);
+  const noNarrowMeta = noNarrowStated.result.deformTransforms[0];
+  const pitchNoNarrowRun = runOf({ kind: 'pitch', radius: 20, degrees: 30, narrowing: false });
+  const pitchNoNarrowWant = [0, 0, 8, 8].flatMap((y) => [0, round6(-Math.sqrt(20 * 20 - y * y) * Math.sin((30 * Math.PI) / 180))]);
+  // Mutant: keeping the narrowing term while claiming `"narrowing": false` (`statedRun` vs `noNarrowRun`).
+  const mutantMaxDiff = Math.max(...statedRun.map((v, i) => Math.abs(v - (noNarrowRun[i] ?? NaN))));
+  const nonBoolNarrowing = turnRefusal({ transform: { kind: 'yaw', radius: TURN_R, degrees: 12, narrowing: 'no' } });
+  const bendNarrowing = turnRefusal({
+    transform: { kind: 'bend', axis: 'y', along: 'x', from: -100, to: 100, amount: 10, power: 2, narrowing: false },
+  });
+  const mixedNarrowing = turnRefusal({
+    deformKeys: [
+      { t: 0 },
+      { t: 0.5, transform: { kind: 'yaw', radius: TURN_R, degrees: 12, narrowing: false } },
+      { t: 1, transform: { kind: 'yaw', radius: TURN_R, degrees: -12 } },
+    ],
+  });
+  const dt12Probes: string[] = [
+    ...(noNarrowStated.result.skeletonText === noNarrowTranscribed.result.skeletonText
+      ? []
+      : ['yaw narrowing=false skeleton differs from the transcribed -z·sin t table']),
+    ...(noNarrowMeta?.formula === 'dx = −z·sin t,   z = √(radius² − (x−about)²)' && noNarrowMeta.stated.includes('narrowing=false')
+      ? []
+      : [`deformTransforms[0] reported formula=${noNarrowMeta?.formula} stated=${noNarrowMeta?.stated}`]),
+    ...(JSON.stringify(pitchNoNarrowRun) === JSON.stringify(pitchNoNarrowWant)
+      ? []
+      : [`pitch narrowing=false emitted ${JSON.stringify(pitchNoNarrowRun)}, wanted ${JSON.stringify(pitchNoNarrowWant)}`]),
+    ...(mutantMaxDiff > 1
+      ? []
+      : [`planted mutant keeping u·(cos t − 1) differed by at most ${mutantMaxDiff} from narrowing=false`]),
+    ...(nonBoolNarrowing !== null && /narrowing.*a boolean \(true or false\)/.test(nonBoolNarrowing)
+      ? []
+      : [`non-boolean narrowing refusal was ${JSON.stringify(nonBoolNarrowing)}`]),
+    ...(bendNarrowing !== null && /has a key this compiler does not read: "narrowing"/.test(bendNarrowing)
+      ? []
+      : [`narrowing on bend refusal was ${JSON.stringify(bendNarrowing)}`]),
+    ...(mixedNarrowing !== null &&
+    /deform default\/head\/head keys "yaw" with narrowing=false in animation "turn" and with narrowing=true in animation "turn"/.test(
+      mixedNarrowing,
+    )
+      ? []
+      : [`mixed narrowing on one attachment/axis refusal was ${JSON.stringify(mixedNarrowing)}`]),
+  ];
+  const dt12Held = dt12Probes.length === 0;
+  say(
+    'DT12_NARROWING_FALSE_EVALUATES_MINUS_Z_SIN_T_AND_REFUSES_NON_BOOLEAN_OR_WRONG_KIND',
+    dt12Held,
+    probeDetail(
+      dt12Held,
+      dt12Probes,
+      `yaw narrowing=false emits the exact -z·sin t table (${noNarrowRun.length} numbers, formula "${noNarrowMeta?.formula}", ` +
+        `stated "${noNarrowMeta?.stated}"); pitch narrowing=false emits [${pitchNoNarrowRun.join(', ')}] (diff 0); ` +
+        `the mutant keeping u·(cos t − 1) is off by ${mutantMaxDiff.toFixed(6)}; non-boolean, bend and mixed narrowing refused`,
+    ),
+    'issue #1584: an asymmetric part whose carrier rotates in setup x/y does not foreshorten across the turn axis ' +
+      'the way a symmetric shell does, so `"narrowing": false` drops `u·(cos t − 1)` and keeps `−z·sin t` alone',
+  );
+
   runDeformEnvelopeCases(say);
   return bad;
 }
@@ -46701,6 +46897,96 @@ function runGroupMemberSuite(): number {
       'the runtime also reads `NoScale`, so refusing it would refuse a spelling that works; writing it verbatim ' +
         'would make the file depend on the one letter the lookup folds. The resolver\'s spelling is the editor\'s, ' +
         'which is also what keeps `ingest` → `build` byte-identical on an export (`IG63`)',
+    );
+  }
+
+  // --- GM12: `"narrowing": false` on `derive` (`yaw` and `pitch`, issue #1584) ---
+  {
+    const rad = (DEG * Math.PI) / 180;
+    const wantYawNoNarrow = MEMBER_BONES.map((b) => f32(round6(-(b.depth - MEMBER_R) * Math.sin(rad))));
+    const wantPitchNoNarrow = MEMBER_BONES.map((b) => f32(round6(-b.depth * Math.sin(rad))));
+    const depthMap = Object.fromEntries(MEMBER_BONES.map((b) => [b.name, b.depth]));
+    const yawNoNarrow = build(
+      memberMotion([
+        {
+          group: 'features',
+          property: 'translatex',
+          keys: [
+            { t: 0, v: [0] },
+            { t: 0.5, derive: { kind: 'yaw', degrees: DEG, carried: MEMBER_R, narrowing: false, depth: depthMap } },
+            { t: 1, v: [0] },
+          ],
+        },
+      ]),
+    );
+    const pitchNoNarrow = build(
+      memberMotion([
+        {
+          group: 'features',
+          property: 'translatey',
+          keys: [
+            { t: 0, v: [0] },
+            { t: 0.5, derive: { kind: 'pitch', degrees: DEG, narrowing: false, depth: depthMap } },
+            { t: 1, v: [0] },
+          ],
+        },
+      ]),
+    );
+    const yawMeta = yawNoNarrow.trackDerivations[0]?.model;
+    const pitchMeta = pitchNoNarrow.trackDerivations[0]?.model;
+    const yawModelValues = yawMeta?.members.map((m) => m.value) ?? [];
+    const pitchModelValues = pitchMeta?.members.map((m) => m.value) ?? [];
+    // Planted mutant: keeping `u·(cos t − 1)` while claiming `"narrowing": false` (`gotShift` vs `yawModelValues`).
+    const mutantMemberDiffs = MEMBER_BONES.filter((b) => b.x !== 0).map((b) => Math.abs((gotShift[MEMBER_BONES.indexOf(b)] ?? NaN) - (yawModelValues[MEMBER_BONES.indexOf(b)] ?? NaN)));
+    const minMutantDiff = Math.min(...mutantMemberDiffs);
+    const narrowingOnScaleX = refusal(
+      dirs,
+      memberMotion([{ group: 'features', property: 'scalex', keys: [{ t: 0, v: [1] }, { t: 0.5, derive: { kind: 'yaw', degrees: DEG, narrowing: false, depth: depthMap } }] }]),
+    );
+    const narrowingOnScaleY = refusal(
+      dirs,
+      memberMotion([{ group: 'features', property: 'scaley', keys: [{ t: 0, v: [1] }, { t: 0.5, derive: { kind: 'pitch', degrees: DEG, narrowing: false, depth: depthMap } }] }]),
+    );
+    const narrowingNonBool = refusal(
+      dirs,
+      memberMotion([{ group: 'features', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 0.5, derive: { kind: 'yaw', degrees: DEG, narrowing: 'no', depth: depthMap } }] }]),
+    );
+    const gm12Probes: string[] = [
+      ...(JSON.stringify(yawModelValues) === JSON.stringify(wantYawNoNarrow)
+        ? []
+        : [`yaw narrowing=false derived ${JSON.stringify(yawModelValues)}, wanted ${JSON.stringify(wantYawNoNarrow)}`]),
+      ...(JSON.stringify(pitchModelValues) === JSON.stringify(wantPitchNoNarrow)
+        ? []
+        : [`pitch narrowing=false derived ${JSON.stringify(pitchModelValues)}, wanted ${JSON.stringify(wantPitchNoNarrow)}`]),
+      ...(yawMeta?.formula === 'dx = −(depth − carried)·sin t' && yawMeta.stated.includes('narrowing=false')
+        ? []
+        : [`trackDerivations[0] reported formula=${yawMeta?.formula} stated=${yawMeta?.stated}`]),
+      ...(minMutantDiff > 0.1
+        ? []
+        : [`planted mutant keeping x·(cos t − 1) differed by at least ${minMutantDiff} across off-axis members`]),
+      ...(narrowingOnScaleX !== null && /IS the foreshortening — its whole output/.test(narrowingOnScaleX)
+        ? []
+        : [`narrowing on scalex refusal was ${JSON.stringify(narrowingOnScaleX)}`]),
+      ...(narrowingOnScaleY !== null && /IS the foreshortening — its whole output/.test(narrowingOnScaleY)
+        ? []
+        : [`narrowing on scaley refusal was ${JSON.stringify(narrowingOnScaleY)}`]),
+      ...(narrowingNonBool !== null && /narrowing.*a boolean \(true or false\)/.test(narrowingNonBool)
+        ? []
+        : [`non-boolean narrowing refusal was ${JSON.stringify(narrowingNonBool)}`]),
+    ];
+    const gm12Held = gm12Probes.length === 0;
+    say(
+      'GM12_NARROWING_FALSE_DERIVES_PURE_DEPTH_PARALLAX_AND_REFUSES_FORESHORTEN_PROPERTIES',
+      gm12Held,
+      probeDetail(
+        gm12Held,
+        gm12Probes,
+        `yaw narrowing=false derives [${yawModelValues.join(', ')}] (diff 0 from −(depth − carried)·sin t, formula "${yawMeta?.formula}"); ` +
+          `pitch narrowing=false derives [${pitchModelValues.join(', ')}] (diff 0); the mutant keeping u·(cos t − 1) differs by >= ${minMutantDiff.toFixed(6)}; ` +
+          `scalex, scaley and non-boolean narrowing refused`,
+      ),
+      'issue #1584: a bone track\'s `"derive"` with `"narrowing": false` drops `u·(cos t − 1)` on `translatex`/`translatey`, ' +
+        'and refuses `"narrowing"` on `scalex`/`scaley` because foreshortening IS the narrowing term',
     );
   }
 

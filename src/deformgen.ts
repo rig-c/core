@@ -121,6 +121,16 @@ export interface DeformTurn {
   degrees: number;
   /** Where the axis crosses the driving coordinate. Default 0. */
   about?: number;
+  /**
+   * Whether the displacement includes the foreshortening of the vertex's setup
+   * position `(u − about)·(cos t − 1)`. Default `true`.
+   *
+   * When `false`, each vertex moves by `−z·sin t` alone — for a rig whose plate
+   * proportions are held at their front-view width across the turn and whose
+   * triangles therefore fold at `sin t = A₀ / A_axis` (`asin`) rather than
+   * `tan t = A₀ / A_axis` (`atan`) (issue #1584).
+   */
+  narrowing?: boolean;
   /** Scales each vertex's offset by a weight in [0, 1] — see `DeformEnvelope`. */
   envelope?: DeformEnvelope;
 }
@@ -457,6 +467,7 @@ export function evaluateDeformTransform(
       const rad = (degrees * Math.PI) / 180;
       const cosMinus1 = Math.cos(rad) - 1;
       const sin = Math.sin(rad);
+      const narrowing = t.narrowing !== false;
       // The driving coordinate is the one the axis is perpendicular to: x for a
       // yaw (a vertical axis), y for a pitch (a horizontal one). The other
       // component of every pair is 0, because a turn about an axis moves
@@ -481,11 +492,11 @@ export function evaluateDeformTransform(
         // mesh was built (`sampleContourDepth`) rather than here, where the
         // sheet is long out of reach.
         const z = fromDepth ? (depth as readonly number[])[v] : Math.sqrt(radius * radius - u * u);
-        const d = u * cosMinus1 - z * sin;
+        const d = (narrowing ? u * cosMinus1 : 0) - z * sin;
         offsets[2 * v + along] = round(widen(d));
         offsets[2 * v + (1 - along)] = 0;
       }
-      identity = round(cosMinus1) === 0 && round(sin) === 0;
+      identity = (narrowing ? round(cosMinus1) === 0 : true) && round(sin) === 0;
       identitySpelling = 'degrees 0';
       sampledTo = fromDepth
         ? `The turn is ${degrees}°, and a projection of it can only vanish where every vertex shares one ` +
@@ -494,15 +505,20 @@ export function evaluateDeformTransform(
         : `The turn is ${degrees}°, and a projection of it can only vanish where every vertex shares one ` +
           `${kind === 'yaw' ? 'x' : 'y'} — check that this attachment's setup geometry is the shape the radius says it is`;
       const c = kind === 'yaw' ? 'x' : 'y';
+      const narrowingNote = narrowing ? '' : ' narrowing=false';
       stated = fromDepth
-        ? `depth=true degrees=${degrees}${t.about === undefined ? '' : ` about=${about}`}`
-        : `radius=${radius} degrees=${degrees}${t.about === undefined ? '' : ` about=${about}`}`;
+        ? `depth=true degrees=${degrees}${t.about === undefined ? '' : ` about=${about}`}${narrowingNote}`
+        : `radius=${radius} degrees=${degrees}${t.about === undefined ? '' : ` about=${about}`}${narrowingNote}`;
       formula = fromDepth
-        ? `d${c} = (${c}−about)·(cos t − 1) − z·sin t,   z = the vertex's sampled depth`
-        : `d${c} = (${c}−about)·(cos t − 1) − z·sin t,   z = √(radius² − (${c}−about)²)`;
+        ? narrowing
+          ? `d${c} = (${c}−about)·(cos t − 1) − z·sin t,   z = the vertex's sampled depth`
+          : `d${c} = −z·sin t,   z = the vertex's sampled depth`
+        : narrowing
+          ? `d${c} = (${c}−about)·(cos t − 1) − z·sin t,   z = √(radius² − (${c}−about)²)`
+          : `d${c} = −z·sin t,   z = √(radius² − (${c}−about)²)`;
       derived = [
         `t = ${round(rad)} rad`,
-        `cos t − 1 = ${round(cosMinus1)}`,
+        ...(narrowing ? [`cos t − 1 = ${round(cosMinus1)}`] : []),
         `sin t = ${round(sin)}`,
       ];
       if (fromDepth) {

@@ -189,11 +189,12 @@ import {
   foldInheritMode,
   gridRound,
   readBlend,
-  readColour,
   shownAttachment,
   shownRow,
   slidersKeyingWhy,
   sourceOfDoc,
+  viewColours,
+  WHITE,
   type CompiledDocument,
   type CoreAnimation,
   type CoreBoneRow,
@@ -834,12 +835,15 @@ export function posedSlots(
   /** Filled with each slot's placeholder once the sample's own timelines have moved it, before the sliders — what the attachments are posed from (`attachmentStates`). */
   placeholders?: Map<string, string | null>,
 ): { rows: CoreSlotRow[]; conflicts: string[] } {
-  const colour = plant.colour ?? readColour;
+  // The view's stated colours, read once (`viewColours`); a planted reader of the light colour is called as it always was.
+  const stated = viewColours(doc);
+  const colour = plant.colour ?? stated;
   const byName = new Map(timelines.slots.map((s) => [s.name, s]));
   return slotRowsFrom(doc, plant, sliders, placeholders, (slot, live) => {
     let placeholder = slot.setup;
-    const light = slot.color === undefined ? [1, 1, 1, 1] : colour(slot.color);
-    const setupDark = slot.dark === undefined ? null : readColour(slot.dark);
+    const setupLight = slot.color === undefined ? WHITE : colour(slot.color);
+    const light = [setupLight[0], setupLight[1], setupLight[2], setupLight[3]];
+    const setupDark = slot.dark === undefined ? null : stated(slot.dark);
     const dark = setupDark === null ? null : [setupDark[0], setupDark[1], setupDark[2]];
     for (const tl of live ? (byName.get(slot.name)?.timelines ?? []) : []) {
       if (tl.kind === 'attachment') {
@@ -848,7 +852,6 @@ export function posedSlots(
         continue;
       }
       const v = valuesAt(tl.keys, t, plant);
-      const setupLight = slot.color === undefined ? [1, 1, 1, 1] : colour(slot.color);
       const channels = SLOT_COLOUR_TIMELINES[tl.kind].channels;
       channels.forEach((name, i) => {
         const at = { r: 0, g: 1, b: 2, a: 3, r2: 4, g2: 5, b2: 6 }[name];
@@ -962,8 +965,11 @@ export function posedBoneWorld(doc: CompiledDocument, timelines: CoreAnimationTi
  * `posedBoneWorld`'s world transforms without its rows (issue #1179, the
  * second part): the same pose by the same operations in the same order, since
  * `stepRows` only reads the world once it is posed. A walk reads `world` and
- * no row, so the scan's walk (`scanWalkIn` in `./raw.ts`, A10's) asks for
- * this; the raw entry's walk still forms the rows it does not read, unchanged.
+ * no row, so every walk asks for this — the scan's (`scanWalkIn` in
+ * `./raw.ts`, A10's), the raw entry's batch walks and the live track's step.
+ * The rows were the only thing the other variant adds, and their rounding
+ * (`rawNumber`, `keptNumber`) refuses nothing, so leaving them out moves no
+ * number and no refusal of a walk.
  */
 export function posedBoneWorldAlone(doc: CompiledDocument, timelines: CoreAnimationTimelines, t: number, plant: TimelinePlant, constraints: CoreConstraintTimelines | undefined, sliders: SliderApplication[] | undefined, step: PoseStep | undefined): Map<string, CoreWorld> {
   return posedBoneStep(doc, timelines, t, plant, constraints, sliders, step).world;
@@ -1038,16 +1044,13 @@ function steppedLocals(doc: CompiledDocument, bones: ModelBone[], plant: Timelin
 }
 
 /**
- * `steppedLocals`' world transforms, the oracle's rows formed beside them when
- * `rows` is set (as `posedBoneWorld` forms them and `posedBoneWorldAlone` does
- * not): the live tracks' entry to the stepped phase (`./tracks.ts`). The
- * document's constraint records as they stand — the live tracks mix no
- * constraint timeline — and no physics timeline keyed.
+ * `steppedLocals`' world transforms, without the oracle's rows (as
+ * `posedBoneWorldAlone` poses them): the live tracks' entry to the stepped
+ * phase (`./tracks.ts`). The document's constraint records as they stand —
+ * the live tracks mix no constraint timeline — and no physics timeline keyed.
  */
-export function steppedLocalsWorld(doc: CompiledDocument, bones: ModelBone[], plant: TimelinePlant, sliders: SliderApplication[], step: PoseStep, rows: boolean): Map<string, CoreWorld> {
-  const posed = steppedLocals(doc, bones, plant, () => constraintRecords(doc), [], 0, sliders, step);
-  if (rows) stepRows(posed);
-  return posed.world;
+export function steppedLocalsWorld(doc: CompiledDocument, bones: ModelBone[], plant: TimelinePlant, sliders: SliderApplication[], step: PoseStep): Map<string, CoreWorld> {
+  return steppedLocals(doc, bones, plant, () => constraintRecords(doc), [], 0, sliders, step).world;
 }
 
 /** Each path record with the curve its slot shows deformed by the sample's own deform timelines at `t` (`./deform.ts`), or as it was. */

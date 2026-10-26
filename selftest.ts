@@ -93779,7 +93779,7 @@ function runPoseOracleSuite(): number {
 
 // Its own statement, so the suite lands as one hunk (the convention the
 // slider-reader suite states at its imports).
-import { activeBones, CORE_CONSTRAINT_KINDS, CORE_DUMPER, CoreInputError, foldBlend, foldInheritMode, gridRound, NOT_ADMITTED, poseSetup, readBlend, readColour, readModel, shownAttachment, type CompiledDocument, type CoreStated, type CoreBlendMode, type CorePlant, type SetupEvaluator, type ShownResolution } from './src/core/index.ts';
+import { activeBones, CORE_CONSTRAINT_KINDS, CORE_DUMPER, CoreInputError, foldBlend, foldInheritMode, gridRound, NOT_ADMITTED, poseSetup, readBlend, readColour, readModel, shownAttachment, viewColours, type CompiledDocument, type CoreStated, type CoreBlendMode, type CorePlant, type SetupEvaluator, type ShownResolution } from './src/core/index.ts';
 import { compiledDeformedWorldVertices, compiledWeightedOf, compiledWorldVertices, compileWeightedVertices, deformedWorldVertices, EXACT_COORDS, regionCorners, worldVertices, type CompiledWeightedVertices, type MeshArrays, type VertexPoser, type WeightedVertices as CoreWeightedVertices } from './src/core/vertices.ts';
 import { clipShapeOf, clipThrough, clipTriangles, convexPieces, signedArea2, type ClipReading, type ClipShape, type TriangleClipper } from './src/core/clipping.ts';
 import { asOracleDocument, blockOf, coreDump, ORACLE_BLOCKS, OracleInputError, sampleTime as oracleSampleTime, type OracleDocument, type SlotRow } from './tools/pose_oracle.ts';
@@ -93809,7 +93809,7 @@ import { atlasRegionLookup } from './src/atlas.ts';
 import { isTrimmed, UV_CENSUS_FIELDS, uvDrawnOf, uvReachLines } from './tools/core_gate.ts';
 import { NO_ATLAS_WHY } from './tools/pose_oracle.ts';
 // The raw entry (issue #966), its own statements so the CR controls land as one hunk.
-import { poseRawAnimation, poseRawAnimationEach, poseRawSetup, type RawPose } from './src/core/raw.ts';
+import { poseRawAnimation, poseRawAnimationEach, poseRawSetup, type RawDrawn, type RawPose } from './src/core/raw.ts';
 import { ORACLE_RAW_SPEC, ulpDistance } from './tools/pose_oracle.ts';
 import { rawCensusLines } from './tools/core_gate.ts';
 // Unposed bones and collapsed frames (issue #979), its own statements so the CC13, CC14, CC15 and CO20 controls land as one hunk.
@@ -93968,6 +93968,79 @@ function srcPopulation(root: string): Map<string, string> {
   };
   walk('src');
   return out;
+}
+
+/** The functions that form the oracle's bone rows (`CO62`): `stepRows` rounds them, the two exports hand them out. */
+const ROW_FORMING = new Set(['stepRows', 'posedBoneWorld', 'posedBoneRows']);
+/** The modules a walk — batch, scan or live — steps through past its timelines (`CO62`). */
+const WALK_MODULES = new Set(['src/core/raw.ts', 'src/core/track.ts', 'src/core/tracks.ts']);
+/** The module the walk's bone poser lives in, and the sample's (`CO62`). */
+const BONE_POSER_MODULE = 'src/core/animation.ts';
+
+/** The name of the function, method or `const` a node sits in, innermost first; `(module)` at the top level. */
+function enclosingName(node: ts.Node): string {
+  for (let at: ts.Node | undefined = node.parent; at !== undefined; at = at.parent) {
+    if ((ts.isFunctionDeclaration(at) || ts.isMethodDeclaration(at)) && at.name !== undefined) return at.name.getText();
+    if (ts.isVariableDeclaration(at) && at.initializer !== undefined && (ts.isArrowFunction(at.initializer) || ts.isFunctionExpression(at.initializer))) return at.name.getText();
+    if (ts.isPropertyAssignment(at) && (ts.isArrowFunction(at.initializer) || ts.isFunctionExpression(at.initializer))) return at.name.getText();
+  }
+  return '(module)';
+}
+
+/** Each bare-identifier call in a source, with the function it sits in and its line. */
+function bareCallsIn(path: string, text: string): Array<{ caller: string; callee: string; line: number }> {
+  const tree = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+  const out: Array<{ caller: string; callee: string; line: number }> = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) out.push({ caller: enclosingName(node), callee: node.expression.text, line: tree.getLineAndCharacterOfPosition(node.getStart()).line + 1 });
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return out;
+}
+
+/**
+ * Where a walk forms the oracle's bone rows (`CO62`), by the chain of calls
+ * that reaches them. A walk's modules (`WALK_MODULES`) must call none of
+ * `ROW_FORMING`, and no function of the bone poser's module they call may
+ * reach one through that module's own calls — the call graph is read off the
+ * tree, so the walk's entries are not named here. `formed` lists every other
+ * call of `ROW_FORMING`: the sites where the rows are the reason — the
+ * sample's, and the readers outside a walk.
+ */
+function rowFormingCalls(population: ReadonlyMap<string, string>): { faults: string[]; formed: string[]; entries: string[] } {
+  const faults: string[] = [];
+  const formed: string[] = [];
+  const poser = bareCallsIn(BONE_POSER_MODULE, population.get(BONE_POSER_MODULE) ?? '');
+  const callees = new Map<string, Array<{ callee: string; line: number }>>();
+  for (const c of poser) callees.set(c.caller, [...(callees.get(c.caller) ?? []), { callee: c.callee, line: c.line }]);
+  const defined = new Set(callees.keys());
+  const entries = new Set<string>();
+  for (const path of WALK_MODULES) {
+    for (const c of bareCallsIn(path, population.get(path) ?? '')) {
+      if (ROW_FORMING.has(c.callee)) faults.push(`${path}:${c.line}: ${c.caller} calls ${c.callee}`);
+      else if (defined.has(c.callee)) entries.add(c.callee);
+    }
+  }
+  // Breadth first from each entry, through the poser module's own functions; a row-forming call on the way is a fault, named by its chain.
+  const reached = new Map<string, string[]>([...entries].map((e) => [e, [e]]));
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const fn = queue.shift() as string;
+    const chain = reached.get(fn) as string[];
+    for (const { callee, line } of callees.get(fn) ?? []) {
+      if (ROW_FORMING.has(callee)) faults.push(`${BONE_POSER_MODULE}:${line}: a walk reaches ${callee} through ${[...chain, callee].join(' → ')}`);
+      else if (defined.has(callee) && !reached.has(callee)) {
+        reached.set(callee, [...chain, callee]);
+        queue.push(callee);
+      }
+    }
+  }
+  for (const [path, text] of population) {
+    if (!path.startsWith('src/core/') || WALK_MODULES.has(path)) continue;
+    for (const c of bareCallsIn(path, text)) if (ROW_FORMING.has(c.callee) && !(path === BONE_POSER_MODULE && reached.has(c.caller))) formed.push(`${path}:${c.line}: ${c.caller} calls ${c.callee}`);
+  }
+  return { faults, formed, entries: [...entries].sort() };
 }
 
 /**
@@ -96805,6 +96878,57 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
         `${totalGeometries} weighted geometry(ies) (${multiBoneGeometries} multi-bone, ${singleBoneGeometries} single-bone; ${uniqueBoneLookups} unique bone lookup(s) per pose where per-influence lookup did ${totalInfluences}): ${coordinatesHeld} posed coordinate(s) across worldVertices (Math.fround and EXACT_COORDS) and deformedWorldVertices equal by Object.is to per-influence name lookup, ${missingErrorsHeld} missing-bone throws identical; ${distinctVertices.length} distinct WeightedVertices object(s) mapped to ${seenTables.size} distinct compiled table(s) (0 shared; a text-keyed cache plant collided on ${sharedCollisionCount}); wrongBoneIndex named [${probeNamed.join(', ')}] on the probe, turned ${multiBonePlantRed}/${multiBoneGeometries} multi-bone geometry(ies) (${multiBoneDeformedPlantRed} deformed) and ${turned.length}/${judged.length} compared recipe(s) [${turned.join(', ')}] red while leaving ${singleBonePlantGreen}/${singleBoneGeometries} single-bone geometry(ies) and every unweighted row green`,
       ),
       'issue #1580: compiling weighted-vertex bone names to indices into a per-call bone array removes the per-influence map lookup while keeping the first-occurrence bone check, the influence summation order and every posed float bit-for-bit identical, with one compiled table per vertex object',
+    );
+  }
+
+  // --- CO62: no walk forms the oracle's bone rows — the live track's step and the live tracks' poses the world alone --
+  //
+  // A walk's pose carries the bones' readings (`rawBones`), never the oracle's rows, and the rows' rounding refuses nothing, so a
+  // walk that forms them forms them for nothing: the live track's step did, every pose (`RAW_SHAPE`'s `rows`), and so did the live
+  // tracks' (`steppedLocalsWorld`'s `rows`). The world is posed by the same calls either way, which CO46 and CO51 hold to the batch
+  // walks and spine-core. Read off the tree: `rowFormingCalls` names every call that forms the rows outside the sample's body. Planted,
+  // each read red at its own site: the live track's step back on `posedBoneWorld`, and the live tracks' entry rounding the rows again —
+  // the two readings before this control. The sites where the rows are the reason stay counted, so the reader is seen to find them.
+  if (parent) {
+    const probes: string[] = [];
+    const population = srcPopulation(root);
+    const live = rowFormingCalls(population);
+    probes.push(...live.faults.map((f) => `forms the rows in a walk: ${f}`));
+    const swap = (file: string, from: string, to: string): Map<string, string> | null => {
+      const text = population.get(file) ?? '';
+      if (text.split(from).length !== 2) return null;
+      return new Map(population).set(file, text.replace(from, to));
+    };
+    const plants: Array<[string, string, Map<string, string> | null]> = [
+      [
+        'the live track\'s step on the row-forming variant',
+        'src/core/raw.ts:',
+        swap('src/core/raw.ts', 'world: (sliders) => posedBoneWorldAlone(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjustment }),', 'world: (sliders) => posedBoneWorld(doc, anim.timelines, t, raw, anim.constraints, sliders, { ctx, before, adjustment }).world,'),
+      ],
+      [
+        'the live tracks\' entry rounding the rows it does not hand out',
+        'src/core/animation.ts:',
+        swap('src/core/animation.ts', '  return steppedLocals(doc, bones, plant, () => constraintRecords(doc), [], 0, sliders, step).world;', '  const posed = steppedLocals(doc, bones, plant, () => constraintRecords(doc), [], 0, sliders, step);\n  stepRows(posed);\n  return posed.world;'),
+      ],
+    ];
+    const read: string[] = [];
+    for (const [label, at, planted] of plants) {
+      if (planted === null) {
+        probes.push(`the plant "${label}" found no site to write: the text it rewrites is not in the tree once, so the plant must follow the tree`);
+        continue;
+      }
+      const raised = raisedBy(rowFormingCalls(planted).faults, { was: live.faults, at });
+      if (raised.length === 0) probes.push(`the plant "${label}" was not caught`);
+      else read.push(`${label}: ${raised[0]}`);
+    }
+    const sampled = live.formed.filter((f) => f.startsWith('src/core/animation.ts:') && f.endsWith('posedBoneWorld calls stepRows')).length;
+    probes.push(...floorProbes([[sampled, 1, `${sampled} site(s) where the sample's body rounds the rows`], [live.entries.length, 1, `${live.entries.length} function(s) of ${BONE_POSER_MODULE} a walk calls`], [read.length, plants.length, `${read.length} of ${plants.length} plant(s) read red`]], 'so the reader was not seen to find a row it must find'));
+    const ok = probes.length === 0;
+    say(
+      'CO62_NO_WALK_FORMS_THE_ORACLES_BONE_ROWS_AND_THE_LIVE_STEP_BACK_ON_THE_ROW_FORMING_VARIANT_IS_READ_RED',
+      ok,
+      probeDetail(ok, probes, `${[...population.keys()].filter((p) => p.startsWith('src/core/')).length} module(s) under src/core/ read: no call forms the rows in [${[...WALK_MODULES].join(', ')}], nor in any function of ${BONE_POSER_MODULE} reached from the ${live.entries.length} they call [${live.entries.join(', ')}]; the rows are formed at ${live.formed.length} site(s) where they are the reason [${live.formed.map((f) => f.replace(/:\d+:/, ':')).join('; ')}]; planted, each read red at its own site — ${read.join('; ')}`),
+      'the live step formed the oracle\'s bone rows on every pose and discarded them; no walk pose carries a row and their rounding refuses nothing, so a walk poses the world alone, and only a reading of the tree can show a row formed for nothing, because it moves no number',
     );
   }
 
@@ -106525,6 +106649,97 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
         ok,
         probeDetail(ok, probes, `${census.rows} drawn row(s) of the clipping probe and the gallery rows — ${census.meshes} mesh, ${census.regions} region — every one's UVs and triangles frozen, the document's own arrays not, and the same two arrays on each of the ${census.repeats} row(s) a later pose drew again; an unfrozen cache read red on ${unfrozenRaised.length} row(s), a copy per pose on ${copiedRaised.length}`),
         'issue #1530: the raw entry stopped copying a drawn attachment\'s UVs and triangles on every pose; handing one array out to every frame is sound only while no frame can write it, and it is worth something only while it is the same array on every pose',
+      );
+    }
+
+    // --- CO63: a stated colour is read once per document view, and every pose's drawn colours are still that pose's own --
+    //
+    // The slot rows and the drawn rows parsed every stated colour's hex on every pose; they now read it through `viewColours`, once per
+    // view and spelling, and the tuple it keeps is shared by every pose — so it is sound only while no pose hands it out. Live: the
+    // clipping probe and the gallery rows, every drawn record respelled by its slot (eight digits and six, so both alpha readings), each
+    // animation walked on a looping track; every drawn row's colour is `readColour` of its spelling channel for channel (`Object.is`),
+    // no two rows of any kept pose share a colour array, the consumer writes NaN into each kept pose's colours before the next pose,
+    // and a record respelled in place between two poses reads its new spelling. Planted: the view's kept tuple handed out in place of
+    // the pose's copy — what the drawn rows would hand out without it — written by the consumer, read red at the next pose's value.
+    {
+      const probes: string[] = [];
+      const SPELLINGS = ['ff8040c0', '336699', 'c0c0c0ff'];
+      const DRAWN_KINDS = new Set(['region', 'mesh', 'linkedmesh']);
+      const steps = new Array<number>(6).fill(0.1);
+      const census = { walks: 0, rows: 0, written: 0, respelled: 0 };
+      /** Every drawn record of the view respelled by its slot's index; the spelling each slot reads, by slot name. */
+      const respell = (view: CompiledDocument, shift: number): Map<string, string> => {
+        const by = new Map<string, string>();
+        view.slots.forEach((slot, k) => by.set(slot.name, SPELLINGS[(k + shift) % SPELLINGS.length]));
+        for (const skin of view.skins) for (const [slot, records] of Object.entries(skin.attachments)) for (const record of Object.values(records)) if (DRAWN_KINDS.has(record.kind)) record.color = by.get(slot);
+        return by;
+      };
+      /** One walk's faults: each pose's drawn colours against their spelling, then written as a consumer keeping the frame writes the array `handed` gives it; then a respelling in place and one more pose. */
+      const walkFaults = (where: string, model: string, name: string, handed: (view: CompiledDocument, row: RawDrawn, spelling: string) => number[], count: boolean): string[] => {
+        const faults: string[] = [];
+        const view = noSkinView(readModel(model, where));
+        const spelled = respell(view, 0);
+        const track = openTrack(view, name, { loop: true, reset: 'animation' }, {});
+        const seen = new Set<object>();
+        const at = `${where} "${name}"`;
+        const valueFault = (d: RawDrawn, spelling: string, label: string): string | null => {
+          const want = readColour(spelling);
+          const k = want.findIndex((v, c) => !Object.is(v, d.colour[c]));
+          return k < 0 ? null : `${label}: ${at} slot "${d.slot}": channel ${k} reads ${d.colour[k]}, the spelling "${spelling}" reads ${want[k]}`;
+        };
+        const take = (pose: RawPose, i: number): void => {
+          for (const d of pose.drawn) {
+            const s = spelled.get(d.slot);
+            if (s === undefined) continue;
+            if (count) census.rows++;
+            const fault = valueFault(d, s, `value: pose ${i}`);
+            if (fault !== null) faults.push(fault);
+            if (seen.has(d.colour)) faults.push(`shared: ${at} pose ${i} slot "${d.slot}": its colour array is one an earlier row was handed`);
+            seen.add(d.colour);
+          }
+          // The consumer keeps the frame and writes into what it was handed, before the next pose.
+          for (const d of pose.drawn) {
+            const s = spelled.get(d.slot);
+            if (s === undefined) continue;
+            handed(view, d, s).fill(Number.NaN);
+            if (count) census.written++;
+          }
+        };
+        take(track.first, 0);
+        steps.forEach((dt, i) => take(track.step(dt), i + 1));
+        // Respelled in place: every drawn record given its neighbour slot's spelling, which the view has already read once.
+        const respelled = respell(view, 1);
+        for (const d of track.step(0.1).drawn) {
+          const s = respelled.get(d.slot);
+          if (s === undefined) continue;
+          if (count) census.respelled++;
+          const fault = valueFault(d, s, 'respell: the pose after');
+          if (fault !== null) faults.push(fault);
+        }
+        if (count) census.walks++;
+        return faults;
+      };
+      const ownColour = (_view: CompiledDocument, row: RawDrawn): number[] => row.colour;
+      const keptTuple = (view: CompiledDocument, _row: RawDrawn, spelling: string): number[] => viewColours(view)(spelling) as unknown as number[];
+      let moving = 0;
+      let plantedRed = 0;
+      for (const { where, model } of drawnSubjects) {
+        for (const name of fileAnimationOrder(noSkinView(readModel(model, where)))) {
+          const live = walkFaults(where, model, name, ownColour, true);
+          probes.push(...live);
+          moving++;
+          const raised = raisedBy(walkFaults(where, model, name, keptTuple, false), { was: live, at: 'value: ' });
+          if (raised.length > 0) plantedRed++;
+          else probes.push(`${where} "${name}": the view's kept colour handed out and written by the consumer was not caught`);
+        }
+      }
+      probes.push(...floorProbes([[census.rows, 1, `${census.rows} drawn row(s) read against their spelling`], [census.written, 1, `${census.written} kept colour(s) written`], [census.respelled, 1, `${census.respelled} row(s) read after a respelling`], [plantedRed, 1, `${plantedRed} planted walk(s) read red`]], 'so a shared colour was not seen to fail'));
+      const ok = probes.length === 0;
+      say(
+        'CO63_A_STATED_COLOUR_IS_READ_ONCE_PER_VIEW_AND_EVERY_POSES_DRAWN_COLOURS_ARE_ITS_OWN_AND_A_HANDED_OUT_KEPT_TUPLE_IS_READ_RED',
+        ok,
+        probeDetail(ok, firstFew(probes, 'colour fault(s)'), `${census.walks} looping walk(s) of the clipping probe and the gallery rows, every drawn record respelled: ${census.rows} drawn row(s) equal to readColour of their spelling channel for channel, no colour array shared, ${census.written} kept colour(s) written NaN by the consumer without moving a later pose, ${census.respelled} row(s) reading their new spelling after a respelling in place; the view's kept tuple handed out in place of the pose's copy read red on ${plantedRed} of ${moving} walk(s)`),
+        'a stated colour is parsed once per document view and spelling and shared by every pose; that is sound only while each pose copies its channels out of the shared tuple, and right only while the cache is keyed on the spelling the record states now',
       );
     }
 

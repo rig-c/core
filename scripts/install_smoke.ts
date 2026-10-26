@@ -321,6 +321,7 @@ const NAMED_EXPORTS: Record<string, string> = {
   './errors': 'src/errors.ts',
   './meshcompare': 'src/meshcompare.ts',
   './core': 'src/core/entry.ts',
+  './runtime': 'src/runtime/index.ts',
   './cli': 'cli.ts',
   './package.json': 'package.json',
 };
@@ -369,6 +370,13 @@ interface ObservedEntry {
   needsRuntime: boolean;
   values: Record<string, SymbolKind>;
   types: string[];
+  /**
+   * Set on an entry RELEASING.md *The import surface* marks experimental: its
+   * symbols are read from the install like every other row's, so a break is
+   * seen, but they are not promised until it stabilises, and the reason says
+   * which issue will settle that.
+   */
+  experimental?: string;
 }
 
 const OBSERVED_IN_1167 = 'rig-parts 0.8.2, issue #1167';
@@ -459,10 +467,21 @@ const REQUESTED_IN_1417 = 'rig-c/pose curve fitting, requested on issue #1417';
 const REQUESTED_IN_1538 = 'rig-play named setup mesh read, requested on issue #1538';
 /** The player's per-instance physics preview controls, agreed on issue #1541. */
 const REQUESTED_IN_1541 = 'rig-play live named physics parameters, requested on issue #1541';
+/** The in-place runtime poser, requested for play#200 on issue #1591 — experimental: read here, not promised. */
+const REQUESTED_IN_1591 = 'rig-play in-place poser (play#200), requested on issue #1591';
 /** The compiler's own lattice/reach preflight, agreed for parts#378 on core#1450. */
 const AGREED_IN_1450 = 'parts#378 segments preflight, agreed on issue #1450';
 
 const OBSERVED_SYMBOLS: ObservedEntry[] = [
+  {
+    entry: './runtime', observed: REQUESTED_IN_1591, needsRuntime: false,
+    experimental: 'stage 0 of issue #1591; not promised until the runtime poser stabilises',
+    values: {
+      compileRuntime: 'function', RuntimePose: 'function', RuntimeRefusal: 'function', RuntimeInputError: 'function',
+      RUNTIME_FEATURES: 'constant', RUNTIME_STAGE: 'constant',
+    },
+    types: ['RuntimeModel', 'RuntimeOptions', 'RuntimeMissing', 'RuntimeFeature', 'RuntimeAnimation', 'RuntimeAttachment', 'RuntimeSlot'],
+  },
   {
     entry: './render-shared', observed: 'parts#713 checked renderer reads, agreed on core#1561', needsRuntime: false,
     values: {

@@ -12502,13 +12502,13 @@ frame: it resolves every name to an index once at load and overwrites typed
 arrays in place, so a steady-state frame allocates nothing. It computes every
 value with the oracle's own formulas in the oracle's order of operations, and it
 is held equal to the oracle at tolerance 0 rather than trusted; the oracle is not
-changed for it. No named entry exports it yet (RELEASING.md, *The import
-surface*): it is `src/runtime/index.ts` in a clone, and a player's entry to it
-is a later card.
+changed for it. It is imported from `rig-c/runtime`, an **experimental** entry
+(RELEASING.md, *The import surface*): not promised until it stabilises, so a
+minor may reshape it and a dependant pins an exact version.
 
 ```ts
 import { readModel, underNoSkin } from 'rig-c/core';
-import { compileRuntime, RuntimePose } from './src/runtime/index.ts'; // a clone's path: no named entry yet
+import { compileRuntime, RuntimePose, RuntimeRefusal } from 'rig-c/runtime'; // experimental
 
 const view = underNoSkin(readModel(modelText));
 const model = compileRuntime(view, { ignore: ['events'] }); // throws RuntimeRefusal, every missing construct named

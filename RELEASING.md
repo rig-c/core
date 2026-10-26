@@ -743,6 +743,7 @@ an install of an alias carries the same map, so `spine-rigc/plate` and
 | `rig-c/errors` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
 | `rig-c/meshcompare` | [#1230](https://github.com/rig-c/core/issues/1230), by agreement | nothing |
 | `rig-c/core` | [#1275](https://github.com/rig-c/core/issues/1275) | nothing |
+| `rig-c/runtime` | [#1591](https://github.com/rig-c/core/issues/1591), requested for play#200 — **experimental, not promised until it stabilises** | nothing |
 | `rig-c/cli` | [#859](https://github.com/rig-c/core/issues/859) | resolved and spawned rather than imported; which entry it runs is the table in *What an install has* above |
 | `rig-c/package.json` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
 
@@ -1275,6 +1276,30 @@ This additive entry is a **minor** release contract. It is not available in
 2.68.0; the next minor, 2.69.0, is the planned first version. Consumers must wait
 for the cut and its measured artifact before pinning `>=2.69.0 <3.0.0`. A source
 or packed-candidate result is not a postcut registry confirmation.
+
+🧪 **`rig-c/runtime` is experimental, and not promised until it stabilises**
+([#1591](https://github.com/rig-c/core/issues/1591), requested for play#200).
+It is the in-place runtime poser, stage 0 of that issue: one model compiled at
+load, one pose per skeleton overwritten in place, held equal to the oracle at
+tolerance 0 by `tools/core_gate.ts`'s third dumper. Its stages widen what it
+poses and may reshape what it exports, so the 🔒 contract above does **not**
+cover it yet: a minor may rename or remove the entry or any of its symbols, and
+a dependant pins an exact version. Everything else about a named entry holds.
+The smoke lists its symbols in a row of their own marked `experimental`
+(`OBSERVED_SYMBOLS` in `scripts/install_smoke.ts`), so a break is still seen
+from the install, imported with the runtime taken away as an entry that needs
+nothing beside the package:
+
+| entry | values read | types recorded |
+| --- | --- | --- |
+| `rig-c/runtime` | `compileRuntime`, `RuntimePose`, `RuntimeRefusal`, `RuntimeInputError`, `RUNTIME_FEATURES`, `RUNTIME_STAGE` | `RuntimeModel`, `RuntimeOptions`, `RuntimeMissing`, `RuntimeFeature`, `RuntimeAnimation`, `RuntimeAttachment`, `RuntimeSlot` |
+
+It carries `rig-c/core`'s browser promise, which is not experimental: its
+static value closure reaches only `src/runtime/` and `src/core/`, names no
+package and no node builtin by value, and leaves those two only for a type
+import of `src/model.ts` (`CUR136`, beside `rig-c/core`'s `CUR123`). The day it
+stabilises, its row loses the marker, and the contract above starts covering it
+in that release's notes.
 
 What is **not** promised, so nobody reads more into an entry than is there:
 

@@ -42,8 +42,11 @@
  * pose.computeVertices();  // pose.world, pose.light, pose.shown, pose.vertices
  * ```
  *
- * Pure, as all of `src/`, and linking nothing from the Spine runtime package
- * (the selftest's `runtime-poser` suite holds this directory to that rule).
+ * This module is the `rig-c/runtime` entry (`exports` in package.json), which
+ * is **experimental**: not promised until the poser stabilises (RELEASING.md,
+ * *The import surface*). Pure, as all of `src/`, linking nothing from the Spine
+ * runtime package (`RP10`), and safe to bundle for a browser: its value closure
+ * is this directory and `src/core/` (`CUR136`).
  */
 export {
   compileRuntime,

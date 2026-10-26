@@ -82349,6 +82349,62 @@ function runCurrencySuite(): number {
       );
     }
 
+    // CUR136 — the runtime poser's entry a browser player links reaches only the runtime and the core (issue #1591).
+    //
+    // `rig-c/runtime` (experimental) is play's in-place poser, so it carries the
+    // promise `rig-c/core` carries: bundled for a browser, it may reach nothing a
+    // browser lacks. The same walk as CUR123 over its closure, read off the
+    // disk: every module it reaches by value is under src/runtime/ or src/core/,
+    // none names a package or a node builtin by value, and outside those two it
+    // names only src/model.ts, as a type. The entry is read from `exports`.
+    {
+      const exportsMap = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { exports?: Record<string, string> }).exports ?? {};
+      const target = exportsMap['./runtime'];
+      const entry = target === undefined ? '' : target.replace(/^\.\//, '');
+      const TYPE_EXCEPTION = 'src/model.ts';
+      const inside = (m: string): boolean => m.startsWith('src/runtime/') || m.startsWith('src/core/');
+      const runtimePopulation = srcPopulation(root);
+      const faultsOf = (pop: ReadonlyMap<string, string>): { modules: string[]; faults: string[] } => {
+        const faults: string[] = [];
+        if (entry === '' || !pop.has(entry)) return { modules: [], faults: [`package.json's exports maps ./runtime to ${JSON.stringify(target)}, which is not a module under src/`] };
+        const closure = coreClosureFrom(pop, [entry]);
+        faults.push(...closure.problems);
+        for (const module of closure.modules) {
+          if (!inside(module)) faults.push(`🔒 ${module} is outside src/runtime/ and src/core/, and ./runtime reaches it by value`);
+          for (const { spec, typeOnly: isType } of specifiersOf(codeOnly(pop.get(module) ?? ''))) {
+            if (!spec.startsWith('.')) {
+              if (!isType) faults.push(`🔒 ${module} imports "${spec}" by value, and ./runtime reaches it`);
+              continue;
+            }
+            const reached = join(dirname(module), spec).split('\\').join('/');
+            if (isType && !inside(reached) && reached !== TYPE_EXCEPTION) faults.push(`${module} type-imports ${reached}, and the one module outside src/runtime/ and src/core/ the entry may name, as a type, is ${TYPE_EXCEPTION}`);
+          }
+        }
+        return { modules: closure.modules, faults };
+      };
+      const live136 = faultsOf(runtimePopulation);
+      const probes136 = [...live136.faults];
+      if (!live136.modules.some((m) => m.startsWith('src/runtime/')) || !live136.modules.some((m) => m.startsWith('src/core/'))) probes136.push(`./runtime's closure is [${live136.modules.join(', ')}], which does not reach both the runtime and the core it reads`);
+      const plants136: Array<[string, string, string]> = [
+        ['a node builtin', "import { readFileSync as planted } from 'node:fs';", 'imports "node:fs" by value'],
+        ['the Spine runtime package', "import { Skeleton as planted } from '@esotericsoftware/spine-core';", 'imports "@esotericsoftware/spine-core" by value'],
+        ['a value import of src/model.ts', "import { spineFileSha256 as planted } from '../model.ts';", `${TYPE_EXCEPTION} is outside`],
+      ];
+      const caught136: string[] = [];
+      for (const [label, line, mustSay] of plants136) {
+        const raised = faultsOf(plantedInto(runtimePopulation, 'src/runtime/pose.ts', line)).faults.filter((f) => !live136.faults.includes(f));
+        if (!raised.some((f) => f.includes(mustSay))) probes136.push(`${label} planted in src/runtime/pose.ts raised [${raised.join('; ')}], none saying "${mustSay}"`);
+        else caught136.push(label);
+      }
+      const held136 = probes136.length === 0;
+      say(
+        'CUR136_THE_RUNTIME_ENTRY_REACHES_ONLY_THE_RUNTIME_AND_THE_CORE_BY_VALUE_AND_MODEL_TS_ONLY_AS_A_TYPE',
+        held136,
+        probeDetail(held136, probes136, `./runtime is ${entry}; its static value closure over src/ read off the disk is ${live136.modules.length} module(s), every one under src/runtime/ or src/core/, none importing a package or a node builtin by value; planted in src/runtime/pose.ts, ${caught136.length} of ${plants136.length} are named — ${caught136.join('; ')}`),
+        'issue #1591: rig-c/runtime is the in-place poser a browser player (play#200) bundles, so it carries rig-c/core\'s promise — nothing a browser lacks; the entry is experimental, the browser rule is not',
+      );
+    }
+
     // CUR117 — RELEASING.md's row of the commands an install without the
     // runtime runs is the set the command table derives (issue #1178). At
     // v2.12.0 the row listed eight while `bun cli_core.ts --help` listed ten —

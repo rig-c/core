@@ -157,14 +157,27 @@ export function populationProbe(rnd: () => number): string {
         properties[from] = { ...(rnd() < 0.4 ? { offset: R(-20, 20) } : {}), to };
       }
       if (Object.keys(properties).length === 0) properties[pick(PROPS)] = { to: { [pick(PROPS)]: {} } };
-      const c: Obj = { kind: 'transform', name: `k${k}`, bones: [b], source: pick(sources), properties };
+      const source = pick(sources);
+      // Repeated targets (issue #1591's review): the reader takes the list as written and the oracle applies each entry in turn,
+      // so a list may name a bone several times — beside others, or one bone more times than the skeleton has bones.
+      let targets = [b];
+      const shape = rnd();
+      if (shape < 0.25) {
+        const others = candidates.filter((n) => n !== source && !below(n, source));
+        targets = Array.from({ length: 2 + Math.floor(rnd() * 4) }, () => (rnd() < 0.5 ? b : pick(others)));
+      } else if (shape < 0.35) {
+        // One bone named more times than the skeleton has bones, then a bone with bones below it, which a short buffer would drop.
+        const parents = candidates.filter((n) => n !== b && n !== source && !below(n, source) && names.some((m) => parentOf.get(m) === n));
+        targets = [...Array.from({ length: 12 + Math.floor(rnd() * 13) }, () => b), ...(parents.length > 0 ? [pick(parents)] : [])];
+      }
+      const c: Obj = { kind: 'transform', name: `k${k}`, bones: targets, source, properties };
       if (rnd() < 0.3) c.clamp = true;
       for (const m of ['mixRotate', 'mixX', 'mixY', 'mixScaleX', 'mixScaleY', 'mixShearY']) if (rnd() < 0.5) c[m] = pick([0, 1, R(-1, 2)]);
       for (const o of ['rotation', 'x', 'y', 'scaleX', 'scaleY', 'shearY']) if (rnd() < 0.4) c[o] = R(-30, 30);
       constraints.push(c);
     }
   }
-  for (const c of constraints.slice(0, 2)) for (const b of c.bones as string[]) bones.push({ name: `${b}_ax${c.name}`, parent: b, x: 1e4 }, { name: `${b}_ay${c.name}`, parent: b, y: 1e4 });
+  for (const c of constraints.slice(0, 2)) for (const b of new Set(c.bones as string[])) bones.push({ name: `${b}_ax${c.name}`, parent: b, x: 1e4 }, { name: `${b}_ay${c.name}`, parent: b, y: 1e4 });
 
   // Three slots: a region, a mesh and a weighted mesh, each with a second placeholder its attachment timeline shows.
   const slotBone = (): string => pick(names);
@@ -366,20 +379,25 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     const probes: string[] = [];
     const exact = pop.rows.filter((r) => r.verdict === 'IDENTICAL');
     for (const r of pop.rows) if (r.verdict !== 'IDENTICAL' && probes.length < 3) probes.push(`${r.name}: ${r.verdict} — ${r.why}`);
-    const reach = { modes: new Set<string>(), ik2: 0, ik1: 0, transform: 0, weighted: 0 };
+    const reach = { modes: new Set<string>(), ik2: 0, ik1: 0, transform: 0, repeated: 0, longer: 0 };
     for (const text of pop.texts) {
       const doc = readModel(text);
       for (const b of doc.bones) reach.modes.add(b.inheritMode ?? 'normal');
       for (const c of doc.constraints) {
         if (c.record?.kind === 'ik') reach[c.record.bones.length === 2 ? 'ik2' : 'ik1']++;
-        if (c.record?.kind === 'transform') reach.transform++;
+        if (c.record?.kind === 'transform') {
+          reach.transform++;
+          if (new Set(c.record.bones).size < c.record.bones.length) reach.repeated++;
+          if (c.record.bones.length > doc.bones.length) reach.longer++;
+        }
       }
     }
     if (reach.modes.size < MODES5.length) probes.push(`the population reaches the modes [${[...reach.modes].join(', ')}], not all five`);
+    if (reach.repeated === 0 || reach.longer === 0) probes.push(`the population reaches ${reach.repeated} transform(s) naming a bone twice and ${reach.longer} naming more entries than the skeleton has bones; both are required`);
     say(
       'RP02_A_SEEDED_POPULATION_OF_EVERY_CONSTRUCT_STAGE_0_POSES_IS_EQUAL_TO_THE_ORACLE_AT_TOLERANCE_0',
       probes,
-      `${exact.length} of ${N} probes IDENTICAL, ${sum(pop.rows, 'poses')} pose(s) and ${sum(pop.rows, 'values')} value(s) at tolerance 0: all five inherit modes, ${reach.ik1} one-bone and ${reach.ik2} two-bone ik and ${reach.transform} world transform constraint(s), each probe's two animations posed on one pose in turn`,
+      `${exact.length} of ${N} probes IDENTICAL, ${sum(pop.rows, 'poses')} pose(s) and ${sum(pop.rows, 'values')} value(s) at tolerance 0: all five inherit modes, ${reach.ik1} one-bone and ${reach.ik2} two-bone ik and ${reach.transform} world transform constraint(s) — ${reach.repeated} naming a bone more than once, ${reach.longer} of them with more entries than the skeleton has bones — each probe's two animations posed on one pose in turn`,
     );
   }
 
@@ -591,6 +609,36 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
       'RP09_A_SKIP_IS_NEVER_A_PASS_A_CORPUS_POSED_BY_NONE_IS_A_HOLE_AND_A_DIFF_IS_RED',
       probes,
       `the ${refusedOnly.length} gallery rig(s) refused at load, alone: a HOLE line and 0 covered whole; a DIFF row among the gallery's: RUNTIME RED`,
+    );
+  }
+
+  // --- RP11: a transform naming a bone more times than the skeleton has bones reposes every bone below the last (issue #1591's review) --
+  {
+    const probes: string[] = [];
+    // The review's rig: a, b under the root, c under b; the transform names a four times and then b, five entries over four bones, and moves b from x 10 to 40.
+    const text = probeModel({
+      bones: [{ name: 'root' }, { name: 'a', parent: 'root' }, { name: 'b', parent: 'root', x: 10 }, { name: 'c', parent: 'b', x: 5 }],
+      constraints: [{ kind: 'transform', name: 'move', bones: ['a', 'a', 'a', 'a', 'b'], source: 'root', properties: { x: { to: { x: { offset: 40 } } } } }],
+      animations: [{ name: 'idle', bones: [{ name: 'root', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 1, value: 30 }] }] }] }],
+    });
+    const live = runtimeOfTexts('repeated targets', text, '');
+    if (live.verdict !== 'IDENTICAL') probes.push(`the rig read ${live.verdict} — ${live.why}`);
+    const model = compileRuntime(readModel(text));
+    const pose = new RuntimePose(model);
+    pose.setupPose();
+    const c = model.boneNames.indexOf('c');
+    const cx = pose.world[c * WORLDS + 4];
+    if (cx !== 45) probes.push(`c sits at x ${cx} at setup; the oracle puts it at 45 (b moved to 40, c 5 beyond)`);
+    const short = runtimeOfTexts('repeated targets, scratch by bone count', text, '', { scratchByBones: true });
+    if (short.verdict !== 'DIFF' || !(short.why ?? '').includes('"c"')) probes.push(`the scratch sized by the bone count, planted, read ${short.verdict} — ${short.why}`);
+    const shortPop = pop.texts.map((t, i) => ({ t, i })).filter(({ t }) => readModel(t).constraints.some((x) => x.record?.kind === 'transform' && x.record.bones.length > readModel(t).bones.length));
+    const reddened = shortPop.filter(({ t, i }) => runtimeOfTexts(`probe ${i}`, t, '', { scratchByBones: true }).verdict === 'DIFF');
+    if (shortPop.length === 0) probes.push('no population probe names more targets than it has bones');
+    else if (reddened.length === 0) probes.push(`the plant turned none of the ${shortPop.length} population probe(s) naming more targets than bones red`);
+    say(
+      'RP11_A_TRANSFORM_NAMING_A_BONE_MORE_TIMES_THAN_THE_SKELETON_HAS_BONES_REPOSES_EVERY_BONE_BELOW_THE_LAST',
+      probes,
+      `the review's rig — bones root, a, b, c under b; targets [a, a, a, a, b], b moved from x 10 to 40 — IDENTICAL to the oracle at tolerance 0 over ${live.poses} pose(s), c at x ${cx}; the update order's scratch sized by the bone count instead, planted: ${short.verdict} — ${short.why ?? ''}; on the ${shortPop.length} population probe(s) naming more targets than bones, ${reddened.length} red under the plant`,
     );
   }
 }

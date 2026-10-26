@@ -121,7 +121,7 @@ export class RuntimePose {
   private readonly ikSoftness: Float64Array;
   private readonly ikFlags: Uint8Array;
   private readonly mixes: Float64Array;
-  // The update order's scratch: the bones a constraint changed and moved in world space, in order, and per-bone marks.
+  // The update order's scratch: the bones a constraint changed and moved in world space, in order (repeats kept, as the oracle keeps them), and per-bone marks.
   private readonly changed: Int32Array;
   private readonly inWorld: Int32Array;
   private readonly changedMark: Uint8Array;
@@ -145,8 +145,9 @@ export class RuntimePose {
     this.ikSoftness = new Float64Array(nc);
     this.ikFlags = new Uint8Array(nc);
     this.mixes = new Float64Array(nc * 6);
-    this.changed = new Int32Array(Math.max(1, nb));
-    this.inWorld = new Int32Array(Math.max(1, nb));
+    // Sized by the longest target list (`RuntimeModel.scratch`): a transform may name one bone several times, and every entry is applied and reposed.
+    this.changed = new Int32Array(model.scratch);
+    this.inWorld = new Int32Array(model.scratch);
     this.changedMark = new Uint8Array(nb);
     this.inWorldMark = new Uint8Array(nb);
     this.below = new Uint8Array(nb);

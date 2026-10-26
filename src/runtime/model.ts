@@ -122,6 +122,8 @@ export interface RuntimePlant {
   readonly bindingIndex?: (index: number, bones: number) => number;
   /** Refusals let through, the construct posed as if absent: the smuggling plant. */
   readonly admit?: readonly RuntimeFeature[];
+  /** The update order's scratch sized by the bone count instead of the longest target list: the short-buffer plant. */
+  readonly scratchByBones?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -308,6 +310,13 @@ export interface RuntimeModel {
   readonly refused: ReadonlyArray<{ readonly animation: string; readonly missing: readonly RuntimeMissing[] }>;
   /** The most key cursors any covered animation needs. */
   readonly cursors: number;
+  /**
+   * How many bones one constraint can change at once: the longest target list,
+   * and never less than the bone count. A transform constraint may name a bone
+   * more than once (`readConstraintRecord` reads the list as written, and the
+   * oracle applies each entry in turn), so the list, not the skeleton, bounds it.
+   */
+  readonly scratch: number;
   /** A covered animation by name; a refused one throws its `RuntimeRefusal`, an unknown one a `RuntimeInputError`. */
   animation(name: string): RuntimeAnimation;
 }
@@ -542,6 +551,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     animations,
     refused,
     cursors: cursorMax,
+    scratch: plant.scratchByBones === true ? Math.max(1, nb) : Math.max(1, nb, ...constraints.map((c) => c.bones.length)),
     animation(name: string): RuntimeAnimation {
       const found = animations.get(name);
       if (found !== undefined) return found;

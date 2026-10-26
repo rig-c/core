@@ -93461,7 +93461,7 @@ function runPoseOracleSuite(): number {
 // Its own statement, so the suite lands as one hunk (the convention the
 // slider-reader suite states at its imports).
 import { activeBones, CORE_CONSTRAINT_KINDS, CORE_DUMPER, CoreInputError, foldBlend, foldInheritMode, gridRound, NOT_ADMITTED, poseSetup, readBlend, readColour, readModel, shownAttachment, type CompiledDocument, type CoreStated, type CoreBlendMode, type CorePlant, type SetupEvaluator, type ShownResolution } from './src/core/index.ts';
-import { regionCorners, worldVertices, type MeshArrays, type VertexPoser } from './src/core/vertices.ts';
+import { compiledDeformedWorldVertices, compiledWeightedOf, compiledWorldVertices, compileWeightedVertices, deformedWorldVertices, EXACT_COORDS, regionCorners, worldVertices, type CompiledWeightedVertices, type MeshArrays, type VertexPoser, type WeightedVertices as CoreWeightedVertices } from './src/core/vertices.ts';
 import { clipShapeOf, clipThrough, clipTriangles, convexPieces, signedArea2, type ClipReading, type ClipShape, type TriangleClipper } from './src/core/clipping.ts';
 import { asOracleDocument, blockOf, coreDump, ORACLE_BLOCKS, OracleInputError, sampleTime as oracleSampleTime, type OracleDocument, type SlotRow } from './tools/pose_oracle.ts';
 import { runRecipe } from './tools/emit_hashes.ts';
@@ -93477,7 +93477,7 @@ import { drawOrderAt } from './src/core/draw_order.ts';
 import { eventsFired, type CoreEventRow } from './src/core/events.ts';
 import { physicsState, stepPhysics, stepSchedule, type CorePhysicsRecord } from './src/core/constraints_physics.ts';
 import { physicsScaleCases } from './tools/physics_scale_cases.ts';
-import { modeMatrix, worldTransforms, type CoreInheritMode, type WorldArithmetic } from './src/core/world.ts';
+import { modeMatrix, worldTransforms, type CoreInheritMode, type CoreWorld, type WorldArithmetic } from './src/core/world.ts';
 import { ADMITTED_CONSTRAINT_KINDS, TRANSFORM_PROPERTIES, type ConstraintPlant, type CoreConstraintRecord, type CoreTransformRecord } from './src/core/constraints.ts';
 // The per-skin view (issue #932), its own statements so the CN controls land as one hunk.
 import { CORE_ALL_SKINS, lookupSkins } from './src/core/skins.ts';
@@ -96202,6 +96202,290 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
       held,
       probeDetail(held, probes, detail),
       'issue #931: the corpus reaches weighted meshes on one compared row and meshes bound to several bones, a reflecting or shearing binding, a trim, a sequence, a linked mesh and a clip on none, so each rule is held on a skeleton written here, both as the Spine file and as the model, and posed by the runtime — with the reading each measurement rejected shown to go red',
+    );
+  }
+
+  // --- CO61: compiled weighted-vertex bone indices pose bit for bit as per-influence name lookups, two vertex objects never share a table, and a wrong-index plant is red (issue #1580) --
+  if (parent) {
+    const probes: string[] = [];
+    /** The per-influence `world.get(binding.bone)` reading before issue #1580, for `worldVertices`. */
+    const uncompiledWorld: VertexPoser = (vertices, bone, world, coords = Math.fround) => {
+      const out: number[] = [];
+      if (!vertices.weighted) {
+        for (let i = 0; i + 1 < vertices.xy.length; i += 2) {
+          const x = coords(vertices.xy[i]);
+          const y = coords(vertices.xy[i + 1]);
+          out.push(x * bone.a + y * bone.b + bone.worldX, x * bone.c + y * bone.d + bone.worldY);
+        }
+        return out;
+      }
+      for (const influences of vertices.bindings) {
+        let wx = 0;
+        let wy = 0;
+        for (const binding of influences) {
+          const t = world.get(binding.bone);
+          if (t === undefined) throw new Error(`a binding names bone "${binding.bone}", which has no world transform (readModel refuses it first)`);
+          const x = coords(binding.x);
+          const y = coords(binding.y);
+          const weight = Math.fround(binding.weight);
+          wx += (x * t.a + y * t.b + t.worldX) * weight;
+          wy += (x * t.c + y * t.d + t.worldY) * weight;
+        }
+        out.push(wx, wy);
+      }
+      return out;
+    };
+    /** The per-influence `world.get(binding.bone)` reading before issue #1580, for `deformedWorldVertices`. */
+    const uncompiledDeformed = (vertices: CoreWeightedVertices, deform: readonly number[], bone: CoreWorld, world: ReadonlyMap<string, CoreWorld>): number[] => {
+      const out: number[] = [];
+      let k = 0;
+      for (const influences of vertices.bindings) {
+        let wx = 0;
+        let wy = 0;
+        for (const binding of influences) {
+          const t = world.get(binding.bone);
+          if (t === undefined) throw new Error(`a binding names bone "${binding.bone}", which has no world transform (readModel refuses it first)`);
+          const x = Math.fround(binding.x) + deform[k];
+          const y = Math.fround(binding.y) + deform[k + 1];
+          k += 2;
+          const weight = Math.fround(binding.weight);
+          wx += (x * t.a + y * t.b + t.worldX) * weight;
+          wy += (x * t.c + y * t.d + t.worldY) * weight;
+        }
+        out.push(wx, wy);
+      }
+      return out;
+    };
+    /** The wrong-index plant: each influence's compiled bone index rotated one place when the geometry binds two or more bones. */
+    const shiftBoneIndex = (i: number, n: number): number => (n > 1 ? (i + 1) % n : i);
+    const wrongBoneIndex: VertexPoser = (vertices, bone, world, coords) =>
+      vertices.weighted ? compiledWorldVertices(compileWeightedVertices(vertices, shiftBoneIndex), world, coords) : worldVertices(vertices, bone, world, coords);
+
+    const sameCoords = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+    const throwMessage = (fn: () => unknown): string => {
+      try {
+        fn();
+        return '';
+      } catch (err) {
+        return (err as Error).message;
+      }
+    };
+
+    const subjects: Array<{ name: string; text: string; doc: CompiledDocument }> = [
+      { name: 'the attachment probe', text: probeModelText, doc: readModel(probeModelText, 'the attachment probe') },
+      ...built
+        .filter((b) => b.exits.every((e) => e === 0) && existsSync(join(b.out, MODEL_DOCUMENT_FILE)))
+        .map((b) => {
+          const text = readFileSync(join(b.out, MODEL_DOCUMENT_FILE), 'utf8');
+          return { name: b.name, text, doc: readModel(text, b.name) };
+        }),
+    ];
+
+    const distinctVertices: CoreWeightedVertices[] = [];
+    const seenTables = new Set<CompiledWeightedVertices>();
+    const seenBonesArrays = new Set<readonly string[]>();
+    const seenBindingsArrays = new Set<ReadonlyArray<readonly unknown[]>>();
+    let totalGeometries = 0;
+    let multiBoneGeometries = 0;
+    let singleBoneGeometries = 0;
+    let totalInfluences = 0;
+    let uniqueBoneLookups = 0;
+    let coordinatesHeld = 0;
+    let missingErrorsHeld = 0;
+    let multiBonePlantRed = 0;
+    let multiBoneDeformedPlantRed = 0;
+    let singleBonePlantGreen = 0;
+
+    for (const s of subjects) {
+      const posed = poseSetup(s.doc);
+      const world = posed.world;
+      if (world === null) continue;
+      const defaultBone = world.values().next().value;
+      if (defaultBone === undefined) continue;
+      const reread = readModel(s.text, `${s.name} reread`);
+      for (const [skinIdx, skin] of s.doc.skins.entries()) {
+        const rereadSkin = reread.skins[skinIdx];
+        for (const [slotName, table] of Object.entries(skin.attachments)) {
+          for (const [attName, entry] of Object.entries(table)) {
+            const g = entry.geometry;
+            if (g === undefined || g.kind === 'region' || g.kind === 'linkedmesh' || !g.vertices.weighted) continue;
+            const v = g.vertices;
+            const at = `${s.name} skin "${skin.name}" slot "${slotName}" "${attName}"`;
+            totalGeometries++;
+            distinctVertices.push(v);
+
+            // Cache identity on the same object, and strict isolation across distinct vertex objects (reread document + cloned bindings).
+            const compiled = compiledWeightedOf(v);
+            if (compiledWeightedOf(v) !== compiled) probes.push(`${at}: compiledWeightedOf did not return the cached table on a second call`);
+            if (seenTables.has(compiled) || seenBonesArrays.has(compiled.bones) || seenBindingsArrays.has(compiled.bindings)) {
+              probes.push(`${at}: shares its CompiledWeightedVertices table or inner arrays with another vertex object`);
+            }
+            seenTables.add(compiled);
+            seenBonesArrays.add(compiled.bones);
+            seenBindingsArrays.add(compiled.bindings);
+
+            const rereadG = rereadSkin?.attachments[slotName]?.[attName]?.geometry;
+            if (rereadG !== undefined && rereadG.kind !== 'region' && rereadG.kind !== 'linkedmesh' && rereadG.vertices.weighted) {
+              const rereadV = rereadG.vertices;
+              distinctVertices.push(rereadV);
+              const rereadCompiled = compiledWeightedOf(rereadV);
+              if (rereadV === v || rereadCompiled === compiled || rereadCompiled.bones === compiled.bones || rereadCompiled.bindings === compiled.bindings) {
+                probes.push(`${at}: a second readModel shared the vertex object or its compiled table`);
+              }
+              seenTables.add(rereadCompiled);
+              seenBonesArrays.add(rereadCompiled.bones);
+              seenBindingsArrays.add(rereadCompiled.bindings);
+            }
+
+            const clonedV: CoreWeightedVertices = { weighted: true, bindings: v.bindings.map((inf) => inf.map((b) => ({ ...b }))) };
+            distinctVertices.push(clonedV);
+            const clonedCompiled = compiledWeightedOf(clonedV);
+            if (clonedCompiled === compiled || clonedCompiled.bones === compiled.bones || clonedCompiled.bindings === compiled.bindings) {
+              probes.push(`${at}: a cloned WeightedVertices object shared the compiled table`);
+            }
+            if (JSON.stringify(clonedCompiled) !== JSON.stringify(compiled)) {
+              probes.push(`${at}: a cloned WeightedVertices object compiled to different indices or values`);
+            }
+            seenTables.add(clonedCompiled);
+            seenBonesArrays.add(clonedCompiled.bones);
+            seenBindingsArrays.add(clonedCompiled.bindings);
+
+            // First-occurrence bone order and lookup count reduction.
+            const wantBones: string[] = [];
+            let geomInfluences = 0;
+            for (const inf of v.bindings) {
+              for (const b of inf) {
+                geomInfluences++;
+                if (!wantBones.includes(b.bone)) wantBones.push(b.bone);
+              }
+            }
+            totalInfluences += geomInfluences;
+            uniqueBoneLookups += compiled.bones.length;
+            if (JSON.stringify(compiled.bones) !== JSON.stringify(wantBones)) {
+              probes.push(`${at}: compiled.bones is ${JSON.stringify(compiled.bones)}, not first-occurrence ${JSON.stringify(wantBones)}`);
+            }
+
+            // Object.is (0 ULP) equality for worldVertices (Math.fround and EXACT_COORDS) and deformedWorldVertices.
+            const gotFround = worldVertices(v, defaultBone, world);
+            const wantFround = uncompiledWorld(v, defaultBone, world);
+            const gotExact = worldVertices(v, defaultBone, world, EXACT_COORDS);
+            const wantExact = uncompiledWorld(v, defaultBone, world, EXACT_COORDS);
+            const deform = Array.from({ length: 2 * geomInfluences }, (_x, i) => Math.fround((i % 7) * 0.375 - 1.125));
+            const gotDeformed = deformedWorldVertices(v, deform, defaultBone, world);
+            const wantDeformed = uncompiledDeformed(v, deform, defaultBone, world);
+            if (!sameCoords(gotFround, wantFround)) probes.push(`${at}: worldVertices (Math.fround) differs from per-influence lookup`);
+            if (!sameCoords(gotExact, wantExact)) probes.push(`${at}: worldVertices (EXACT_COORDS) differs from per-influence lookup`);
+            if (!sameCoords(gotDeformed, wantDeformed)) probes.push(`${at}: deformedWorldVertices differs from per-influence lookup`);
+            coordinatesHeld += gotFround.length + gotExact.length + gotDeformed.length;
+
+            // Missing-bone refusal order: dropping each unique bone in turn (including the last-occurring bone) throws the exact same error.
+            for (const missingBone of [wantBones[0], wantBones[wantBones.length - 1]]) {
+              const reduced = new Map(world);
+              reduced.delete(missingBone);
+              const gotErr = throwMessage(() => worldVertices(v, defaultBone, reduced));
+              const wantErr = throwMessage(() => uncompiledWorld(v, defaultBone, reduced));
+              const gotDefErr = throwMessage(() => deformedWorldVertices(v, deform, defaultBone, reduced));
+              const wantDefErr = throwMessage(() => uncompiledDeformed(v, deform, defaultBone, reduced));
+              if (gotErr === '' || gotErr !== wantErr || gotDefErr !== wantDefErr) {
+                probes.push(`${at} missing "${missingBone}": threw ${JSON.stringify(gotErr)} / ${JSON.stringify(gotDefErr)}, want ${JSON.stringify(wantErr)}`);
+              } else {
+                missingErrorsHeld += 2;
+              }
+            }
+
+            // Wrong-index plant on this geometry: red when >= 2 bound bones have distinct world matrices, green when 1 bone.
+            const plantedWorld = wrongBoneIndex(v, defaultBone, world);
+            const plantedDeformed = compiledDeformedWorldVertices(compileWeightedVertices(v, shiftBoneIndex), deform, world);
+            if (wantBones.length === 1) {
+              singleBoneGeometries++;
+              if (sameCoords(plantedWorld, gotFround) && sameCoords(plantedDeformed, gotDeformed)) singleBonePlantGreen++;
+              else probes.push(`${at}: 1-bone weighted geometry moved under the wrong-index plant`);
+            } else {
+              multiBoneGeometries++;
+              const matricesDiffer = wantBones.some((b, i) => {
+                const t1 = world.get(b);
+                const t2 = world.get(wantBones[(i + 1) % wantBones.length]);
+                return t1 !== undefined && t2 !== undefined && JSON.stringify(t1) !== JSON.stringify(t2);
+              });
+              if (matricesDiffer) {
+                if (!sameCoords(plantedWorld, gotFround)) multiBonePlantRed++;
+                else probes.push(`${at}: multi-bone weighted geometry stayed green under wrongBoneIndex`);
+                if (!sameCoords(plantedDeformed, gotDeformed)) multiBoneDeformedPlantRed++;
+                else probes.push(`${at}: multi-bone deformed weighted geometry stayed green under wrongBoneIndex`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Planted shared-table cache (keyed by JSON text rather than vertex object identity): caught sharing tables across distinct vertex objects.
+    const sharedByText = new Map<string, CompiledWeightedVertices>();
+    const plantedSharedLookup = (v: CoreWeightedVertices): CompiledWeightedVertices => {
+      const key = JSON.stringify(v);
+      const kept = sharedByText.get(key) ?? compileWeightedVertices(v);
+      sharedByText.set(key, kept);
+      return kept;
+    };
+    const plantedTables = new Set(distinctVertices.map(plantedSharedLookup));
+    const sharedCollisionCount = distinctVertices.length - plantedTables.size;
+    if (sharedCollisionCount === 0) probes.push('a planted cache keyed by JSON text did not share a table across two distinct vertex objects');
+
+    // Wrong-index plant on CO17's hand-written probe and on gateBuilt across all compared recipes.
+    const probeSpine = dumpSkeleton(loadOracleData(probeSkeleton, probeAtlas, 'the attachment probe'), ONE);
+    const probePlanted = compareDumps(probeSpine, coreDump(readModel(probeModelText), ONE, { vertices: wrongBoneIndex }), { xy: 0, m: 0 });
+    const probeNamed = [...new Set(probePlanted.rows.flatMap((r) => r.findings).map((f) => /(?:attachment|clip) "[^"]+"/.exec(f)?.[0] ?? f))].sort();
+    const probeWant = ['attachment "linked/a"', 'attachment "weighted/a"', 'clip "clipWeighted/a"'];
+    if (JSON.stringify(probeNamed) !== JSON.stringify(probeWant)) {
+      probes.push(`wrongBoneIndex on the attachment probe named [${probeNamed.join(', ')}], not [${probeWant.join(', ')}]`);
+    }
+
+    const judged = built.filter((b) => attachmentsCompared.some((r) => r.name === b.name));
+    const showsMultiBoneWeighted = (b: BuiltRow): boolean => {
+      const doc = readModel(readFileSync(join(b.out, MODEL_DOCUMENT_FILE), 'utf8'));
+      const source = (skin: string, slot: string, name: string): CoreWeightedVertices | undefined => {
+        const g = doc.skins.find((k) => k.name === skin)?.attachments[slot]?.[name]?.geometry;
+        return g?.kind === 'mesh' && g.vertices.weighted ? g.vertices : undefined;
+      };
+      return doc.slots.some((slot) => {
+        const s = shownAttachment(doc, slot);
+        const g = s === null || 'conflict' in s ? undefined : s.record.geometry;
+        const v = g?.kind === 'mesh' && g.vertices.weighted ? g.vertices : g?.kind === 'linkedmesh' ? source(g.skin, g.slot, g.source) : undefined;
+        return v !== undefined && compiledWeightedOf(v).bones.length > 1;
+      });
+    };
+    const gateRed = gateBuilt(judged, { vertices: wrongBoneIndex });
+    const turned = gateRed.filter((r) => r.blocks?.['setup.attachments'].verdict === 'DIFF').map((r) => r.name);
+    const expectedTurned = judged.filter(showsMultiBoneWeighted).map((b) => b.name);
+    const otherBlocksRed = gateRed.filter((r) => r.blocks?.['setup.bones'].verdict === 'DIFF' || r.blocks?.['setup.slots'].verdict === 'DIFF').map((r) => r.name);
+    if (JSON.stringify(turned) !== JSON.stringify(expectedTurned)) {
+      probes.push(`wrongBoneIndex turned [${turned.join(', ')}] red on setup.attachments; multi-bone weighted rows are [${expectedTurned.join(', ')}]`);
+    }
+    if (otherBlocksRed.length > 0) probes.push(`wrongBoneIndex turned bones or slots red on [${otherBlocksRed.join(', ')}]`);
+
+    probes.push(
+      ...floorProbes(
+        [
+          [totalGeometries, 1, `${totalGeometries} weighted geometry(ies)`],
+          [multiBoneGeometries, 1, `${multiBoneGeometries} multi-bone weighted geometry(ies)`],
+          [coordinatesHeld, 1, `${coordinatesHeld} coordinate(s) held at 0 ULP`],
+          [multiBonePlantRed, 1, `${multiBonePlantRed} multi-bone geometry(ies) red under wrongBoneIndex`],
+          [multiBoneDeformedPlantRed, 1, `${multiBoneDeformedPlantRed} deformed multi-bone geometry(ies) red under wrongBoneIndex`],
+          [sharedCollisionCount, 1, `${sharedCollisionCount} collision(s) caught on a shared-table plant`],
+        ],
+        'so compiled weighted-vertex bone indices were not held',
+      ),
+    );
+    const ok = probes.length === 0;
+    say(
+      'CO61_COMPILED_WEIGHTED_VERTEX_BONE_INDICES_POSE_BIT_FOR_BIT_AS_NAME_LOOKUPS_ISOLATE_EACH_VERTEX_OBJECT_AND_TURN_MULTI_BONE_ROWS_RED_ON_A_WRONG_INDEX',
+      ok,
+      probeDetail(
+        ok,
+        probes,
+        `${totalGeometries} weighted geometry(ies) (${multiBoneGeometries} multi-bone, ${singleBoneGeometries} single-bone; ${uniqueBoneLookups} unique bone lookup(s) per pose where per-influence lookup did ${totalInfluences}): ${coordinatesHeld} posed coordinate(s) across worldVertices (Math.fround and EXACT_COORDS) and deformedWorldVertices equal by Object.is to per-influence name lookup, ${missingErrorsHeld} missing-bone throws identical; ${distinctVertices.length} distinct WeightedVertices object(s) mapped to ${seenTables.size} distinct compiled table(s) (0 shared; a text-keyed cache plant collided on ${sharedCollisionCount}); wrongBoneIndex named [${probeNamed.join(', ')}] on the probe, turned ${multiBonePlantRed}/${multiBoneGeometries} multi-bone geometry(ies) (${multiBoneDeformedPlantRed} deformed) and ${turned.length}/${judged.length} compared recipe(s) [${turned.join(', ')}] red while leaving ${singleBonePlantGreen}/${singleBoneGeometries} single-bone geometry(ies) and every unweighted row green`,
+      ),
+      'issue #1580: compiling weighted-vertex bone names to indices into a per-call bone array removes the per-influence map lookup while keeping the first-occurrence bone check, the influence summation order and every posed float bit-for-bit identical, with one compiled table per vertex object',
     );
   }
 

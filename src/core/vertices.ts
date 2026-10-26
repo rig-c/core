@@ -222,31 +222,127 @@ export function regionCorners(region: CoreRegionGeometry & { atlas: ModelAtlasRe
   return out;
 }
 
+/** A weighted vertex array as the model states it. */
+export type WeightedVertices = Extract<ModelVertices, { weighted: true }>;
+
 /**
- * A vertex array's world positions — the header's mesh rule, every stored
- * number through `Math.fround`; with `coords`, the coordinates through it
- * instead (a deformed array's are read as they are, `EXACT_COORDS`), the
- * weights through `Math.fround` still.
+ * One influence of a compiled weighted vertex (issue #1580): its bone as an
+ * index into `CompiledWeightedVertices.bones`, its raw coordinates (`x`, `y`)
+ * for a caller passing a custom `coords`, and its `Math.fround`-rounded
+ * coordinates (`fx`, `fy`) and `weight` for the default posing path.
  */
-export function worldVertices(vertices: ModelVertices, bone: CoreWorld, world: ReadonlyMap<string, CoreWorld>, coords: (v: number) => number = Math.fround): number[] {
-  const out: number[] = [];
-  if (!vertices.weighted) {
-    for (let i = 0; i + 1 < vertices.xy.length; i += 2) {
-      const x = coords(vertices.xy[i]);
-      const y = coords(vertices.xy[i + 1]);
-      out.push(x * bone.a + y * bone.b + bone.worldX, x * bone.c + y * bone.d + bone.worldY);
-    }
-    return out;
-  }
+export interface CompiledBinding {
+  readonly bone: number;
+  readonly x: number;
+  readonly y: number;
+  readonly fx: number;
+  readonly fy: number;
+  readonly weight: number;
+}
+
+/**
+ * A weighted vertex array's bone bindings compiled to integer indices into
+ * `bones` (issue #1580): `bones` lists the distinct bone names in exact
+ * first-occurrence order across `vertices.bindings`, and `bindings` keeps the
+ * outer vertex order and inner influence order untouched so the summation
+ * order and every posed coordinate stay bit-for-bit (`Object.is`) identical.
+ */
+export interface CompiledWeightedVertices {
+  readonly bones: readonly string[];
+  readonly bindings: ReadonlyArray<readonly CompiledBinding[]>;
+}
+
+/** Each weighted vertex array's compiled index table, keyed on the `WeightedVertices` object itself. */
+const compiledWeightedByVertices = new WeakMap<WeightedVertices, CompiledWeightedVertices>();
+
+/**
+ * Compile `vertices`'s bone names to integer indices in first-occurrence order
+ * (issue #1580). With `mapIndex`, each binding's index is passed through it
+ * instead (the core suite's wrong-index plant).
+ */
+export function compileWeightedVertices(
+  vertices: WeightedVertices,
+  mapIndex?: (boneIndex: number, boneCount: number) => number,
+): CompiledWeightedVertices {
+  const bones: string[] = [];
+  const indexByName = new Map<string, number>();
   for (const influences of vertices.bindings) {
+    for (const binding of influences) {
+      if (!indexByName.has(binding.bone)) {
+        indexByName.set(binding.bone, bones.length);
+        bones.push(binding.bone);
+      }
+    }
+  }
+  const count = bones.length;
+  const bindings: CompiledBinding[][] = vertices.bindings.map((influences) =>
+    influences.map((binding) => {
+      const idx = indexByName.get(binding.bone) as number;
+      return {
+        bone: mapIndex === undefined ? idx : mapIndex(idx, count),
+        x: binding.x,
+        y: binding.y,
+        fx: Math.fround(binding.x),
+        fy: Math.fround(binding.y),
+        weight: Math.fround(binding.weight),
+      };
+    }),
+  );
+  return { bones, bindings };
+}
+
+/**
+ * The cached `CompiledWeightedVertices` for `vertices`, compiled once per
+ * `WeightedVertices` object and never shared across two different vertex
+ * objects.
+ */
+export function compiledWeightedOf(vertices: WeightedVertices): CompiledWeightedVertices {
+  let kept = compiledWeightedByVertices.get(vertices);
+  if (kept === undefined) {
+    kept = compileWeightedVertices(vertices);
+    compiledWeightedByVertices.set(vertices, kept);
+  }
+  return kept;
+}
+
+/**
+ * Resolve each distinct bone of `bones` once per pose call into a dense array
+ * indexed by `CompiledBinding.bone`. Because `bones` is in first-occurrence
+ * order across `vertices.bindings`, a missing bone throws the same error on
+ * the same bone name as a per-influence lookup.
+ */
+function resolveBindingBones(bones: readonly string[], world: ReadonlyMap<string, CoreWorld>): CoreWorld[] {
+  const transforms = new Array<CoreWorld>(bones.length);
+  for (let i = 0; i < bones.length; i++) {
+    const name = bones[i];
+    const t = world.get(name);
+    if (t === undefined) throw new Error(`a binding names bone "${name}", which has no world transform (readModel refuses it first)`);
+    transforms[i] = t;
+  }
+  return transforms;
+}
+
+/**
+ * Evaluate a compiled weighted vertex table against `world` (issue #1580),
+ * looking up each distinct bone once per call and summing influences in their
+ * original order.
+ */
+export function compiledWorldVertices(
+  compiled: CompiledWeightedVertices,
+  world: ReadonlyMap<string, CoreWorld>,
+  coords: (v: number) => number = Math.fround,
+): number[] {
+  const transforms = resolveBindingBones(compiled.bones, world);
+  const out: number[] = [];
+  const fround = coords === Math.fround;
+  for (const influences of compiled.bindings) {
     let wx = 0;
     let wy = 0;
     for (const binding of influences) {
-      const t = world.get(binding.bone);
-      if (t === undefined) throw new Error(`a binding names bone "${binding.bone}", which has no world transform (readModel refuses it first)`);
-      const x = coords(binding.x);
-      const y = coords(binding.y);
-      const weight = Math.fround(binding.weight);
+      const t = transforms[binding.bone];
+      const x = fround ? binding.fx : coords(binding.x);
+      const y = fround ? binding.fy : coords(binding.y);
+      const weight = binding.weight;
       wx += (x * t.a + y * t.b + t.worldX) * weight;
       wy += (x * t.c + y * t.d + t.worldY) * weight;
     }
@@ -256,19 +352,71 @@ export function worldVertices(vertices: ModelVertices, bone: CoreWorld, world: R
 }
 
 /**
+ * Evaluate a compiled weighted vertex table with `deform` in one pass
+ * (issues #1530, #1580), looking up each distinct bone once per call and
+ * summing influences in their original order.
+ */
+export function compiledDeformedWorldVertices(
+  compiled: CompiledWeightedVertices,
+  deform: readonly number[],
+  world: ReadonlyMap<string, CoreWorld>,
+): number[] {
+  const transforms = resolveBindingBones(compiled.bones, world);
+  const out: number[] = [];
+  let k = 0;
+  for (const influences of compiled.bindings) {
+    let wx = 0;
+    let wy = 0;
+    for (const binding of influences) {
+      const t = transforms[binding.bone];
+      const x = binding.fx + deform[k];
+      const y = binding.fy + deform[k + 1];
+      k += 2;
+      const weight = binding.weight;
+      wx += (x * t.a + y * t.b + t.worldX) * weight;
+      wy += (x * t.c + y * t.d + t.worldY) * weight;
+    }
+    out.push(wx, wy);
+  }
+  return out;
+}
+
+/**
+ * A vertex array's world positions — the header's mesh rule, every stored
+ * number through `Math.fround`; with `coords`, the coordinates through it
+ * instead (a deformed array's are read as they are, `EXACT_COORDS`), the
+ * weights through `Math.fround` still. Weighted bone bindings are compiled once
+ * per vertex object to integer indices (`compiledWeightedOf`, issue #1580) so
+ * each pose looks up each distinct bone once rather than per influence.
+ */
+export function worldVertices(vertices: ModelVertices, bone: CoreWorld, world: ReadonlyMap<string, CoreWorld>, coords: (v: number) => number = Math.fround): number[] {
+  if (!vertices.weighted) {
+    const out: number[] = [];
+    for (let i = 0; i + 1 < vertices.xy.length; i += 2) {
+      const x = coords(vertices.xy[i]);
+      const y = coords(vertices.xy[i + 1]);
+      out.push(x * bone.a + y * bone.b + bone.worldX, x * bone.c + y * bone.d + bone.worldY);
+    }
+    return out;
+  }
+  return compiledWorldVertices(compiledWeightedOf(vertices), world, coords);
+}
+
+/**
  * `worldVertices(deformedVertices(vertices, deform), bone, world, EXACT_COORDS)`
- * in one pass (issue #1530): the same operations on the same numbers in the
+ * in one pass (issues #1530, #1580): the same operations on the same numbers in the
  * same order — an unweighted vertex's coordinates are the deform array's,
  * read as they are; a weighted binding's are its float32 coordinate plus the
- * deform's pair, its weight through `Math.fround` — without building the
- * deformed array (and, weighted, one binding record per influence) on every
- * pose only to map it again. A planted vertex poser still reads the deformed
- * array (`poseGeometry`). Posed output is held equal by the core gate's
- * sample attachments and by `tools/posed_frames.ts` across the change.
+ * deform's pair, its weight through `Math.fround`, its bone transform indexed
+ * through `compiledWeightedOf` — without building the deformed array (and,
+ * weighted, one binding record per influence) on every pose only to map it
+ * again. A planted vertex poser still reads the deformed array (`poseGeometry`).
+ * Posed output is held equal by the core gate's sample attachments and by
+ * `tools/posed_frames.ts` across the change.
  */
 export function deformedWorldVertices(vertices: ModelVertices, deform: readonly number[], bone: CoreWorld, world: ReadonlyMap<string, CoreWorld>): number[] {
-  const out: number[] = [];
   if (!vertices.weighted) {
+    const out: number[] = [];
     for (let i = 0; i + 1 < deform.length; i += 2) {
       const x = deform[i];
       const y = deform[i + 1];
@@ -276,23 +424,7 @@ export function deformedWorldVertices(vertices: ModelVertices, deform: readonly 
     }
     return out;
   }
-  let k = 0;
-  for (const influences of vertices.bindings) {
-    let wx = 0;
-    let wy = 0;
-    for (const binding of influences) {
-      const t = world.get(binding.bone);
-      if (t === undefined) throw new Error(`a binding names bone "${binding.bone}", which has no world transform (readModel refuses it first)`);
-      const x = Math.fround(binding.x) + deform[k];
-      const y = Math.fround(binding.y) + deform[k + 1];
-      k += 2;
-      const weight = Math.fround(binding.weight);
-      wx += (x * t.a + y * t.b + t.worldX) * weight;
-      wy += (x * t.c + y * t.d + t.worldY) * weight;
-    }
-    out.push(wx, wy);
-  }
-  return out;
+  return compiledDeformedWorldVertices(compiledWeightedOf(vertices), deform, world);
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -342,7 +474,10 @@ function readVertices(value: unknown, where: string, bones: ReadonlySet<string>,
       for (const key of ['x', 'y', 'weight'] as const) if (!finite(b[key])) problems.push(`${at}: ${key} is ${JSON.stringify(b[key]) ?? 'absent'}, not a finite number`);
     });
   });
-  return problems.length === before ? { weighted: true, bindings: bindings as ModelBinding[][] } : undefined;
+  if (problems.length !== before) return undefined;
+  const weighted: WeightedVertices = { weighted: true, bindings: bindings as ModelBinding[][] };
+  compiledWeightedByVertices.set(weighted, compileWeightedVertices(weighted));
+  return weighted;
 }
 
 /**

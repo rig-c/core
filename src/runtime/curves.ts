@@ -25,6 +25,7 @@
  * Nothing here allocates once compiled.
  */
 import { bezierPolyline, BEZIER_PIECES, type CoreKey } from '../core/animation.ts';
+import { DEFORM_CURVE_END, type CoreDeformKey } from '../core/deform.ts';
 
 /** A segment's curve, per key. */
 export const CURVE_LINEAR = 0;
@@ -103,4 +104,38 @@ export function channelValue(curve: RuntimeCurve, i: number, c: number, t: numbe
   const x0 = p[o + q - 2];
   const y0 = p[o + q - 1];
   return y0 + ((t - x0) / (p[o + q] - x0)) * (p[o + q + 1] - y0);
+}
+
+/** Deform easing has one fraction channel, a distinct recurrence end and end-piece arithmetic (core/deform.ts). */
+export function compileDeformCurve(keys: readonly CoreDeformKey[]): RuntimeCurve {
+  const curve = compileCurve(keys.map(k => ({ time: k.time, values: [0], curve: 'linear' as const, stated: { time: k.stated, values: [0] } })), 1);
+  for (let i = 0; i < keys.length; i++) {
+    const a = keys[i];
+    curve.kinds[i] = a.curve === 'linear' ? CURVE_LINEAR : a.curve === 'stepped' ? CURVE_STEPPED : CURVE_BEZIER;
+    if (typeof a.curve === 'string' || i + 1 === keys.length) continue;
+    const b = keys[i + 1];
+    const c = a.curve;
+    const inner = bezierPolyline(a.stated, 0, c[0], c[1], c[2], c[3], b.stated, DEFORM_CURVE_END);
+    const o = i * POLYLINE;
+    curve.polylines[o] = a.time;
+    curve.polylines[o + 1] = 0;
+    curve.polylines.set(inner, o + 2);
+    curve.polylines[o + POLYLINE - 2] = b.time;
+    curve.polylines[o + POLYLINE - 1] = 1;
+  }
+  return curve;
+}
+
+/** The oracle's deformPercent, with the polyline compiled once and product-before-division at both ends. */
+export function deformFraction(curve: RuntimeCurve, i: number, t: number): number {
+  if (curve.kinds[i] === CURVE_STEPPED) return 0;
+  if (curve.kinds[i] === CURVE_LINEAR) return (t - curve.times[i]) / (curve.times[i + 1] - curve.times[i]);
+  const p = curve.polylines;
+  const o = i * POLYLINE;
+  let q = 2;
+  while (q < POLYLINE - 2 && p[o + q] < t) q += 2;
+  const x0 = p[o + q - 2], y0 = p[o + q - 1], x1 = p[o + q], y1 = p[o + q + 1];
+  if (q === 2) return (y1 * (t - x0)) / (x1 - x0);
+  if (q === POLYLINE - 2) return y0 + ((1 - y0) * (t - x0)) / (x1 - x0);
+  return y0 + ((t - x0) / (x1 - x0)) * (y1 - y0);
 }

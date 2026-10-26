@@ -12610,7 +12610,7 @@ verdict on those figures.
 | <a id="CE_COMPILE_ALPHA_CLIP_CONFLICT"></a>`CE_COMPILE_ALPHA_CLIP_CONFLICT` | Names authored fields or convex/inverse flags conflicting with generated inside-clipping geometry. Use one authored/generated form.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦: alphaClip conflicts with [⟧<br>⟦vertexCount⟧<br>⟦vertices⟧<br>⟦weights⟧<br>⟦boneIndexing⟧<br>⟦, ⟧<br>⟦], convex=⟧<br>⟦, inverse=⟧<br>⟦; required ordinary inside clipping with generated geometry only. Remove authored geometry/flags.⟧ |
 | <a id="CE_COMPILE_ALPHA_CLIP_DEFORM"></a>`CE_COMPILE_ALPHA_CLIP_DEFORM` | Names animation and source/clip key/frame counts that cannot share the existing projection contract. Give matching explicit supported transform keys in compatible actual frames, with constant world shares where needed, or author the corresponding clip geometry and motion; weighted binding does not copy source deform.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦ alphaClip from "⟧<br>⟦"⟧<br>⟦: animation "⟧<br>⟦" has ⟧<br>⟦ source and ⟧<br>⟦ clip keys; source frame=⟧<br>⟦no vertex geometry⟧<br>⟦clip frame=⟧<br>⟦, constant world influence shares=⟧<br>⟦Required matching explicit affine/depth-yaw/pitch transforms in compatible DeformGeometry frames, ⟧<br>⟦with constant shares for world-space transfer. Fix the named frame/keys or author corresponding clip motion.⟧ |
 
-## 15. Posing in place for a player — the runtime poser (stage 1)
+## 15. Posing in place for a player — the runtime poser (stage 2)
 
 rigc poses a model document twice over, on purpose (issue #1591). The **oracle**
 (`src/core/`) is the reference: each pose is a pure function of the document,
@@ -12645,14 +12645,27 @@ exact resolved table identity `(skin, model.slots[attachment.slot].name, placeho
 The display `name` may be shared by different placeholders; it is never a table
 key to guess the source from. These load-time strings do not change the pose path.
 
-| | what stage 1 poses |
+| | what stage 2 poses |
 | --- | --- |
 | bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |
 | timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, `rgba`, `rgb` and `alpha`; ik and transform timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
 | constraints | one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
 | vertices | regions, meshes, weighted meshes and linked meshes, written into the pose's buffer |
+| deform | weighted and unweighted mesh timelines, linear/stepped/Bézier, per-pose key cursors and in-place buffers; linked meshes inherit their source's timelines only with `timelines: true` |
 | skins and events | named/no-skin views with their skin-required bones and constraints; event delivery in key order over `(last, time]`, tail then head across a wrap |
 | time | one animation at full weight from the setup pose, at a time (`apply`) or stepped as a looping track (`step`, the track time wrapped by the duration as `openTrack` wraps it) |
+
+Deform keys are expanded once at load. Unweighted keys hold float32 positions,
+`fround(fround(setup) + fround(offset))`; weighted keys hold float32 offsets,
+**one x/y pair per influence**, in vertex then influence order. At a pose,
+interpolation stays double. Each weighted offset is added to its float32 binding
+coordinate before the bone transform, translation and weight, summed in binding
+order. Bézier uses the oracle's deform recurrence end `0.99999999` and its
+product-before-division first and last pieces, rather than ordinary channel easing.
+Attachment switches resolve before deform matching by source skin/slot/placeholder;
+display names do not identify timelines. Every pose clears deform state, including
+before the first key, at setup, on backwards seeks and across loop wraps. Buffers
+and cursors belong to the pose; compiling another skin resolves another identity.
 
 Skin switching is a load-time view change: compile `underSkin(document, name)`
 (or `underNoSkin(document)`), create the replacement `RuntimePose`, then call
@@ -12681,7 +12694,7 @@ the list; normal compilation never does.
 
 **Everything else is refused at load, by name.** `RuntimeRefusal.missing` lists
 every construct met, each `{ feature, detail, animation }`, and the message
-reads `not posed by the runtime poser (stage 1), N construct(s) missing:
+reads `not posed by the runtime poser (stage 2), N construct(s) missing:
 <feature>: <detail>; …`. A model-level feature refuses the whole model; an
 animation-level one refuses that animation alone (`model.refused`;
 `model.animation(name)` and `setAnimation(name)` throw its refusal) and every
@@ -12697,7 +12710,7 @@ refused: nothing is posed approximately.
 | `clipping`, `null-atlas-region` | the model when shown at setup, else the animation that keys it | a clipping attachment; a region whose atlas rectangle the model states as `null` |
 | `skin-conflict` | as above | a placeholder the skins fill differently |
 | `oracle-absent` | the model | a pose the oracle itself leaves out (`constraintsAbsentWhy`) |
-| `inherit-timeline`, `deform-timeline`, `sequence-timeline`, `draw-order-timeline`, `dark-colour-timeline` | the animation | a timeline of that kind (`dark-colour` is `rgba2` / `rgb2`) |
+| `inherit-timeline`, `sequence-timeline`, `draw-order-timeline`, `dark-colour-timeline` | the animation | a timeline of that kind (`dark-colour` is `rgba2` / `rgb2`) |
 
 A call it cannot answer throws `RuntimeInputError`, naming the call:
 `apply: no animation is set (setAnimation first)`, `animation "x" is not one of
@@ -12717,7 +12730,7 @@ the poses and values compared. A `DIFF` or `REFUSED` turns the run RED; a SKIP
 never counts as a pass. The page UVs are the atlas's and are compared by neither
 side here. The selftest's `runtime-poser` suite holds the gate to its plants (a
 1e-6° bone perturbation, a weighted binding bound to the wrong bone index, a
-refused feature smuggled through — each caught by name), a seeded population of
+omitted deform — each caught by name), a seeded population of
 every construct above, the looping step against `openTrack`, and a steady-state
 frame measured at 0 bytes with the collector off.
 

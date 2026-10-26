@@ -16933,6 +16933,7 @@ function runPhysicsParameters1541Suite(): number {
 // ---------------------------------------------------------------------------
 import { runtimePoserCases } from './tools/runtime_poser_cases.ts';
 import { runtimeStage1Cases } from './tools/runtime_stage1_cases.ts';
+import { runtimeStage2Cases } from './tools/runtime_stage2_cases.ts';
 function runRuntimePoserSuite(): number {
   console.log('\n── the runtime poser: a production in-place poser held equal to the oracle at tolerance 0 by core_gate\'s third dumper (issue #1591) ──');
   let bad = 0;
@@ -16944,6 +16945,7 @@ function runRuntimePoserSuite(): number {
   const work = mkdtempSync(join(harnessTemp(), 'rigc-runtime-poser-'));
   try {
     runtimeStage1Cases(say);
+    runtimeStage2Cases(say);
     runtimePoserCases(say, { root, work, random: seededRandom });
   } finally {
     rmSync(work, { recursive: true, force: true });
@@ -148461,7 +148463,7 @@ function main(): void {
   const gateHelpers =
     ', + ' + n('setup-mesh') + ' named setup mesh read controls (issue #1538)' +
     ', + ' + n('physics-parameters') + ' live named physics parameter override controls (issue #1541)' +
-    ', + ' + n('runtime-poser') + ' runtime poser controls (issue #1591 — the in-place poser against the oracle at tolerance 0 on the gallery and a seeded population, a planted perturbation, a wrong-index binding and a smuggled refusal each caught, no allocation per frame, every refusal named)' +
+    ', + ' + n('runtime-poser') + ' runtime poser controls (issue #1591 — the in-place poser against the oracle at tolerance 0 on the gallery and a seeded population, a planted perturbation, a wrong-index binding and an omitted deform each caught, no allocation per frame, every refusal named)' +
     ', + ' + n('sheet') + ' sprite-sheet export controls (issue #1560)' +
     ', + ' + n('gate-helper') + ' controls over the helpers the gates themselves call (issue #499 — the guard ' +
     'inside the helper a control hands its verdict and its probe list to: a FALSE verdict over an EMPTY list is ' +

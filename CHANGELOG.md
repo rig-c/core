@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.71.0](https://github.com/rig-c/core/compare/v2.70.0...v2.71.0) (2026-10-26)
+
+
+### Features
+
+* **motion:** a declared option to derive a turn without the narrowing term ([#1587](https://github.com/rig-c/core/issues/1587)) ([9f07cfe](https://github.com/rig-c/core/commit/9f07cfe6f419a2e14f3ecc8cfd874e54a6c6c793))
+* **runtime:** carry the resolved skin and placeholder on each RuntimeAttachment ([#1597](https://github.com/rig-c/core/issues/1597)) ([2b7aead](https://github.com/rig-c/core/commit/2b7aead7ef6933505641bf891fdf8a850835db1c)), closes [#1596](https://github.com/rig-c/core/issues/1596)
+* **runtime:** stage 0 of the in-place runtime poser, held equal to the oracle at tolerance 0 ([#1594](https://github.com/rig-c/core/issues/1594)) ([350b085](https://github.com/rig-c/core/commit/350b085ed485fe2eafde99f26e312a7c0dc13eb7))
+* **tools:** a CPU-only per-stage pose microbench with same-frame AB, for checking one perf card in seconds ([#1593](https://github.com/rig-c/core/issues/1593)) ([f3babba](https://github.com/rig-c/core/commit/f3babba0e4889fa0a343520256aa5354527c9776))
+
+
+### Bug Fixes
+
+* **docs:** clarify seam readings outside the overlap hull ([#1576](https://github.com/rig-c/core/issues/1576)) ([98f0419](https://github.com/rig-c/core/commit/98f0419881c7fc101d587e79fdc145412dd829e8))
+* **profile:** the spine-html notice says "next major", and RELEASING lists 3.0.0's items ([#1588](https://github.com/rig-c/core/issues/1588)) ([d17d5d0](https://github.com/rig-c/core/commit/d17d5d0fbb2b2f559d2a01bfff5e737ff690bc03))
+
+
+### Performance Improvements
+
+* **core:** stop forming discarded oracle rows on every walk, and parse slot colours once per view ([#1592](https://github.com/rig-c/core/issues/1592)) ([6223c58](https://github.com/rig-c/core/commit/6223c58daabe5b582def9c719cac7f3cc3edb637))
+* **vertices:** compile weighted-vertex bone bindings to indices ([#1580](https://github.com/rig-c/core/issues/1580)) ([#1583](https://github.com/rig-c/core/issues/1583)) ([2f09474](https://github.com/rig-c/core/commit/2f09474504f41e0ad536e39221b1e0ee529341a8))
+
 ## [2.70.0](https://github.com/rig-c/core/compare/v2.69.0...v2.70.0) (2026-10-25)
 
 

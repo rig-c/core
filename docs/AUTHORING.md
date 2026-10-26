@@ -12490,3 +12490,85 @@ calls, with the independent linked mesh selected, agree exactly. The API's
 nonselected output is the stored source geometry through the unchanged setup
 matrices; it does not borrow a different selection's deform. The control
 checks both results and the source of the difference, without an epsilon.
+
+## 15. Posing in place for a player — the runtime poser (stage 0)
+
+rigc poses a model document twice over, on purpose (issue #1591). The **oracle**
+(`src/core/`) is the reference: each pose is a pure function of the document,
+the skin and the time, returned as a fresh, name-keyed, detached record, and it
+is the poser `tools/core_gate.ts` holds to spine-core 4.3.13 at tolerance 0. The
+**runtime poser** (`src/runtime/`) is for a player drawing many skeletons a
+frame: it resolves every name to an index once at load and overwrites typed
+arrays in place, so a steady-state frame allocates nothing. It computes every
+value with the oracle's own formulas in the oracle's order of operations, and it
+is held equal to the oracle at tolerance 0 rather than trusted; the oracle is not
+changed for it. It is imported from `rig-c/runtime`, an **experimental** entry
+(RELEASING.md, *The import surface*): not promised until it stabilises, so a
+minor may reshape it and a dependant pins an exact version.
+
+```ts
+import { readModel, underNoSkin } from 'rig-c/core';
+import { compileRuntime, RuntimePose, RuntimeRefusal } from 'rig-c/runtime'; // experimental
+
+const view = underNoSkin(readModel(modelText));
+const model = compileRuntime(view, { ignore: ['events'] }); // throws RuntimeRefusal, every missing construct named
+const pose = new RuntimePose(model);                         // every buffer allocated here, once
+pose.setAnimation('walk');                                   // a refused animation throws its RuntimeRefusal
+pose.step(1 / 60);                                           // or pose.apply(t) at an animation time
+pose.computeVertices();
+// pose.world: 6 numbers per bone (a, b, c, d, worldX, worldY — W_A … W_Y), y up
+// pose.light: 4 per slot; pose.shown: per slot an index into model.attachments, or −1
+// pose.vertices: model.attachments[i].count numbers at model.attachments[i].offset
+```
+
+| | what stage 0 poses |
+| --- | --- |
+| bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |
+| timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, `rgba`, `rgb` and `alpha`; ik and transform timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
+| constraints | one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
+| vertices | regions, meshes, weighted meshes and linked meshes, written into the pose's buffer |
+| time | one animation at full weight from the setup pose, at a time (`apply`) or stepped as a looping track (`step`, the track time wrapped by the duration as `openTrack` wraps it) |
+
+**Everything else is refused at load, by name.** `RuntimeRefusal.missing` lists
+every construct met, each `{ feature, detail, animation }`, and the message
+reads `not posed by the runtime poser (stage 0), N construct(s) missing:
+<feature>: <detail>; …`. A model-level feature refuses the whole model; an
+animation-level one refuses that animation alone (`model.refused`;
+`model.animation(name)` and `setAnimation(name)` throw its refusal) and every
+other animation is posed. Fall back to the oracle (`openTrack`) for what is
+refused: nothing is posed approximately.
+
+| feature | refuses | what it is |
+| --- | --- | --- |
+| `skin` | the model | a skin other than `default` |
+| `path-constraint`, `physics-constraint`, `slider-constraint` | the model | a constraint of that kind |
+| `local-transform`, `additive-transform` | the model | a transform constraint with `localSource` or `localTarget`, or `additive` |
+| `inactive-constrained-bone` | the model | an applied ik or transform constraint naming a bone the view leaves inactive (what the oracle writes there depends on the pass before) |
+| `noscale-world-target` | the model | a world-space transform onto a `noScale` or `noScaleOrReflection` bone, whose local values would be read back in that mode |
+| `clipping`, `null-atlas-region` | the model when shown at setup, else the animation that keys it | a clipping attachment; a region whose atlas rectangle the model states as `null` |
+| `skin-conflict` | as above | a placeholder the skins fill differently |
+| `oracle-absent` | the model | a pose the oracle itself leaves out (`constraintsAbsentWhy`) |
+| `inherit-timeline`, `deform-timeline`, `sequence-timeline`, `draw-order-timeline`, `dark-colour-timeline` | the animation | a timeline of that kind (`dark-colour` is `rgba2` / `rgb2`) |
+| `events` | the animation, unless `ignore: ['events']` | event keys. Events move no pose, so a consumer that reads none may ask for them to be ignored and is handed a poser that fires none; without the request a dropped cue would be silent |
+
+A call it cannot answer throws `RuntimeInputError`, naming the call:
+`apply: no animation is set (setAnimation first)`, `animation "x" is not one of
+this document's [...]`, `apply: the time NaN is not finite`.
+
+**The gate.** `tools/core_gate.ts` runs a third dumper (`runtimeDump` in
+`tools/pose_oracle.ts`) over every row it builds, at the oracle's samples, and
+compares its document with the oracle's in full doubles at tolerance 0 twice:
+through `compare` and cell by cell (which reads the bones `compare`'s
+ill-conditioned rule leaves out). One `RUNTIME` line per row reads `IDENTICAL`
+(covered whole and equal), `SKIP` (refused at load, or animations or events left
+out — every one named), `DIFF` (the first value that differs) or `REFUSED`; then
+one `RUNTIME SKIP feature <name>` line per feature with the rows it refused, a
+`HOLE` line when no row is covered whole or nothing was compared, and `RUNTIME
+GREEN|RED`, counting rows covered whole, covered in part and refused at load, and
+the poses and values compared. A `DIFF` or `REFUSED` turns the run RED; a SKIP
+never counts as a pass. The page UVs are the atlas's and are compared by neither
+side here. The selftest's `runtime-poser` suite holds the gate to its plants (a
+1e-6° bone perturbation, a weighted binding bound to the wrong bone index, a
+refused feature smuggled through — each caught by name), a seeded population of
+every construct above, the looping step against `openTrack`, and a steady-state
+frame measured at 0 bytes with the collector off.

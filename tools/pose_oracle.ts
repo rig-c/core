@@ -345,6 +345,29 @@
  * atlas lacking a region the pose draws is refused (exit 2), as spine-core
  * refuses to load the pair.
  *
+ * ## The third dumper — the runtime poser (issue #1591)
+ *
+ * `runtimeDump` writes the same document from the runtime poser
+ * (`src/runtime/`), the in-place poser a player runs, which `tools/core_gate.ts`
+ * holds to the core's document at tolerance 0 (*The runtime poser* there). It
+ * is a function, not a `dump` flag: what it is compared with is the core in
+ * the same process. `dumper` is `"rigc-runtime (stage 0)"`, `source` and
+ * `options` as the core's; the rosters, `pathAttachments` included, are the
+ * document's own, and `physics` and `paths` are empty because the runtime
+ * refuses both constraint kinds at load. The view is the core's
+ * (`viewOf`); the setup pose and every sample are posed by ONE runtime pose,
+ * every animation in turn, so a value one pose left behind would be a
+ * difference in the next. `setup.drawOrder` and every sample's is the slot
+ * order and `clips` and `clipped` are empty, because a draw-order timeline and
+ * a clipping attachment are refused at load. Absent, always: `setup.uvs` and
+ * `animations.uvs` (the atlas's, not posed); and `animations.events` where a
+ * posed animation keys events, which the dump compiles past (`ignore:
+ * ['events']`) so that the animation's pose is compared. A model the runtime
+ * refuses throws its `RuntimeRefusal`, every missing construct named; an
+ * animation it refuses is left out of `animations` and listed beside the
+ * document, so a comparison takes the core's document down to the same
+ * animations. `--physics step` is refused by name.
+ *
  * ## `--raw` — full doubles (issue #966)
  *
  * `dump --raw` (either dumper) writes the same document with every number the
@@ -451,6 +474,7 @@ import { poseLoopingWalk, poseWalkSetup, walkHistory, type WalkPlant, type WalkP
 import { noSkinView } from '../src/render_core.ts';
 import { STEP_FRAMES } from '../src/assertions/bodies/a10.ts';
 import { fileAnimationOrder } from '../src/compile.ts';
+import { compileRuntime, DRAW_NONE, DRAW_REGION, RUNTIME_STAGE, RuntimePose, W_A, W_B, W_C, W_D, W_X, W_Y, WORLDS, type RuntimeAnimation, type RuntimeMissing, type RuntimePlant } from '../src/runtime/index.ts';
 
 export const ORACLE_SPEC = 'pose-oracle/4';
 // --- #966 raw: begin ---
@@ -1081,6 +1105,104 @@ export function coreDump(model: CompiledDocument, options: OracleOptions, plant:
     pathAttachments: pathAttachmentRows(doc.skins, round),
     setup: { ...setup, uvs: uvs.setup },
     animations,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// the third dumper: the runtime poser (issue #1591)
+// ---------------------------------------------------------------------------
+
+/** Who posed a runtime dump — the header's *The third dumper*. */
+export const RUNTIME_DUMPER = `rigc-runtime (stage ${RUNTIME_STAGE})`;
+
+/** Why a runtime dump carries no page UVs. */
+export const RUNTIME_NO_UVS_WHY = `the runtime poser (stage ${RUNTIME_STAGE}) poses no page UVs: where a drawing sits on a page is the atlas's, read by the consumer`;
+
+/** Why a runtime dump carries no events — written only where a covered animation keys some, which the dump compiles past (`ignore: ['events']`). */
+export const RUNTIME_NO_EVENTS_WHY = `the runtime poser (stage ${RUNTIME_STAGE}) fires no events; the dump compiles it with ignore: ['events'] so the animations that key them are posed`;
+
+/** A runtime dump: the document, holding the covered animations alone, and the animations refused with what each misses. */
+export interface RuntimeDump {
+  document: OracleDocument;
+  refused: ReadonlyArray<{ animation: string; missing: readonly RuntimeMissing[] }>;
+}
+
+/**
+ * The third dumper (the header's *The third dumper*): a `rigc-compiled/1`
+ * document posed by the runtime poser (`src/runtime/`) into the same shape.
+ * A model the runtime refuses throws its `RuntimeRefusal`, every missing
+ * construct named; an animation it refuses is left out of `animations` and
+ * listed in `refused`. `--physics step` is refused: the runtime has no
+ * physics clock at stage 0.
+ */
+export function runtimeDump(model: CompiledDocument, options: OracleOptions, plant: RuntimePlant = {}, view: SkinViewOf = viewOf): RuntimeDump {
+  let doc: CompiledDocument;
+  try {
+    doc = view(model, options.skin);
+  } catch (err) {
+    if (err instanceof CoreInputError) throw new OracleInputError(`runtime dump: ${err.message}`);
+    throw err;
+  }
+  if (options.physics !== 'none') throw new OracleInputError(`runtime dump: --physics ${options.physics} is not posed by the runtime poser (stage ${RUNTIME_STAGE}), which has no physics clock`);
+  const round = roundOf(options);
+  const runtime = compileRuntime(doc, { ignore: ['events'] }, plant);
+  const pose = new RuntimePose(runtime);
+  const read = (): OracleDocumentPose => {
+    pose.computeVertices();
+    const bones = runtime.boneNames.map((name, i): BoneRow => {
+      const o = i * WORLDS;
+      const w = pose.world;
+      const parent = runtime.parents[i];
+      return [name, round(w[o + W_X]), round(w[o + W_Y]), round(w[o + W_A]), round(w[o + W_B]), round(w[o + W_C]), round(w[o + W_D]), runtime.active[i] === 1 ? 1 : 0, parent < 0 ? null : runtime.boneNames[parent]];
+    });
+    const attachments: AttachmentRow[] = [];
+    const slots = runtime.slots.map((slot, s): SlotRow => {
+      const shown = pose.shown[s];
+      const at = shown < 0 ? null : runtime.attachments[shown];
+      if (at !== null && at.draw !== DRAW_NONE) attachments.push([slot.name, at.name, at.draw === DRAW_REGION ? 'region' : 'mesh', [...pose.vertices.subarray(at.offset, at.offset + at.count)].map(round)]);
+      const o = s * 4;
+      return [slot.name, at === null ? null : at.name, round(pose.light[o]), round(pose.light[o + 1]), round(pose.light[o + 2]), round(pose.light[o + 3]), slot.dark === null ? null : [round(slot.dark[0]), round(slot.dark[1]), round(slot.dark[2])], at === null ? null : at.path, slot.blend];
+    });
+    // No draw-order timeline and no clipping attachment is posed (both refused at load): the setup order, and nothing clipped.
+    return { bones, slots, drawOrder: runtime.slots.map((s) => s.name), attachments, clips: [], clipped: [], uvs: null };
+  };
+  pose.setupPose();
+  const setup = read();
+  const covered = doc.animations.filter((a) => runtime.animations.has(a.name));
+  const events = covered.some((a) => (runtime.animations.get(a.name) as RuntimeAnimation).events > 0);
+  // One pose for the whole document, every animation in turn: a value one pose left behind is a difference in the next.
+  const animations: OracleDocumentAnimation[] = covered.map((a) => {
+    pose.setAnimation(a.name);
+    const d = a.timelines.duration;
+    const samples: OracleDocumentSample[] = [];
+    for (let i = 0; i < options.samples; i++) {
+      const t = coreSampleTime(options.phase, d, i, options.samples);
+      pose.apply(t);
+      samples.push({ t: round(t), events: events ? null : [], ...read() });
+    }
+    return { name: a.name, duration: round(d), samples };
+  });
+  const absent: Array<[string, string]> = [['setup.uvs', RUNTIME_NO_UVS_WHY], ['animations.uvs', RUNTIME_NO_UVS_WHY]];
+  if (events) absent.push(['animations.events', RUNTIME_NO_EVENTS_WHY]);
+  return {
+    document: {
+      spec: options.raw === true ? ORACLE_RAW_SPEC : ORACLE_SPEC,
+      dumper: RUNTIME_DUMPER,
+      source: { spine: null, hash: null },
+      options: { phase: options.phase, samples: options.samples, skin: options.skin, physics: options.physics, dt: null },
+      absent,
+      bones: doc.bones.map((b) => b.name),
+      slots: doc.slots.map((s): [string, string] => [s.name, s.bone]),
+      skins: doc.skins.map((s) => s.name),
+      constraints: doc.constraints.map((c): [string, string] => [c.kind, c.name]),
+      // No physics or path constraint is posed (both refused at load); the path attachments are the document's own records.
+      physics: [],
+      paths: [],
+      pathAttachments: pathAttachmentRows(doc.skins, round),
+      setup,
+      animations,
+    },
+    refused: runtime.refused,
   };
 }
 

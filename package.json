@@ -19,6 +19,7 @@
     "./errors": "./src/errors.ts",
     "./meshcompare": "./src/meshcompare.ts",
     "./core": "./src/core/entry.ts",
+    "./runtime": "./src/runtime/index.ts",
     "./cli": "./cli.ts",
     "./package.json": "./package.json",
     "./*.ts": "./*.ts",

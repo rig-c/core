@@ -16923,6 +16923,58 @@ function runPhysicsParameters1541Suite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// the runtime poser (issue #1591)
+// ---------------------------------------------------------------------------
+import { runtimePoserCases } from './tools/runtime_poser_cases.ts';
+function runRuntimePoserSuite(): number {
+  console.log('\n── the runtime poser: a production in-place poser held equal to the oracle at tolerance 0 by core_gate\'s third dumper (issue #1591) ──');
+  let bad = 0;
+  const why = 'issue #1591: the runtime poser is a second implementation of every construct it covers, so it is held to the oracle at tolerance 0 rather than trusted, and every construct it does not cover is refused by name';
+  const say = (name: string, probes: string[], detail: string): void => {
+    bad += reportCase(name, probes.length === 0, probeDetail(probes.length === 0, probes, detail), why);
+  };
+  const root = import.meta.dir;
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-runtime-poser-'));
+  try {
+    runtimePoserCases(say, { root, work, random: seededRandom });
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+
+  // --- RP10: src/runtime/ links nothing from spine-core and nothing impure, and the oracle does not import it --
+  {
+    const population = srcPopulation(root);
+    const probes = coreTreeProblems(population, 'src/runtime/');
+    const files = [...population.keys()].filter((p) => p.startsWith('src/runtime/'));
+    const base = population.get('src/runtime/model.ts') ?? '';
+    const plants: Array<[string, string]> = [
+      ['a value import of the runtime package', `${base}\nimport { Skeleton } from '@esotericsoftware/spine-core';\n`],
+      ['a type import of the runtime package', `${base}\nimport type { Skeleton } from '@esotericsoftware/spine-core';\n`],
+      ['a clock', `${base}\nconst at = performance.now();\n`],
+      ['a module outside src/', `${base}\nimport { r } from '../../tools/pose_oracle.ts';\n`],
+      ['a src module that links the runtime package', `${base}\nimport { validate } from '../validate.ts';\n`],
+    ];
+    for (const [label, text] of plants) {
+      const planted = new Map(population);
+      planted.set('src/runtime/model.ts', text);
+      if (coreTreeProblems(planted, 'src/runtime/').length <= probes.length) probes.push(`${label}, planted in src/runtime/model.ts, raised nothing`);
+    }
+    // The oracle is the reference: no file under src/core/ reaches the runtime poser, so the two are not checking each other's assumptions.
+    const oracleImports = (pop: ReadonlyMap<string, string>): string[] => [...pop].filter(([p]) => p.startsWith('src/core/')).flatMap(([p, text]) => specifiersOf(codeOnly(text)).filter(({ spec }) => spec.startsWith('.') && join(dirname(p), spec).split('\\').join('/').startsWith('src/runtime/')).map(({ spec }) => `${p} imports "${spec}"`));
+    probes.push(...oracleImports(population));
+    const reached = new Map(population);
+    reached.set('src/core/raw.ts', `${population.get('src/core/raw.ts') ?? ''}\nimport { RuntimePose } from '../runtime/index.ts';\n`);
+    if (oracleImports(reached).length === 0) probes.push('an import of the runtime poser planted in src/core/raw.ts was not seen');
+    say(
+      'RP10_SRC_RUNTIME_LINKS_NOTHING_FROM_SPINE_CORE_NOTHING_IMPURE_AND_THE_ORACLE_DOES_NOT_IMPORT_IT',
+      probes,
+      `${files.length} file(s) under src/runtime/ and the src/ modules they reach by value: no import of the runtime package, as a value or a type, no child process, network, file system or clock, nothing outside src/; ${plants.length} plants each raise a problem; no file under src/core/ imports src/runtime/, and one planted there is seen`,
+    );
+  }
+  return bad;
+}
+
+// ---------------------------------------------------------------------------
 // the helpers the gates call, gated (issues #499, #506)
 // ---------------------------------------------------------------------------
 //
@@ -82297,6 +82349,62 @@ function runCurrencySuite(): number {
       );
     }
 
+    // CUR136 — the runtime poser's entry a browser player links reaches only the runtime and the core (issue #1591).
+    //
+    // `rig-c/runtime` (experimental) is play's in-place poser, so it carries the
+    // promise `rig-c/core` carries: bundled for a browser, it may reach nothing a
+    // browser lacks. The same walk as CUR123 over its closure, read off the
+    // disk: every module it reaches by value is under src/runtime/ or src/core/,
+    // none names a package or a node builtin by value, and outside those two it
+    // names only src/model.ts, as a type. The entry is read from `exports`.
+    {
+      const exportsMap = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { exports?: Record<string, string> }).exports ?? {};
+      const target = exportsMap['./runtime'];
+      const entry = target === undefined ? '' : target.replace(/^\.\//, '');
+      const TYPE_EXCEPTION = 'src/model.ts';
+      const inside = (m: string): boolean => m.startsWith('src/runtime/') || m.startsWith('src/core/');
+      const runtimePopulation = srcPopulation(root);
+      const faultsOf = (pop: ReadonlyMap<string, string>): { modules: string[]; faults: string[] } => {
+        const faults: string[] = [];
+        if (entry === '' || !pop.has(entry)) return { modules: [], faults: [`package.json's exports maps ./runtime to ${JSON.stringify(target)}, which is not a module under src/`] };
+        const closure = coreClosureFrom(pop, [entry]);
+        faults.push(...closure.problems);
+        for (const module of closure.modules) {
+          if (!inside(module)) faults.push(`🔒 ${module} is outside src/runtime/ and src/core/, and ./runtime reaches it by value`);
+          for (const { spec, typeOnly: isType } of specifiersOf(codeOnly(pop.get(module) ?? ''))) {
+            if (!spec.startsWith('.')) {
+              if (!isType) faults.push(`🔒 ${module} imports "${spec}" by value, and ./runtime reaches it`);
+              continue;
+            }
+            const reached = join(dirname(module), spec).split('\\').join('/');
+            if (isType && !inside(reached) && reached !== TYPE_EXCEPTION) faults.push(`${module} type-imports ${reached}, and the one module outside src/runtime/ and src/core/ the entry may name, as a type, is ${TYPE_EXCEPTION}`);
+          }
+        }
+        return { modules: closure.modules, faults };
+      };
+      const live136 = faultsOf(runtimePopulation);
+      const probes136 = [...live136.faults];
+      if (!live136.modules.some((m) => m.startsWith('src/runtime/')) || !live136.modules.some((m) => m.startsWith('src/core/'))) probes136.push(`./runtime's closure is [${live136.modules.join(', ')}], which does not reach both the runtime and the core it reads`);
+      const plants136: Array<[string, string, string]> = [
+        ['a node builtin', "import { readFileSync as planted } from 'node:fs';", 'imports "node:fs" by value'],
+        ['the Spine runtime package', "import { Skeleton as planted } from '@esotericsoftware/spine-core';", 'imports "@esotericsoftware/spine-core" by value'],
+        ['a value import of src/model.ts', "import { spineFileSha256 as planted } from '../model.ts';", `${TYPE_EXCEPTION} is outside`],
+      ];
+      const caught136: string[] = [];
+      for (const [label, line, mustSay] of plants136) {
+        const raised = faultsOf(plantedInto(runtimePopulation, 'src/runtime/pose.ts', line)).faults.filter((f) => !live136.faults.includes(f));
+        if (!raised.some((f) => f.includes(mustSay))) probes136.push(`${label} planted in src/runtime/pose.ts raised [${raised.join('; ')}], none saying "${mustSay}"`);
+        else caught136.push(label);
+      }
+      const held136 = probes136.length === 0;
+      say(
+        'CUR136_THE_RUNTIME_ENTRY_REACHES_ONLY_THE_RUNTIME_AND_THE_CORE_BY_VALUE_AND_MODEL_TS_ONLY_AS_A_TYPE',
+        held136,
+        probeDetail(held136, probes136, `./runtime is ${entry}; its static value closure over src/ read off the disk is ${live136.modules.length} module(s), every one under src/runtime/ or src/core/, none importing a package or a node builtin by value; planted in src/runtime/pose.ts, ${caught136.length} of ${plants136.length} are named — ${caught136.join('; ')}`),
+        'issue #1591: rig-c/runtime is the in-place poser a browser player (play#200) bundles, so it carries rig-c/core\'s promise — nothing a browser lacks; the entry is experimental, the browser rule is not',
+      );
+    }
+
     // CUR117 — RELEASING.md's row of the commands an install without the
     // runtime runs is the set the command table derives (issue #1178). At
     // v2.12.0 the row listed eight while `bun cli_core.ts --help` listed ten —
@@ -93923,9 +94031,9 @@ function specifiersOf(code: string): Array<{ spec: string; typeOnly: boolean }> 
  * names no forbidden module and makes no forbidden call; the core itself also
  * imports nothing outside `src/`. Comments are not code (`codeOnly`).
  */
-function coreTreeProblems(population: ReadonlyMap<string, string>): string[] {
+function coreTreeProblems(population: ReadonlyMap<string, string>, prefix = 'src/core/'): string[] {
   const problems: string[] = [];
-  const core = [...population.keys()].filter((p) => p.startsWith('src/core/')).sort();
+  const core = [...population.keys()].filter((p) => p.startsWith(prefix)).sort();
   const seen = new Set<string>();
   const queue = [...core];
   while (queue.length > 0) {
@@ -93938,7 +94046,7 @@ function coreTreeProblems(population: ReadonlyMap<string, string>): string[] {
       continue;
     }
     const code = codeOnly(text);
-    const inCore = rel.startsWith('src/core/');
+    const inCore = rel.startsWith(prefix);
     for (const { spec, typeOnly } of specifiersOf(code)) {
       if (CORE_FORBIDDEN_MODULES.some((re) => re.test(spec)) && (inCore || !typeOnly)) problems.push(`${rel} imports "${spec}"${inCore ? '' : ', and the core reaches it'}`);
       if (!spec.startsWith('.')) continue;
@@ -93952,7 +94060,7 @@ function coreTreeProblems(population: ReadonlyMap<string, string>): string[] {
     }
     for (const [re, what] of CORE_FORBIDDEN_CALLS) if (re.test(code)) problems.push(`${rel} reaches ${what} (${re.source})`);
   }
-  if (core.length === 0) problems.push('no file under src/core/ was read, so the rule held nothing');
+  if (core.length === 0) problems.push(`no file under ${prefix} was read, so the rule held nothing`);
   return problems;
 }
 
@@ -147494,6 +147602,7 @@ function main(): void {
   tally.of('gate-helper', runGateHelperSuite);
   tally.of('setup-mesh', runSetupMesh1538Suite);
   tally.of('physics-parameters', runPhysicsParameters1541Suite);
+  tally.of('runtime-poser', runRuntimePoserSuite);
   const gallery = tally.of('gallery-example', runGallerySuite, {
     ran: (value) => value.examples > 0,
     failures: (value) => value.failures,
@@ -147808,6 +147917,7 @@ function main(): void {
   const gateHelpers =
     ', + ' + n('setup-mesh') + ' named setup mesh read controls (issue #1538)' +
     ', + ' + n('physics-parameters') + ' live named physics parameter override controls (issue #1541)' +
+    ', + ' + n('runtime-poser') + ' runtime poser controls (issue #1591 — the in-place poser against the oracle at tolerance 0 on the gallery and a seeded population, a planted perturbation, a wrong-index binding and a smuggled refusal each caught, no allocation per frame, every refusal named)' +
     ', + ' + n('sheet') + ' sprite-sheet export controls (issue #1560)' +
     ', + ' + n('gate-helper') + ' controls over the helpers the gates themselves call (issue #499 — the guard ' +
     'inside the helper a control hands its verdict and its probe list to: a FALSE verdict over an EMPTY list is ' +

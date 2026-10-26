@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.72.0](https://github.com/rig-c/core/compare/v2.71.0...v2.72.0) (2026-10-26)
+
+
+### Features
+
+* **depth:** allow a depth sheet and a depth turn on authored and weighted meshes ([#1598](https://github.com/rig-c/core/issues/1598)) ([22cb092](https://github.com/rig-c/core/commit/22cb0925d6c9a1fc6915605a50e39435d1a34990)), closes [#1590](https://github.com/rig-c/core/issues/1590)
+* **meshcompare:** a prepared-reference API so the acceptance loop stops re-parsing the reference ([#1599](https://github.com/rig-c/core/issues/1599)) ([f7ee647](https://github.com/rig-c/core/commit/f7ee64749ebabd97dd0e471a963d220f24d916cf)), closes [#1595](https://github.com/rig-c/core/issues/1595)
+* **runtime:** stage 1 — pose skins and fire events in the runtime poser ([#1602](https://github.com/rig-c/core/issues/1602)) ([da0bb29](https://github.com/rig-c/core/commit/da0bb2973761338383d4ee640f27eb4c2d7124f3))
+
 ## [2.71.0](https://github.com/rig-c/core/compare/v2.70.0...v2.71.0) (2026-10-26)
 
 

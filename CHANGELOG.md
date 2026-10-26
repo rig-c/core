@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.73.0](https://github.com/rig-c/core/compare/v2.72.0...v2.73.0) (2026-10-26)
+
+
+### Features
+
+* **clipping:** derive a clip polygon from a slot's alpha contour ([#1604](https://github.com/rig-c/core/issues/1604)) ([7f6ed9e](https://github.com/rig-c/core/commit/7f6ed9e8a2622e5b66b54f592ba827924ca87d63))
+
 ## [2.72.0](https://github.com/rig-c/core/compare/v2.71.0...v2.72.0) (2026-10-26)
 
 

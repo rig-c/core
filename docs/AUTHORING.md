@@ -12568,11 +12568,16 @@ key to guess the source from. These load-time strings do not change the pose pat
 | time | one animation at full weight from the setup pose, at a time (`apply`) or stepped as a looping track (`step`, the track time wrapped by the duration as `openTrack` wraps it) |
 
 Skin switching is a load-time view change: compile `underSkin(document, name)`
-(or `underNoSkin(document)`), create the replacement `RuntimePose`, select its
-animation, restore its accumulated `trackTime`, and call `apply` with the old
-wrapped animation time (`oldPose.time`), not the accumulated track time. The old buffers belong to the old
-view; do not keep drawing them as the new skin. An ambiguous merged `all` view
-still refuses `skin-conflict`; that refusal does not reject either named view.
+(or `underNoSkin(document)`), create the replacement `RuntimePose`, then call
+`replacement.restore(animationName, oldPose.trackTime, oldPose.time)`. Restore
+carries both clocks **and the event cursor**: its event list is empty, a key at
+or before that restored animation time is not fired again, and later keys and
+subsequent loops still deliver normally. Do not restore by setting trackTime and
+calling apply: setAnimation starts the event cursor at −1, so that sequence
+replays already-passed cues. `restore` refuses non-finite times by name.
+The old buffers belong to the old view; do not keep drawing them as the new
+skin. An ambiguous merged `all` view still refuses `skin-conflict`; that refusal
+does not reject either named view.
 
 Read `pose.events` immediately after `apply`/`step`. It is a reused borrowed list
 of immutable load-time records: `name`, float32 key `time`, `int`, `float`,

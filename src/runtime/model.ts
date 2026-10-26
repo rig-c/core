@@ -123,6 +123,8 @@ export interface RuntimePlant {
   readonly attachmentSkin?: string;
   /** Drops a key at zero on a wrap, the event boundary plant. */
   readonly eventWrapOffByOne?: boolean;
+  /** The old restore behavior, which repeats keys up to the restored time. */
+  readonly restoreEventsFromStart?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -306,6 +308,7 @@ export interface RuntimeAnimation {
 export interface RuntimeModel {
   /** Control-only boundary defect; fixed at load. */
   readonly eventWrapOffByOne: boolean;
+  readonly restoreEventsFromStart: boolean;
   readonly doc: CompiledDocument;
   readonly boneNames: readonly string[];
   readonly parents: Int32Array;
@@ -552,6 +555,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   const names = doc.animations.map((a) => a.name);
   return {
     eventWrapOffByOne: plant.eventWrapOffByOne === true,
+    restoreEventsFromStart: plant.restoreEventsFromStart === true,
     doc,
     boneNames: doc.bones.map((b) => b.name),
     parents,

@@ -34,7 +34,8 @@
  * falls back to the oracle for a refused model or animation, so nothing breaks
  * while coverage grows. Named skin views and their required bones are posed;
  * to switch, compile the new underSkin/underNoSkin view at load and restore the
- * animation/time in a fresh pose. `pose.events` borrows immutable seven-field
+ * animation/time and event cursor with newPose.restore(name, old.trackTime,
+ * old.time). Restoration delivers no already-passed cue. `pose.events` borrows immutable seven-field
  * deliveries over the last interval, in oracle order, until the next apply/step.
  *
  * ```ts

@@ -1,7 +1,7 @@
 /** Stage-one runtime event/skin controls, using the public oracle API. */
 import { readModel, underSkin, underNoSkin } from '../src/core/index.ts';
 import { openTrack } from '../src/core/track.ts';
-import { compileRuntime, RuntimePose, WORLDS, type RuntimePlant } from '../src/runtime/index.ts';
+import { compileRuntime, RuntimePose, RuntimeInputError, WORLDS, type RuntimePlant } from '../src/runtime/index.ts';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -74,7 +74,7 @@ export function runtimeStage1Cases(say: Say): void {
   // Skin switch is a load-time view change, as underSkin/openTrack are immutable views.
   for (const skin of ['default', 'alt', 'default']) {
     const pose = new RuntimePose(compileRuntime(underSkin(doc, skin)));
-    pose.setAnimation('hold'); pose.trackTime = 1.375; pose.apply(0.375);
+    pose.restore('hold', 1.375, 0.375);
     const raw = openTrack(underSkin(doc, skin), 'hold', { loop: true, reset: 'animation' }).step(1.375);
     for (let i = 0; i < raw.bones.length; i++) {
       const bone = raw.bones[i];
@@ -85,6 +85,37 @@ export function runtimeStage1Cases(say: Say): void {
     if (pose.model.active[required] !== (skin === 'alt' ? 1 : 0)) problems.push(`${skin}: skin-required bone activity is wrong`);
   }
   say('RP14_NAMED_SKINS_SWITCH_VIEWS_AND_WRONG_ATTACHMENT_IS_CAUGHT_BY_NAME', problems, `default and alt, skin-required bone inactive/active, track time 1.375 and wrapped animation time 0.375 restored on an animated root; wrong-skin plant: ${wrong.verdict} ${wrong.why}`);
+  const restoreControl = (plant: RuntimePlant): string[] => {
+    const faults: string[] = [];
+    const text = probeModel({ bones: [{ name: 'root' }], skins: [{ name: 'alt', bones: [], constraints: {}, attachments: {} }], events: [{ name: 'before' }, { name: 'after' }], animations: [{ name: 'a', duration: 1, events: [{ time: 0.25, name: 'before' }, { time: 0.75, name: 'after' }] }] });
+    const doc = readModel(text);
+    const old = new RuntimePose(compileRuntime(underSkin(doc, 'default')));
+    old.setAnimation('a'); old.step(0.5);
+    if (old.events.map(e => e.name).join(',') !== 'before') faults.push('the original pose did not deliver before');
+    const fresh = new RuntimePose(compileRuntime(underSkin(doc, 'alt'), {}, plant));
+    fresh.restore('a', old.trackTime, old.time);
+    for (const event of fresh.events) faults.push(`restore re-fired event "${event.name}" at ${event.time}`);
+    fresh.step(0.25);
+    if (fresh.events.map(e => e.name).join(',') !== 'after') faults.push('the key after restoration was lost or repeated');
+    fresh.step(0.5);
+    if (fresh.events.map(e => e.name).join(',') !== 'before') faults.push('the next loop did not deliver before exactly once');
+    const heldTime = fresh.trackTime;
+    for (const [name, trackTime, animationTime, expected] of [
+      ['a', Number.NaN, 0.5, 'restore: track time'],
+      ['a', 0.5, Number.POSITIVE_INFINITY, 'restore: animation time'],
+      ['missing', 0.5, 0.5, '"missing" is not one of'],
+    ] as const) {
+      try { fresh.restore(name, trackTime, animationTime); faults.push(`${expected}: no refusal`); }
+      catch (error) { if (!(error instanceof RuntimeInputError) || !error.message.includes(expected)) faults.push(`${expected}: wrong refusal ${String(error)}`); }
+      if (fresh.trackTime !== heldTime) faults.push(`${expected}: failed restore changed the running track time`);
+    }
+
+    return faults;
+  };
+  const restored = restoreControl({});
+  const repeated = restoreControl({ restoreEventsFromStart: true });
+  if (!repeated.some(message => message.includes('re-fired event "before"'))) restored.push(`old restore plant did not name the repeated event: ${repeated.join('; ')}`);
+  say('RP16_RESTORE_CARRIES_EVENT_CURSOR_WITHOUT_REPLAYING_PASSED_CUES', restored, `default→alt at track/animation time 0.5; after at 0.75 then before once next loop; old behavior plant: ${repeated[0] ?? 'not detected'}`);
   const work = mkdtempSync(join(tmpdir(), 'runtime-stage1-'));
   try {
     const model = join(work, 'events.model.json');

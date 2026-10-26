@@ -170,6 +170,20 @@ export class RuntimePose {
     this.fired.length = 0;
   }
 
+  /**
+   * Restore one animation's two clocks without delivering keys already passed.
+   * A skin/view replacement uses the old pose's trackTime and wrapped time.
+   * Unlike setAnimation + apply, restoration never replays the initial interval.
+   */
+  restore(name: string, trackTime: number, animationTime: number): void {
+    if (!Number.isFinite(trackTime)) throw new RuntimeInputError(`restore: track time ${trackTime} is not finite`);
+    if (!Number.isFinite(animationTime)) throw new RuntimeInputError(`restore: animation time ${animationTime} is not finite`);
+    this.setAnimation(name);
+    this.trackTime = trackTime;
+    if (!this.model.restoreEventsFromStart) this.eventTime = animationTime;
+    this.apply(animationTime);
+  }
+
   /** The setup pose: every constraint applied with its own values, every slot as it is set up. */
   setupPose(): void {
     this.current = null;

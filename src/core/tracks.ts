@@ -1475,7 +1475,10 @@ class Tracks implements LiveTracks {
     if (typeof dt !== 'number' || !Number.isFinite(dt) || dt < 0) throw new CoreInputError(`the live tracks' step ${n} is ${String(dt)}, not a finite time at or above 0`);
     return this.guard(`step ${n}`, () => {
       this.time += dt;
+      const stage = this.plant.stage;
+      if (stage !== undefined) stage.begin('timeline');
       this.mixer.update(dt);
+      if (stage !== undefined) stage.end('timeline');
       const pose = this.pose(dt, false);
       this.steps = n;
       return pose;
@@ -1498,6 +1501,8 @@ class Tracks implements LiveTracks {
     const ctx = path.ctx;
     const before = ctx.time;
     ctx.time += this.clock === undefined ? dt : this.clock(dt);
+    const stage = this.plant.stage;
+    if (stage !== undefined) stage.begin('timeline');
     const pose = new Pose(doc, this.plant);
     const animationTime = this.mixer.apply(pose);
     const entry = this.mixer.tracks[0] ?? null;
@@ -1506,6 +1511,7 @@ class Tracks implements LiveTracks {
       context: { trackTime: entry?.trackTime ?? null, animation: entry?.anim.name ?? null, globalTime: this.time },
     };
     const mixed = new Map(doc.slots.map((s, k) => [s.name, { deform: pose.slots[k].deform, seen: pose.slots[k].seen }]));
+    if (stage !== undefined) stage.end('timeline');
     return path.step(first, this.time, animationTime, {
       world: (sliders) => steppedLocalsWorld(doc, pose.bones, path.raw, sliders, { ctx, before, adjustment }),
       slots: (sliders, placeholders) => slotRowsFrom(doc, path.raw, sliders, placeholders, (_slot, _live): SlotBase => {

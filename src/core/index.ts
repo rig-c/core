@@ -176,7 +176,7 @@ import type { ModelAtlasRect, ModelBone, ModelEditorOrder, ModelPage, ModelPageR
 import { worldTransforms, type CoreWorld } from './world.ts';
 import { readAnimationTimelines, type CoreAnimationTimelines } from './animation.ts';
 import { readEventDefs, type CoreEventDef } from './events.ts';
-import { poseGeometry, readGeometry, type CoreAttachmentRow, type CoreClipRow, type CoreGeometry, type DrawWalk, type MeshArraysOf, type RegionPoser, type ShownGeometry, type VertexPoser } from './vertices.ts';
+import { poseGeometry, readGeometry, type CoreAttachmentRow, type CoreClipRow, type CoreGeometry, type DeformedVertexPoser, type DrawWalk, type MeshArraysOf, type RegionPoser, type ShownGeometry, type VertexPoser } from './vertices.ts';
 import type { CoreClippedRow, ShapeClipper, TriangleClipper } from './clipping.ts';
 import { applyConstraints, constraintsAbsentWhy, readConstraintRecord, readConstraintTimelines, solverRules, type ConstraintPlant, type CoreConstraintRecord, type CoreConstraintTimelines, type SolverRules } from './constraints.ts';
 import { readPathRecord } from './constraints_path.ts';
@@ -1063,6 +1063,23 @@ export type BlendReader = (slot: ModelSlot) => CoreBlendMode;
 export type ColourReader = (hex: string) => [number, number, number, number];
 
 /**
+ * The five pose stages a step passes through when instrumented (`StageHooks`,
+ * issue #1589):
+ * - `timeline`: timeline evaluation, animated bone local copy, attachment/deform/sequence timeline states
+ * - `world`: bone hierarchy world-transform composition (`worldTransforms`)
+ * - `constraints`: constraint record posing, physics step, and constraint solver orchestration (`applyConstraints`)
+ * - `geometry`: region corners, mesh/deformed world vertices, and triangle clipping (`drawnGeometry`)
+ * - `readout`: slot rows, draw-order resolution/sorting, bone rows, drawn row packaging, and events
+ */
+export type CoreStage = 'timeline' | 'world' | 'constraints' | 'geometry' | 'readout';
+
+/** Zero-cost-when-absent per-stage instrumentation callbacks on `CorePlant` (issue #1589). */
+export interface StageHooks {
+  begin(stage: CoreStage): void;
+  end(stage: CoreStage): void;
+}
+
+/**
  * What the core poses with, each part replaceable. The core suite's plants
  * pass a copy of one of them — a mode's sign flipped, the wrong skin, a
  * channel misread — and nothing else passes any.
@@ -1077,6 +1094,8 @@ export interface CorePlant {
   region?: RegionPoser;
   /** A vertex array's world positions (`worldVertices` in `./vertices.ts`). */
   vertices?: VertexPoser;
+  /** A deformed vertex array's world positions (`deformedWorldVertices` in `./vertices.ts`). */
+  deformedVertices?: DeformedVertexPoser;
   /** A drawn mesh's read-only UVs and triangles (`meshArraysOf` in `./vertices.ts`) — the raw entry's `drawn`; nothing but a control passes one. */
   meshArrays?: MeshArraysOf;
   /** The ik, transform and path constraints as posed, rewritten before they are applied (`./constraints.ts`). */
@@ -1107,6 +1126,8 @@ export interface CorePlant {
    * `rawNumber`, the unrounded double.
    */
   round?: (v: number) => number | null;
+  /** Per-stage instrumentation callbacks for `tools/pose_bench.ts` (issue #1589); absent on every uninstrumented walk. */
+  stage?: StageHooks;
 }
 
 /** The document's ik, transform and path constraint records, in its order — what `applyConstraints` runs. */

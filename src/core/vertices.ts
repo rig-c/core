@@ -191,6 +191,8 @@ export type CoreClipRow = [string, string, string | null, Array<number | null>];
 export type RegionPoser = (region: CoreRegionGeometry & { atlas: ModelAtlasRect }, bone: CoreWorld) => number[];
 /** What computes a vertex array's world positions: `worldVertices` unless a caller passes another. */
 export type VertexPoser = (vertices: ModelVertices, bone: CoreWorld, world: ReadonlyMap<string, CoreWorld>, coords?: (v: number) => number) => number[];
+/** What computes a deformed vertex array's world positions in one pass: `deformedWorldVertices` unless a caller passes another. */
+export type DeformedVertexPoser = (vertices: ModelVertices, deform: readonly number[], bone: CoreWorld, world: ReadonlyMap<string, CoreWorld>) => number[];
 
 /** A deformed array's coordinates are read as they are (`./deform.ts`, `deformedVertices`): they are not the stored float32s. */
 export const EXACT_COORDS = (v: number): number => v;
@@ -664,11 +666,12 @@ export function poseGeometry(
   world: ReadonlyMap<string, CoreWorld>,
   sourceOf: SourceOf,
   round: (v: number) => number | null,
-  plant: { region?: RegionPoser; vertices?: VertexPoser } = {},
+  plant: { region?: RegionPoser; vertices?: VertexPoser; deformedVertices?: DeformedVertexPoser } = {},
   draw?: DrawWalk,
 ): { attachments: CoreAttachmentRow[] | null; attachmentsWhy: string | null; clips: CoreClipRow[]; clipped: CoreClippedRow[] | null; clippedWhy: string | null; drawnClipped: CoreClippedRow[] | null; drawnClippedWhy: string | null } {
   const region = plant.region ?? regionCorners;
   const vertices = plant.vertices ?? worldVertices;
+  const deformPoser = plant.deformedVertices ?? deformedWorldVertices;
   const attachments: CoreAttachmentRow[] = [];
   const clips: CoreClipRow[] = [];
   const nulls: string[] = [];
@@ -683,7 +686,7 @@ export function poseGeometry(
     // A deform array replaces the stored vertices, its coordinates read as they are (`./deform.ts`).
     // Unplanted, the deformed positions are read in one pass (`deformedWorldVertices`, issue #1530) rather than through a deformed copy of the array.
     const deform = s.deform;
-    const drawn = (v: ModelVertices): number[] => (deform === undefined ? vertices(v, bone, world) : plant.vertices === undefined ? deformedWorldVertices(v, deform, bone, world) : vertices(deformedVertices(v, deform), bone, world, EXACT_COORDS));
+    const drawn = (v: ModelVertices): number[] => (deform === undefined ? vertices(v, bone, world) : plant.vertices === undefined || plant.deformedVertices !== undefined ? deformPoser(v, deform, bone, world) : vertices(deformedVertices(v, deform), bone, world, EXACT_COORDS));
     if (g.kind === 'region') {
       const rect = s.frame === undefined ? g.region.atlas : (g.region.frames?.[s.frame] ?? g.region.atlas);
       if (rect === null) {

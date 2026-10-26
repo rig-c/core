@@ -342,7 +342,7 @@ function scanBones(doc: CompiledDocument, world: ReadonlyMap<string, CoreWorld>)
  */
 function drawnGeometry(doc: CompiledDocument, shown: readonly ShownGeometry[], world: ReadonlyMap<string, CoreWorld>, order: readonly string[], plant: CorePlant, mode: WalkMode): { rows: CoreAttachmentRow[]; clips: CoreClipRow[]; drawnClipped: CoreClippedRow[] } {
   const draw = drawWalkOf(doc, order, plant);
-  const geometry = poseGeometry(shown, world, sourceOfDoc(doc), mode.keep ? keptNumber : rawNumber, { region: plant.region, vertices: plant.vertices }, mode.loop && mode.live !== true && plant.through === undefined ? { ...draw, through: NO_CLIPPED_ROWS } : draw);
+  const geometry = poseGeometry(shown, world, sourceOfDoc(doc), mode.keep ? keptNumber : rawNumber, { region: plant.region, vertices: plant.vertices, deformedVertices: plant.deformedVertices }, mode.loop && mode.live !== true && plant.through === undefined ? { ...draw, through: NO_CLIPPED_ROWS } : draw);
   if (geometry.attachments === null) throw new CoreInputError(`the raw pose leaves the attachments out: ${geometry.attachmentsWhy}`);
   // The drawn rows (issue #964): the oracle's `clipped` rows where it is posed, and a concave or inverse clip cut through the core's own decomposition.
   if (geometry.drawnClipped === null) throw new CoreInputError(`the raw pose leaves the clipped triangles out: ${geometry.drawnClippedWhy}`);
@@ -423,7 +423,13 @@ export interface ScanPlant {
 
 /** Every region and mesh the shown records draw, with what the renderer reads past the vertices (the header's `drawn`). */
 function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world: ReadonlyMap<string, CoreWorld>, order: readonly string[], plant: CorePlant, mode: WalkMode = RAW_MODE): { drawn: RawDrawn[]; clips: RawClip[]; clipped: RawClipped[] } {
+  const stage = plant.stage;
+  if (stage !== undefined) stage.begin('geometry');
   const geometry = drawnGeometry(doc, shown, world, order, plant, mode);
+  if (stage !== undefined) {
+    stage.end('geometry');
+    stage.begin('readout');
+  }
   // Under a concave or inverse clip the oracle's `clipped` block is absent (the runtime's own triangle list); what the core draws is `drawnClipped`,
   // its own decomposition, and the render samples each drawn triangle at its source triangle's affine UV, so the pixels are the decomposition's
   // coverage alone (issue #964, `Mesh.source` in src/render.ts).
@@ -457,6 +463,7 @@ function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world:
   }
   const clips = geometry.clips.map((c): RawClip => [c[0], c[1], c[2], numbersOf(c[3], `clip vertex of slot "${c[0]}"`, mode)]);
   const clipped = geometry.drawnClipped.map((c): RawClipped => [c[0], c[1], c[2], numbersOf(c[3], `clipped vertex of slot "${c[0]}"`, mode), numbersOf(c[4], `clipped uv of slot "${c[0]}"`, mode), c[5]]);
+  if (stage !== undefined) stage.end('readout');
   return { drawn, clips, clipped };
 }
 
@@ -809,8 +816,12 @@ const RAW_SHAPE: PoseShape<RawPose> = {
   setup: (doc, world, slots, drawOrder, shown, plant, mode) => ({ trackTime: 0, animationTime: 0, bones: rawBones(doc, world), slots, drawOrder, ...rawDrawn(doc, shown, world, drawOrder, plant, mode), events: [], shown: drawOrderOf(shown, drawOrder) }),
   step: (doc, p, plant, mode) => {
     const drawn = rawDrawn(doc, p.shown, p.world, p.drawOrder, plant, mode);
+    const stage = plant.stage;
+    if (stage !== undefined) stage.begin('readout');
     const events = p.events();
-    return { trackTime: p.trackTime, animationTime: p.animationTime, bones: rawBones(doc, p.world), slots: p.slots, drawOrder: p.drawOrder, ...drawn, events, shown: p.shown };
+    const pose: RawPose = { trackTime: p.trackTime, animationTime: p.animationTime, bones: rawBones(doc, p.world), slots: p.slots, drawOrder: p.drawOrder, ...drawn, events, shown: p.shown };
+    if (stage !== undefined) stage.end('readout');
+    return pose;
   },
 };
 
@@ -953,20 +964,30 @@ export interface StepPosers {
  * and a live tracks' step share.
  */
 function poseStepFrom<P>(doc: CompiledDocument, plant: TimelinePlant, resolve: NonNullable<TimelinePlant['shown']>, shape: PoseShape<P>, mode: WalkMode, ctx: ReturnType<typeof freshStepContext>, first: boolean, trackTime: number, animationTime: number, posers: StepPosers): P {
+  const stage = plant.stage;
   const sliders: SliderApplication[] = [];
   const world = posers.world(sliders);
   if (first) ctx.phase = 'update';
+  if (stage !== undefined) stage.begin('readout');
   const placeholders = new Map<string, string | null>();
   const slots = posers.slots(sliders, placeholders);
   if (slots.conflicts.length > 0) throw new CoreInputError(`the raw walk leaves the slots out: ${slots.conflicts.join('; ')}`);
   const evalOrder = plant.drawOrder ?? drawOrderAt;
-  let order = evalOrder(doc.slots.length, posers.drawOrder, posers.at) ?? doc.slots.map((_s, k) => k);
+  const baseOrder = evalOrder(doc.slots.length, posers.drawOrder, posers.at) ?? doc.slots.map((_s, k) => k);
+  let order = baseOrder;
   for (const app of sliders) order = evalOrder(doc.slots.length, app.timelines.drawOrder, app.at) ?? order;
   const drawOrder = order.map((k) => doc.slots[k].name);
+  if (stage !== undefined) {
+    stage.end('readout');
+    stage.begin('timeline');
+  }
   const states = attachmentStates(doc, resolve, placeholders, posers.sample, sliders, plant, posers.mixed);
+  if (stage !== undefined) stage.end('timeline');
   if (states.why.length > 0) throw new CoreInputError(`the raw walk leaves the attachments out: ${states.why.join('; ')}`);
+  if (stage !== undefined) stage.begin('readout');
   const rank = new Map(drawOrder.map((n, r) => [n, r]));
   const shown = [...states.shown].sort((a, b) => (rank.get(a.slot) ?? 0) - (rank.get(b.slot) ?? 0));
+  if (stage !== undefined) stage.end('readout');
   const events = (): RawEvent[] => posers.events().map((e): RawEvent => [e[0], finite(e[1], 'event time'), e[2], finite(e[3], 'event float'), e[4]]);
   return shape.step(doc, { trackTime, animationTime, world, slots: slots.rows, drawOrder, shown, events }, plant, mode);
 }

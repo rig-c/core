@@ -21,7 +21,7 @@
  * corpus through both at the oracle's samples and compares full doubles at
  * tolerance 0 (*The runtime poser* there). The oracle is not changed for it.
  *
- * ## Stage 0: what it poses, and what it refuses
+ * ## Stage 1: what it poses, and what it refuses
  *
  * Bones and their five inherit modes; the rotate, translate, scale and shear
  * timelines; a slot's attachment and colour (`rgba`, `rgb`, `alpha`)
@@ -32,10 +32,13 @@
  * looping track. Everything else is refused at load by name with the list of
  * what is missing (`./model.ts`'s header and `RUNTIME_FEATURES`); a consumer
  * falls back to the oracle for a refused model or animation, so nothing breaks
- * while coverage grows.
+ * while coverage grows. Named skin views and their required bones are posed;
+ * to switch, compile the new underSkin/underNoSkin view at load and restore the
+ * animation/time in a fresh pose. `pose.events` borrows immutable seven-field
+ * deliveries over the last interval, in oracle order, until the next apply/step.
  *
  * ```ts
- * const model = compileRuntime(underNoSkin(readModel(text)), { ignore: ['events'] });
+ * const model = compileRuntime(underNoSkin(readModel(text)));
  * const pose = new RuntimePose(model);
  * pose.setAnimation('walk');
  * pose.step(1 / 60);       // or pose.apply(t)
@@ -76,5 +79,5 @@ export {
   L_SHEAR_X,
   L_SHEAR_Y,
 } from './model.ts';
-export type { RuntimeAnimation, RuntimeAttachment, RuntimeFeature, RuntimeMissing, RuntimeModel, RuntimeOptions, RuntimePlant, RuntimeSlot } from './model.ts';
+export type { RuntimeAnimation, RuntimeEvent, RuntimeAttachment, RuntimeFeature, RuntimeMissing, RuntimeModel, RuntimeOptions, RuntimePlant, RuntimeSlot } from './model.ts';
 export { RuntimePose } from './pose.ts';

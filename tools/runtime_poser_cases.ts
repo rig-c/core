@@ -338,7 +338,7 @@ export function allocationPerFrame(root: string, model: string, animation: strin
 /** Every pose of a looping walk, the runtime's `step` against the core's live track (`openTrack`), every bone's world, every slot's colour and every drawn vertex by `Object.is`. */
 function stepAgainstTrack(text: string, animation: string, steps: readonly number[]): { first: string | null; poses: number; values: number } {
   const view = underNoSkin(readModel(text));
-  const runtime = compileRuntime(view, { ignore: ['events'] });
+  const runtime = compileRuntime(view);
   const pose = new RuntimePose(runtime);
   pose.setAnimation(animation);
   pose.apply(0);
@@ -564,7 +564,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     if (plain.model === null) probes.push(`the base probe was refused: ${plain.message}`);
     // The model's own constructs: each refuses the whole model, naming itself.
     const modelProbes: Array<[RuntimeFeature, ProbeSpec]> = [
-      ['skin', { ...base, skins: [{ name: 'extra', bones: [], constraints: {}, attachments: {} }] }],
       ['local-transform', { ...base, constraints: [{ kind: 'transform', name: 'x', bones: ['b'], source: 't', localSource: true, properties: { x: { to: { x: {} } } } }] }],
       ['additive-transform', { ...base, constraints: [{ kind: 'transform', name: 'x', bones: ['b'], source: 't', additive: true, properties: { x: { to: { x: {} } } } }] }],
       ['inactive-constrained-bone', { ...base, bones: base.bones.map((b) => (b.name === 'b' ? { ...b, skinRequired: true } : b)) }],
@@ -589,7 +588,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
       ['deform-timeline', base, { name: 'x', attachments: [{ name: 'default', slots: [{ name: 'm', attachments: [{ name: 'mesh', deform: [{ time: 0, vertices: [1, 2, 3, 4, 5, 6] }, { time: 1 }] }] }] }] }],
       ['sequence-timeline', { ...base, attachments: { ...base.attachments, s: { p: seqRegion } } }, { name: 'x', attachments: [{ name: 'default', slots: [{ name: 's', attachments: [{ name: 'p', sequence: [{ time: 0, mode: 'loop', index: 0, delay: 0.1 }] }] }] }] }],
       ['draw-order-timeline', base, { name: 'x', drawOrder: [{ time: 0.5, offsets: [{ slot: 's', offset: 1 }] }] }],
-      ['events', { ...base, events: [{ name: 'e' }] }, { name: 'x', events: [{ time: 0.5, name: 'e' }] }],
       ['dark-colour-timeline', { ...base, slots: [{ name: 's', bone: 'b', setup: 'p', dark: '000000' }, base.slots?.[1] as Obj] }, { name: 'x', slots: [{ name: 's', timelines: [{ name: 'rgba2', keys: [{ time: 0, light: 'ffffffff', dark: '102030' }] }] }] }],
       ['clipping', { ...base, attachments: { ...base.attachments, s: { ...(base.attachments?.s ?? {}), c: { kind: 'clipping', vertexCount: 3, vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] } } } } }, { name: 'x', slots: [{ name: 's', timelines: [{ name: 'attachment', keys: [{ time: 0.5, name: 'c' }] }] }] }],
     ];
@@ -605,10 +603,7 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
       }
       if (r.model === null || refusal === undefined || !refusal.missing.some((m) => m.feature === feature) || !thrown.includes(feature) || !r.model.animations.has('idle')) probes.push(`${feature}: ${r.model === null ? `the model was refused [${r.features.join(', ')}]` : `refused [${refusal?.missing.map((m) => m.feature).join(', ') ?? 'nothing'}], animation("x") threw ${JSON.stringify(thrown.slice(0, 120))}, idle ${r.model.animations.has('idle') ? 'posed' : 'not posed'}`}`);
       else fired.add(feature);
-      if (feature === 'events') {
-        const asked = refusalOf(text, { ignore: ['events'] });
-        if (asked.model === null || !asked.model.animations.has('x')) probes.push('events: with ignore: [\'events\'] the animation was still refused');
-      }
+
     }
     const unfired = RUNTIME_FEATURES.filter((f) => !fired.has(f));
     if (unfired.length > 0) probes.push(`no probe refused by [${unfired.join(', ')}]`);
@@ -631,7 +626,7 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     say(
       'RP08_EVERY_CONSTRUCT_STAGE_0_DOES_NOT_POSE_IS_REFUSED_BY_NAME_THE_MODELS_AT_LOAD_AND_AN_ANIMATIONS_ALONE',
       probes,
-      `each of the ${RUNTIME_FEATURES.length} features refused by a probe naming it — ${modelProbes.length} hand-written models refused at load, the path, slider and physics constraints off the gallery, ${animationProbes.length} animations refused alone while the model's other animation is posed; events posed on request (ignore: ['events']); no animation set, an unknown animation and a time that is not finite refused by name`,
+      `each of the ${RUNTIME_FEATURES.length} features refused by a probe naming it — ${modelProbes.length} hand-written models refused at load, the path, slider and physics constraints off the gallery, ${animationProbes.length} animations refused alone while the model's other animation is posed; skin views and event delivery are covered by stage-one controls; no animation set, an unknown animation and a time that is not finite refused by name`,
     );
   }
 
@@ -689,7 +684,7 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
 function allocChild(argv: readonly string[]): number {
   const [model, animation, plant] = argv;
   const view = underNoSkin(readModel(readFileSync(model, 'utf8'), model));
-  const runtime = compileRuntime(view, { ignore: ['events'] });
+  const runtime = compileRuntime(view);
   const pose = new RuntimePose(runtime);
   pose.setAnimation(animation);
   pose.apply(0);

@@ -33,6 +33,10 @@ import { gridRound } from './index.ts';
 
 /** An event definition, as the model states it (`ModelEvent`): the payload a key falls back to. */
 export interface CoreEventDef {
+  /** Audio metadata retained additively; the five-column oracle row is unchanged. */
+  audio?: string;
+  volume?: number;
+  balance?: number;
   name: string;
   int: number;
   float: number;
@@ -41,6 +45,9 @@ export interface CoreEventDef {
 
 /** One event key, as read: its time (float32) and the payload it fires with, each field resolved. */
 export interface CoreEventKey {
+  /** Audio delivery values, as observed from the public EventTimeline API. */
+  volume?: number;
+  balance?: number;
   time: number;
   name: string;
   int: number;
@@ -55,8 +62,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const EVENT_DEF_FIELDS = ['name', 'int', 'float', 'string', 'audio', 'volume', 'balance'] as const;
 const EVENT_KEY_FIELDS = ['time', 'name', 'int', 'float', 'string', 'volume', 'balance'] as const;
 
-function payload(raw: Record<string, unknown>, at: string, problems: string[]): { int?: number; float?: number; string?: string } {
-  const out: { int?: number; float?: number; string?: string } = {};
+function payload(raw: Record<string, unknown>, at: string, problems: string[]): { int?: number; float?: number; string?: string; volume?: number; balance?: number } {
+  const out: { int?: number; float?: number; string?: string; volume?: number; balance?: number } = {};
   if (raw.int !== undefined) {
     if (typeof raw.int !== 'number' || !Number.isInteger(raw.int)) problems.push(`${at}: int is ${JSON.stringify(raw.int)}, not a whole number`);
     else out.int = raw.int;
@@ -69,7 +76,10 @@ function payload(raw: Record<string, unknown>, at: string, problems: string[]): 
     if (typeof raw.string !== 'string') problems.push(`${at}: string is ${JSON.stringify(raw.string)}, not a string`);
     else out.string = raw.string;
   }
-  for (const key of ['volume', 'balance'] as const) if (raw[key] !== undefined && (typeof raw[key] !== 'number' || !Number.isFinite(raw[key]))) problems.push(`${at}: ${key} is ${JSON.stringify(raw[key])}, not a finite number`);
+  for (const key of ['volume', 'balance'] as const) if (raw[key] !== undefined) {
+    if (typeof raw[key] !== 'number' || !Number.isFinite(raw[key])) problems.push(`${at}: ${key} is ${JSON.stringify(raw[key])}, not a finite number`);
+    else out[key] = raw[key];
+  }
   return out;
 }
 
@@ -90,7 +100,7 @@ export function readEventDefs(value: unknown, problems: string[]): Map<string, C
     if (raw.audio !== undefined && typeof raw.audio !== 'string') problems.push(`${at} "${raw.name}": audio is ${JSON.stringify(raw.audio)}, not a string`);
     if (out.has(raw.name)) problems.push(`${at}: event "${raw.name}" is declared twice`);
     const p = payload(raw, `${at} "${raw.name}"`, problems);
-    out.set(raw.name, { name: raw.name, int: p.int ?? 0, float: p.float ?? 0, string: p.string ?? '' });
+    out.set(raw.name, { audio: typeof raw.audio === 'string' ? raw.audio : '', volume: p.volume ?? 0, balance: p.balance ?? 0, name: raw.name, int: p.int ?? 0, float: p.float ?? 0, string: p.string ?? '' });
   });
   return out;
 }
@@ -121,7 +131,9 @@ export function readEventKeys(value: unknown, label: string, defs: ReadonlyMap<s
       return;
     }
     const p = payload(raw, at, problems);
-    out.push({ time: Math.fround(typeof t === 'number' && Number.isFinite(t) ? t : 0), name: def.name, int: p.int ?? def.int, float: p.float ?? def.float, string: p.string ?? def.string });
+    // Observed oracle behavior: a voiced key's omitted balance falls back to
+    // the definition's volume, not its balance. A silent event keeps both at 0.
+    out.push({ volume: def.audio ? p.volume ?? def.volume ?? 0 : 0, balance: def.audio ? p.balance ?? def.volume ?? 0 : 0, time: Math.fround(typeof t === 'number' && Number.isFinite(t) ? t : 0), name: def.name, int: p.int ?? def.int, float: p.float ?? def.float, string: p.string ?? def.string });
   });
   return out;
 }

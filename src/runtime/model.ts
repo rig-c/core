@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 0): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 1): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -12,8 +12,7 @@
  * (`RuntimeMissing`), and:
  *
  * - **refuses the model** (`RuntimeRefusal`, every missing feature listed)
- *   when one is a property of the whole model — a skin other than `default`, a
- *   path, physics or slider constraint, a transform constraint reading or
+ *   when one is a property of the whole model — a path, physics or slider constraint, a transform constraint reading or
  *   writing local values or adding (`localSource`, `localTarget`,
  *   `additive`), an ik or transform constraint over a bone the view leaves
  *   inactive, a world-space transform onto a `noScale` or
@@ -23,16 +22,15 @@
  * - **refuses an animation** (`RuntimeModel.refused`; `animation(name)`
  *   throws the same `RuntimeRefusal`) when the construct is the animation's
  *   — an `inherit` timeline, a deform or sequence timeline, a draw-order
- *   timeline, event keys, a dark-colour (`rgba2`, `rgb2`) timeline, or an
+ *   timeline, a dark-colour (`rgba2`, `rgb2`) timeline, or an
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Events are the
- * one construct that moves no pose, so they alone can be ignored on request
- * (`RuntimeOptions.ignore`): a consumer that reads no event says so, and is
- * then handed a poser that fires none. Without the request an animation with
- * event keys is refused, because a poser that dropped them silently would be
- * a player that misses its cues and reports nothing.
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 1 reads
+ * named/no-skin views and delivers event keys, with immutable payloads compiled
+ * at load. `ignore: ['events']` remains an explicit diagnostic opt-out; it is
+ * never the default. A merged view with conflicting attachments still refuses
+ * by name, as the oracle itself cannot resolve that view without file order.
  *
  * ## What the oracle decides, the runtime reads
  *
@@ -48,18 +46,16 @@
  * no randomness, no I/O.
  */
 import type { ModelVertices } from '../model.ts';
-import { activeBones, constraintRecords, CORE_REGION_KINDS, foldInheritMode, readBlend, readColour, shownAttachment, shownRow, sourceOfDoc, type CompiledDocument, type CoreAnimation, type CoreBlendMode } from '../core/index.ts';
+import { activeBones, constraintRecords, CORE_REGION_KINDS, foldInheritMode, readBlend, readColour, shownAttachment, shownRow, sourceOfDoc, underSkin, type CompiledDocument, type CoreAnimation, type CoreBlendMode } from '../core/index.ts';
 import { constraintInactiveWhy, constraintsAbsentWhy, TRANSFORM_PROPERTIES, type CoreIkRecord, type CoreTransformRecord } from '../core/constraints.ts';
-import { CORE_DEFAULT_SKIN } from '../core/skins.ts';
 import { RUNTIME_PI } from '../core/world.ts';
 import { compileCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 0;
+export const RUNTIME_STAGE = 1;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
-  'skin',
   'path-constraint',
   'physics-constraint',
   'slider-constraint',
@@ -75,7 +71,6 @@ export const RUNTIME_FEATURES = [
   'deform-timeline',
   'sequence-timeline',
   'draw-order-timeline',
-  'events',
   'dark-colour-timeline',
 ] as const;
 export type RuntimeFeature = (typeof RUNTIME_FEATURES)[number];
@@ -124,6 +119,10 @@ export interface RuntimePlant {
   readonly admit?: readonly RuntimeFeature[];
   /** The update order's scratch sized by the bone count instead of the longest target list: the short-buffer plant. */
   readonly scratchByBones?: boolean;
+  /** Wrong-skin source selected by a control, never by a consumer. */
+  readonly attachmentSkin?: string;
+  /** Drops a key at zero on a wrap, the event boundary plant. */
+  readonly eventWrapOffByOne?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -277,6 +276,17 @@ export interface RuntimeConstraintTimeline {
   readonly flags: Uint8Array | null;
 }
 
+/** One immutable event delivery, reused by every pose of this model. */
+export interface RuntimeEvent {
+  readonly name: string;
+  readonly time: number;
+  readonly int: number;
+  readonly float: number;
+  readonly string: string;
+  readonly volume: number;
+  readonly balance: number;
+}
+
 /** One covered animation, compiled. */
 export interface RuntimeAnimation {
   readonly name: string;
@@ -287,12 +297,15 @@ export interface RuntimeAnimation {
   readonly constraints: ReadonlyArray<RuntimeConstraintTimeline | null>;
   /** How many key cursors a pose keeps for it. */
   readonly cursors: number;
-  /** Event keys it holds — 0 unless the consumer asked for events to be ignored. */
+  /** Number of authored event keys (including an explicitly muted diagnostic). */
   readonly events: number;
+  readonly eventKeys: readonly RuntimeEvent[];
 }
 
 /** The compiled model a pose is made of (`compileRuntime`). Read-only once built. */
 export interface RuntimeModel {
+  /** Control-only boundary defect; fixed at load. */
+  readonly eventWrapOffByOne: boolean;
   readonly doc: CompiledDocument;
   readonly boneNames: readonly string[];
   readonly parents: Int32Array;
@@ -365,7 +378,6 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   const refusals = new Refusals(new Set(plant.admit ?? []));
   const ignoreEvents = (options.ignore ?? []).includes('events');
 
-  if (doc.skins.some((k) => k.name !== CORE_DEFAULT_SKIN)) refusals.note('skin', `the document declares skins [${doc.skins.map((k) => k.name).join(', ')}]; stage ${RUNTIME_STAGE} poses the default skin alone`);
   const absentWhy = constraintsAbsentWhy(doc);
   if (absentWhy !== null) refusals.note('oracle-absent', `the oracle leaves the bones out: ${absentWhy}`);
 
@@ -440,6 +452,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   const attachments: RuntimeAttachment[] = [];
   let vertexCount = 0;
   const sourceOf = sourceOfDoc(doc);
+  const attachmentView = plant.attachmentSkin === undefined ? doc : underSkin(doc, plant.attachmentSkin);
   /** Per slot, each placeholder's attachment index (−1 shows nothing) and what it misses, resolved once and its refusal noted for every animation that shows it. */
   const resolvedBySlot = doc.slots.map(() => new Map<string | null, { index: number; missing: readonly [RuntimeFeature, string] | null }>());
   const resolve = (si: number, placeholder: string | null, animation: string | null): number => {
@@ -454,7 +467,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   };
   const resolveRecord = (si: number, placeholder: string | null): { index: number; missing: readonly [RuntimeFeature, string] | null } => {
     const slot = doc.slots[si];
-    const shown = placeholder === null ? null : shownAttachment(doc, slot, placeholder);
+    const shown = placeholder === null ? null : shownAttachment(attachmentView, slot, placeholder);
     if (shown === null) return { index: -1, missing: null };
     if ('conflict' in shown) return { index: -1, missing: ['skin-conflict', `slot "${slot.name}" placeholder "${placeholder}" is filled by skins that disagree`] };
     const row = shownRow(shown);
@@ -538,6 +551,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   if (refusals.model.length > 0) throw new RuntimeRefusal(refusals.model);
   const names = doc.animations.map((a) => a.name);
   return {
+    eventWrapOffByOne: plant.eventWrapOffByOne === true,
     doc,
     boneNames: doc.bones.map((b) => b.name),
     parents,
@@ -667,7 +681,6 @@ function compileAnimation(
   if (deform.length > 0) refusals.note('deform-timeline', `${deform.length} deform timeline(s): ${deform.slice(0, 3).map((a) => `${a.skin}/${a.slot}/${a.attachment}`).join(', ')}${deform.length > 3 ? ', …' : ''}`, name);
   if (sequence.length > 0) refusals.note('sequence-timeline', `${sequence.length} sequence timeline(s): ${sequence.slice(0, 3).map((a) => `${a.skin}/${a.slot}/${a.attachment}`).join(', ')}${sequence.length > 3 ? ', …' : ''}`, name);
   if (tl.drawOrder.length > 0) refusals.note('draw-order-timeline', `${tl.drawOrder.length} draw-order key(s)`, name);
-  if (tl.events.length > 0 && !ignoreEvents) refusals.note('events', `${tl.events.length} event key(s); a poser that fires none is handed out only on request (ignore: ['events'])`, name);
 
   const lastBy = <T extends { name: string }>(targets: readonly T[]): Map<string, T> => new Map(targets.map((t) => [t.name, t]));
   const bones: RuntimeBoneTimeline[] = [];
@@ -715,5 +728,5 @@ function compileAnimation(
       constraintTimelines[c.index] = { constraint: c.index, curve: compileCurve(keyed.keys, TRANSFORM_PROPERTIES.length), cursor: cursors++, flags: null };
     }
   }
-  return { name, duration: tl.duration, bones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length };
+  return { name, duration: tl.duration, bones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
 }

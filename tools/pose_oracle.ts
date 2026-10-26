@@ -351,7 +351,7 @@
  * (`src/runtime/`), the in-place poser a player runs, which `tools/core_gate.ts`
  * holds to the core's document at tolerance 0 (*The runtime poser* there). It
  * is a function, not a `dump` flag: what it is compared with is the core in
- * the same process. `dumper` is `"rigc-runtime (stage 0)"`, `source` and
+ * the same process. `dumper` is `"rigc-runtime (stage N)"`, `source` and
  * `options` as the core's; the rosters, `pathAttachments` included, are the
  * document's own, and `physics` and `paths` are empty because the runtime
  * refuses both constraint kinds at load. The view is the core's
@@ -1119,7 +1119,7 @@ export const RUNTIME_DUMPER = `rigc-runtime (stage ${RUNTIME_STAGE})`;
 export const RUNTIME_NO_UVS_WHY = `the runtime poser (stage ${RUNTIME_STAGE}) poses no page UVs: where a drawing sits on a page is the atlas's, read by the consumer`;
 
 /** Why a runtime dump carries no events — written only where a covered animation keys some, which the dump compiles past (`ignore: ['events']`). */
-export const RUNTIME_NO_EVENTS_WHY = `the runtime poser (stage ${RUNTIME_STAGE}) fires no events; the dump compiles it with ignore: ['events'] so the animations that key them are posed`;
+export const RUNTIME_NO_EVENTS_WHY = `an explicitly event-muted runtime dump was requested with ignore: ['events'] so the animations that key them are posed`;
 
 /** A runtime dump: the document, holding the covered animations alone, and the animations refused with what each misses. */
 export interface RuntimeDump {
@@ -1133,7 +1133,7 @@ export interface RuntimeDump {
  * A model the runtime refuses throws its `RuntimeRefusal`, every missing
  * construct named; an animation it refuses is left out of `animations` and
  * listed in `refused`. `--physics step` is refused: the runtime has no
- * physics clock at stage 0.
+ * physics clock at this stage.
  */
 export function runtimeDump(model: CompiledDocument, options: OracleOptions, plant: RuntimePlant = {}, view: SkinViewOf = viewOf): RuntimeDump {
   let doc: CompiledDocument;
@@ -1145,7 +1145,7 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
   }
   if (options.physics !== 'none') throw new OracleInputError(`runtime dump: --physics ${options.physics} is not posed by the runtime poser (stage ${RUNTIME_STAGE}), which has no physics clock`);
   const round = roundOf(options);
-  const runtime = compileRuntime(doc, { ignore: ['events'] }, plant);
+  const runtime = compileRuntime(doc, {}, plant);
   const pose = new RuntimePose(runtime);
   const read = (): OracleDocumentPose => {
     pose.computeVertices();
@@ -1169,7 +1169,6 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
   pose.setupPose();
   const setup = read();
   const covered = doc.animations.filter((a) => runtime.animations.has(a.name));
-  const events = covered.some((a) => (runtime.animations.get(a.name) as RuntimeAnimation).events > 0);
   // One pose for the whole document, every animation in turn: a value one pose left behind is a difference in the next.
   const animations: OracleDocumentAnimation[] = covered.map((a) => {
     pose.setAnimation(a.name);
@@ -1178,12 +1177,11 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
     for (let i = 0; i < options.samples; i++) {
       const t = coreSampleTime(options.phase, d, i, options.samples);
       pose.apply(t);
-      samples.push({ t: round(t), events: events ? null : [], ...read() });
+      samples.push({ t: round(t), events: pose.events.map(e => [e.name, round(e.time), e.int, round(e.float), e.string]), ...read() });
     }
     return { name: a.name, duration: round(d), samples };
   });
   const absent: Array<[string, string]> = [['setup.uvs', RUNTIME_NO_UVS_WHY], ['animations.uvs', RUNTIME_NO_UVS_WHY]];
-  if (events) absent.push(['animations.events', RUNTIME_NO_EVENTS_WHY]);
   return {
     document: {
       spec: options.raw === true ? ORACLE_RAW_SPEC : ORACLE_SPEC,

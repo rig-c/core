@@ -12523,7 +12523,7 @@ nonselected output is the stored source geometry through the unchanged setup
 matrices; it does not borrow a different selection's deform. The control
 checks both results and the source of the difference, without an epsilon.
 
-## 15. Posing in place for a player — the runtime poser (stage 0)
+## 15. Posing in place for a player — the runtime poser (stage 1)
 
 rigc poses a model document twice over, on purpose (issue #1591). The **oracle**
 (`src/core/`) is the reference: each pose is a pure function of the document,
@@ -12558,17 +12558,38 @@ exact resolved table identity `(skin, model.slots[attachment.slot].name, placeho
 The display `name` may be shared by different placeholders; it is never a table
 key to guess the source from. These load-time strings do not change the pose path.
 
-| | what stage 0 poses |
+| | what stage 1 poses |
 | --- | --- |
 | bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |
 | timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, `rgba`, `rgb` and `alpha`; ik and transform timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
 | constraints | one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
 | vertices | regions, meshes, weighted meshes and linked meshes, written into the pose's buffer |
+| skins and events | named/no-skin views with their skin-required bones and constraints; event delivery in key order over `(last, time]`, tail then head across a wrap |
 | time | one animation at full weight from the setup pose, at a time (`apply`) or stepped as a looping track (`step`, the track time wrapped by the duration as `openTrack` wraps it) |
+
+Skin switching is a load-time view change: compile `underSkin(document, name)`
+(or `underNoSkin(document)`), create the replacement `RuntimePose`, select its
+animation, restore its accumulated `trackTime`, and call `apply` with the old
+wrapped animation time (`oldPose.time`), not the accumulated track time. The old buffers belong to the old
+view; do not keep drawing them as the new skin. An ambiguous merged `all` view
+still refuses `skin-conflict`; that refusal does not reject either named view.
+
+Read `pose.events` immediately after `apply`/`step`. It is a reused borrowed list
+of immutable load-time records: `name`, float32 key `time`, `int`, `float`,
+`string`, `volume`, `balance`. Duplicate-time keys keep their authored order.
+The interval and wrap rules are the oracle's `openTrack` rules; a new animation
+starts at previous event time −1, so an apply at 0 includes its zero-time keys.
+The list is replaced on the next pose; retain copies only when needed. Delivery
+itself reuses records and list storage. The legacy five-column oracle event row
+is unchanged. Public `EventTimeline` observations also hold the audio details:
+silent keys keep volume/balance at 0; on a voiced key an omitted balance falls
+back to the definition's **volume**, matching the measured runtime rather than
+inventing a correction. An explicit `ignore: ['events']` diagnostic still mutes
+the list; normal compilation never does.
 
 **Everything else is refused at load, by name.** `RuntimeRefusal.missing` lists
 every construct met, each `{ feature, detail, animation }`, and the message
-reads `not posed by the runtime poser (stage 0), N construct(s) missing:
+reads `not posed by the runtime poser (stage 1), N construct(s) missing:
 <feature>: <detail>; …`. A model-level feature refuses the whole model; an
 animation-level one refuses that animation alone (`model.refused`;
 `model.animation(name)` and `setAnimation(name)` throw its refusal) and every
@@ -12577,7 +12598,6 @@ refused: nothing is posed approximately.
 
 | feature | refuses | what it is |
 | --- | --- | --- |
-| `skin` | the model | a skin other than `default` |
 | `path-constraint`, `physics-constraint`, `slider-constraint` | the model | a constraint of that kind |
 | `local-transform`, `additive-transform` | the model | a transform constraint with `localSource` or `localTarget`, or `additive` |
 | `inactive-constrained-bone` | the model | an applied ik or transform constraint naming a bone the view leaves inactive (what the oracle writes there depends on the pass before) |
@@ -12586,7 +12606,6 @@ refused: nothing is posed approximately.
 | `skin-conflict` | as above | a placeholder the skins fill differently |
 | `oracle-absent` | the model | a pose the oracle itself leaves out (`constraintsAbsentWhy`) |
 | `inherit-timeline`, `deform-timeline`, `sequence-timeline`, `draw-order-timeline`, `dark-colour-timeline` | the animation | a timeline of that kind (`dark-colour` is `rgba2` / `rgb2`) |
-| `events` | the animation, unless `ignore: ['events']` | event keys. Events move no pose, so a consumer that reads none may ask for them to be ignored and is handed a poser that fires none; without the request a dropped cue would be silent |
 
 A call it cannot answer throws `RuntimeInputError`, naming the call:
 `apply: no animation is set (setAnimation first)`, `animation "x" is not one of

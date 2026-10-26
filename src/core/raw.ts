@@ -427,7 +427,7 @@ function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world:
   if (stage !== undefined) stage.begin('geometry');
   const geometry = drawnGeometry(doc, shown, world, order, plant, mode);
   if (stage !== undefined) {
-    stage.end('geometry', geometry);
+    stage.end('geometry');
     stage.begin('readout');
   }
   // Under a concave or inverse clip the oracle's `clipped` block is absent (the runtime's own triangle list); what the core draws is `drawnClipped`,

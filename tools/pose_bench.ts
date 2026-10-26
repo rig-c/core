@@ -11,13 +11,15 @@
  *   stages (`timeline apply`, `world update`, `vertex compute`).
  * - Card comparisons: `--card core#1580`, `--card play#199`, `--card self`,
  *   or `--card vs-spine` (default).
- * - Dedicated allocation pass (`bun:jsc` `gcAndSweep` + `heapSize`) separate
- *   from CPU timing.
+ * - Dedicated child-process allocation pass (`BUN_JSC_useGC=0` +
+ *   `process.memoryUsage().heapUsed`) separate from CPU timing so every
+ *   allocated byte (including unretained temporaries) is measured.
  * - Verification bars: `Object.is` bit-equality against uninstrumented walk,
- *   planted busy-loop and per-frame allocation controls (`--verify-controls`),
- *   and two-invocation repeatability check (`--repeat 2`).
+ *   planted busy-loop, unretained temporary allocation, and per-stage relative
+ *   drift controls (`--verify-controls`), and two-invocation repeatability
+ *   check (`--repeat 2`).
  */
-import { gcAndSweep, heapSize } from 'bun:jsc';
+import * as jsc from 'bun:jsc';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -550,70 +552,78 @@ export function createSpineInstances(spineJsonText: string, atlasText: string, c
   return instances;
 }
 
-export function stepSpineArm(instances: readonly SpineInstance[], dt: number, outUs: Record<SpineStage, number>): number {
+export function stepSpineArm(
+  instances: readonly SpineInstance[],
+  dt: number,
+  outUs: Record<SpineStage, number>,
+  subSteps = 1,
+): number {
   let timelineNs = 0;
   let worldNs = 0;
   let geometryNs = 0;
   let vertexSink = 0;
-  for (let i = 0; i < instances.length; i++) {
-    const inst = instances[i];
-    const { skeleton, state, clipper } = inst;
-    let scratch = inst.scratch;
+  for (let rep = 0; rep < subSteps; rep++) {
+    for (let i = 0; i < instances.length; i++) {
+      const inst = instances[i];
+      const { skeleton, state, clipper } = inst;
+      let scratch = inst.scratch;
 
-    const t0 = Bun.nanoseconds();
-    state.update(dt);
-    state.apply(skeleton);
-    const t1 = Bun.nanoseconds();
-    timelineNs += t1 - t0;
+      const t0 = Bun.nanoseconds();
+      state.update(dt);
+      state.apply(skeleton);
+      const t1 = Bun.nanoseconds();
+      timelineNs += t1 - t0;
 
-    skeleton.update(dt);
-    skeleton.updateWorldTransform(Physics.update);
-    const t2 = Bun.nanoseconds();
-    worldNs += t2 - t1;
+      skeleton.update(dt);
+      skeleton.updateWorldTransform(Physics.update);
+      const t2 = Bun.nanoseconds();
+      worldNs += t2 - t1;
 
-    const drawOrder = skeleton.drawOrder.appliedPose;
-    for (let s = 0, n = drawOrder.length; s < n; s++) {
-      const slot = drawOrder[s];
-      if (!slot.bone.active) {
+      const drawOrder = skeleton.drawOrder.appliedPose;
+      for (let s = 0, n = drawOrder.length; s < n; s++) {
+        const slot = drawOrder[s];
+        if (!slot.bone.active) {
+          clipper.clipEnd(slot);
+          continue;
+        }
+        const att = slot.appliedPose.attachment;
+        if (att instanceof RegionAttachment) {
+          att.computeWorldVertices(slot, att.getOffsets(slot.appliedPose), scratch, 0, 2);
+          if (clipper.isClipping()) {
+            clipper.clipTrianglesUnpacked(scratch, 0, QUAD_TRIANGLES, 6, QUAD_UVS, 2);
+            vertexSink += clipper.clippedVerticesTyped.length;
+          } else {
+            vertexSink += scratch[0];
+          }
+        } else if (att instanceof MeshAttachment) {
+          const len = att.worldVerticesLength;
+          if (scratch.length < len) {
+            scratch = new Float32Array(len);
+            inst.scratch = scratch;
+          }
+          att.computeWorldVertices(skeleton, slot, 0, len, scratch, 0, 2);
+          if (clipper.isClipping()) {
+            clipper.clipTrianglesUnpacked(scratch, 0, att.triangles, att.triangles.length, att.regionUVs, 2);
+            vertexSink += clipper.clippedVerticesTyped.length;
+          } else {
+            vertexSink += scratch[0];
+          }
+        } else if (att instanceof ClippingAttachment) {
+          clipper.clipEnd(slot);
+          clipper.clipStart(skeleton, slot, att);
+          continue;
+        }
         clipper.clipEnd(slot);
-        continue;
       }
-      const att = slot.appliedPose.attachment;
-      if (att instanceof RegionAttachment) {
-        att.computeWorldVertices(slot, att.getOffsets(slot.appliedPose), scratch, 0, 2);
-        if (clipper.isClipping()) {
-          clipper.clipTrianglesUnpacked(scratch, 0, QUAD_TRIANGLES, 6, QUAD_UVS, 2);
-          vertexSink += clipper.clippedVerticesTyped.length;
-        } else {
-          vertexSink += scratch[0];
-        }
-      } else if (att instanceof MeshAttachment) {
-        const len = att.worldVerticesLength;
-        if (scratch.length < len) {
-          scratch = new Float32Array(len);
-          inst.scratch = scratch;
-        }
-        att.computeWorldVertices(skeleton, slot, 0, len, scratch, 0, 2);
-        if (clipper.isClipping()) {
-          clipper.clipTrianglesUnpacked(scratch, 0, att.triangles, att.triangles.length, att.regionUVs, 2);
-          vertexSink += clipper.clippedVerticesTyped.length;
-        } else {
-          vertexSink += scratch[0];
-        }
-      } else if (att instanceof ClippingAttachment) {
-        clipper.clipEnd(slot);
-        clipper.clipStart(skeleton, slot, att);
-        continue;
-      }
-      clipper.clipEnd(slot);
+      clipper.clipEnd();
+      const t3 = Bun.nanoseconds();
+      geometryNs += t3 - t2;
     }
-    clipper.clipEnd();
-    const t3 = Bun.nanoseconds();
-    geometryNs += t3 - t2;
   }
-  outUs.timeline = timelineNs / 1000;
-  outUs.world = worldNs / 1000;
-  outUs.geometry = geometryNs / 1000;
+  const scale = 1000 * subSteps;
+  outUs.timeline = timelineNs / scale;
+  outUs.world = worldNs / scale;
+  outUs.geometry = geometryNs / scale;
   return vertexSink;
 }
 
@@ -683,7 +693,7 @@ export function createRigArm(
   return state;
 }
 
-export function stepRigArm(arm: RigArmState, dt: number, outUs: Record<RigStage, number>): number {
+export function stepRigArm(arm: RigArmState, dt: number, outUs: Record<RigStage, number>, subSteps = 1): number {
   arm.stageNs.timeline = 0;
   arm.stageNs.world = 0;
   arm.stageNs.constraints = 0;
@@ -693,20 +703,23 @@ export function stepRigArm(arm: RigArmState, dt: number, outUs: Record<RigStage,
   let frameNs = 0;
   let slotSink = 0;
   const { tracks, source, frameFn } = arm;
-  for (let i = 0; i < tracks.length; i++) {
-    const pose = tracks[i].step(dt);
-    const f0 = Bun.nanoseconds();
-    const frame = frameFn(source, pose);
-    frameNs += Bun.nanoseconds() - f0;
-    slotSink += frame.order.length;
+  for (let rep = 0; rep < subSteps; rep++) {
+    for (let i = 0; i < tracks.length; i++) {
+      const pose = tracks[i].step(dt);
+      const f0 = Bun.nanoseconds();
+      const frame = frameFn(source, pose);
+      frameNs += Bun.nanoseconds() - f0;
+      slotSink += frame.order.length;
+    }
   }
   arm.active = false;
-  outUs.timeline = arm.stageNs.timeline / 1000;
-  outUs.world = arm.stageNs.world / 1000;
-  outUs.constraints = arm.stageNs.constraints / 1000;
-  outUs.geometry = arm.stageNs.geometry / 1000;
-  outUs.readout = arm.stageNs.readout / 1000;
-  outUs.frame = frameNs / 1000;
+  const scale = 1000 * subSteps;
+  outUs.timeline = arm.stageNs.timeline / scale;
+  outUs.world = arm.stageNs.world / scale;
+  outUs.constraints = arm.stageNs.constraints / scale;
+  outUs.geometry = arm.stageNs.geometry / scale;
+  outUs.readout = arm.stageNs.readout / scale;
+  outUs.frame = frameNs / scale;
   return slotSink;
 }
 
@@ -793,7 +806,7 @@ export function verifyBitEquality(
 }
 
 // ---------------------------------------------------------------------------
-// Dedicated per-stage allocation pass (`bun:jsc`)
+// Dedicated per-stage allocated-bytes pass (`BUN_JSC_useGC=0` child process)
 // ---------------------------------------------------------------------------
 
 export interface StageAllocationReport {
@@ -801,14 +814,59 @@ export interface StageAllocationReport {
   totalBytes: number;
 }
 
-export function measureStageAllocations(
+export type AllocWorkerMode = 'default' | 'pre1580' | 'pre199' | 'planted-unretained';
+
+export const UNRETAINED_TEMP_ARRAY_COUNT = 256; // 256 × 64 B (4-element JSArray cell + butterfly) = 16,384 B/frame
+
+export function touchUnretainedTemp(v: unknown): number {
+  return Array.isArray(v) ? v.length : typeof v === 'object' && v !== null ? 1 : 0;
+}
+(jsc as unknown as { noInline?: (fn: (v: unknown) => number) => void }).noInline?.(touchUnretainedTemp);
+
+export function configForAllocWorkerMode(mode: AllocWorkerMode): RigArmConfig {
+  switch (mode) {
+    case 'pre1580':
+      return {
+        label: 'pre-#1580',
+        plant: { vertices: worldVerticesPre1580, deformedVertices: deformedWorldVerticesPre1580 },
+      };
+    case 'pre199':
+      return { label: 'pre-#199', frameFn: frameOfPre199 };
+    case 'planted-unretained':
+      return {
+        label: 'alloc-constraints-unretained',
+        plant: {
+          constraints: (records) => {
+            for (let i = 0; i < UNRETAINED_TEMP_ARRAY_COUNT; i++) {
+              // Allocate a 4-element temporary array (same shape as `valuesAt`
+              // in `src/core/animation.ts`), pass it to a `noInline` consumer
+              // that only reads `.length`, and do NOT retain the array anywhere.
+              touchUnretainedTemp([i, i + 1, i + 2, i + 3]);
+            }
+            return records;
+          },
+        },
+      };
+    case 'default':
+      return { label: 'rig-c', frameFn: frameOfPost199 };
+  }
+}
+
+function workerModeForConfig(config: RigArmConfig): AllocWorkerMode | null {
+  if (config.frameFn === frameOfPre199 || config.label === 'pre-#199') return 'pre199';
+  if (config.plant?.vertices === worldVerticesPre1580 || config.label === 'pre-#1580') return 'pre1580';
+  if (config.label === 'alloc-constraints-unretained') return 'planted-unretained';
+  if (config.plant === undefined || Object.keys(config.plant).length === 0) return 'default';
+  return null;
+}
+
+export function measureStageAllocationsInProcess(
   modelText: string,
   parsedModel: unknown,
   config: RigArmConfig,
-  instances = 1,
-  warmupFrames = 30,
-  sampleFrames = 12,
-  onBeforeFrame?: (keep: (v: unknown) => void) => void,
+  instances = 10,
+  warmupFrames = 45,
+  sampleFrames = 160,
 ): StageAllocationReport {
   const doc = readModel(modelText);
   const view = underSkin(doc, 'default');
@@ -823,34 +881,17 @@ export function measureStageAllocations(
     readout: 0,
     frame: 0,
   };
-  const samples: Record<RigStage, number[]> = {
-    timeline: [],
-    world: [],
-    constraints: [],
-    geometry: [],
-    readout: [],
-    frame: [],
-  };
-
-  const frameKeep = new Array<unknown>(4096).fill(null);
-  let keepIdx = 0;
-  const keepValue = (v: unknown): void => {
-    if (v !== undefined && keepIdx < frameKeep.length) frameKeep[keepIdx++] = v;
-  };
 
   let active = false;
-  let hStart = 0;
+  let m0 = 0;
   const hooks: StageHooks = {
     begin(_s) {
       if (!active) return;
-      gcAndSweep();
-      hStart = heapSize();
+      m0 = process.memoryUsage().heapUsed;
     },
-    end(s, keep) {
+    end(s) {
       if (!active) return;
-      if (keep !== undefined && keepIdx < frameKeep.length) frameKeep[keepIdx++] = keep;
-      gcAndSweep();
-      cur[s] += heapSize() - hStart;
+      cur[s] += process.memoryUsage().heapUsed - m0;
     },
   };
 
@@ -862,79 +903,70 @@ export function measureStageAllocations(
     tracks.push(t);
   }
 
+  const warmupPoses: RawPose[] = [];
   for (let w = 0; w < warmupFrames; w++) {
     for (let i = 0; i < tracks.length; i++) {
-      frameFn(source, tracks[i].step(DT));
+      warmupPoses.push(tracks[i].step(DT));
     }
   }
 
-  // Intercept `new Map` and `new Set` during the dedicated allocation pass so
-  // ephemeral Maps/Sets allocated inside a stage (e.g. pre-#199 `frameOf`,
-  // `poseStepFrom`, or `repose` in `constraints`) stay live until the end of
-  // the frame and are measured in their stage's heapSize delta rather than
-  // collected mid-stage.
-  const OriginalMap = globalThis.Map;
-  const OriginalSet = globalThis.Set;
-  class TrackedMap<K, V> extends OriginalMap<K, V> {
-    constructor(entries?: readonly (readonly [K, V])[] | null) {
-      super(entries);
-      if (active && keepIdx < frameKeep.length) {
-        frameKeep[keepIdx++] = this;
-        if (entries !== undefined && entries !== null) frameKeep[keepIdx++] = entries;
-      }
+  const totalSteps = instances * sampleFrames;
+  const poses = new Array<RawPose>(totalSteps);
+  let pIdx = 0;
+  active = true;
+  for (let f = 0; f < sampleFrames; f++) {
+    for (let i = 0; i < tracks.length; i++) {
+      poses[pIdx++] = tracks[i].step(DT);
     }
   }
-  class TrackedSet<T> extends OriginalSet<T> {
-    constructor(values?: readonly T[] | null) {
-      super(values);
-      if (active && keepIdx < frameKeep.length) {
-        frameKeep[keepIdx++] = this;
-        if (values !== undefined && values !== null) frameKeep[keepIdx++] = values;
-      }
-    }
-  }
-  globalThis.Map = TrackedMap as MapConstructor;
-  globalThis.Set = TrackedSet as SetConstructor;
+  active = false;
 
-  try {
-    gcAndSweep();
-    active = true;
-    for (let f = 0; f < sampleFrames + 3; f++) {
-      for (const s of RIG_STAGES) cur[s] = 0;
-      onBeforeFrame?.(keepValue);
-      for (let i = 0; i < tracks.length; i++) {
-        const pose = tracks[i].step(DT);
-        keepValue(pose);
-        gcAndSweep();
-        const fh0 = heapSize();
-        const frame = frameFn(source, pose);
-        keepValue(frame);
-        gcAndSweep();
-        cur.frame += heapSize() - fh0;
-      }
-      for (let k = 0; k < keepIdx; k++) frameKeep[k] = null;
-      keepIdx = 0;
-      gcAndSweep();
-      if (f >= 3) {
-        for (const s of RIG_STAGES) samples[s].push(cur[s]);
-      }
-    }
-  } finally {
-    active = false;
-    globalThis.Map = OriginalMap;
-    globalThis.Set = OriginalSet;
-    for (let k = 0; k < keepIdx; k++) frameKeep[k] = null;
-    gcAndSweep();
+  for (let k = 0; k < warmupPoses.length; k++) {
+    touchUnretainedTemp(frameFn(source, warmupPoses[k]));
   }
+  const fm0 = process.memoryUsage().heapUsed;
+  for (let k = 0; k < poses.length; k++) {
+    touchUnretainedTemp(frameFn(source, poses[k]));
+  }
+  cur.frame = process.memoryUsage().heapUsed - fm0;
 
   const perStageBytes = {} as Record<RigStage, number>;
   let totalBytes = 0;
   for (const s of RIG_STAGES) {
-    const val = Math.round(percentile(samples[s], 0.5));
+    const val = Math.round(cur[s] / totalSteps);
     perStageBytes[s] = val;
     totalBytes += val;
   }
   return { perStageBytes, totalBytes };
+}
+
+export function measureStageAllocations(
+  modelText: string,
+  parsedModel: unknown,
+  config: RigArmConfig,
+  instances = 10,
+  warmupFrames = 45,
+  sampleFrames = 160,
+): StageAllocationReport {
+  const mode = workerModeForConfig(config);
+  if (process.env.BUN_JSC_useGC === '0' || mode === null) {
+    return measureStageAllocationsInProcess(modelText, parsedModel, config, instances, warmupFrames, sampleFrames);
+  }
+  const res = spawnSync(
+    process.execPath,
+    [fileURLToPath(import.meta.url), '--alloc-worker', mode],
+    {
+      cwd: REPO_ROOT,
+      input: modelText,
+      encoding: 'utf8',
+      env: { ...process.env, BUN_JSC_useGC: '0' },
+      maxBuffer: 32 * 1024 * 1024,
+    },
+  );
+  if (res.status !== 0) {
+    throw new Error(`--alloc-worker (${mode}) failed: ${res.stderr || res.stdout}`);
+  }
+  return JSON.parse(res.stdout.trim()) as StageAllocationReport;
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,17 +1050,20 @@ export function runRigVsRigBench(
   configA: RigArmConfig,
   configB: RigArmConfig,
   includeAlloc = true,
+  subStepsOverride?: number,
 ): RigVsRigResult {
   Bun.gc(true);
+  const subSteps = subStepsOverride ?? (instances < 16 ? Math.ceil(16 / instances) : 1);
   const armA = createRigArm(modelText, parsedModel, instances, configA);
   const armB = createRigArm(modelText, parsedModel, instances, configB);
   const scratchA: Record<RigStage, number> = { timeline: 0, world: 0, constraints: 0, geometry: 0, readout: 0, frame: 0 };
   const scratchB: Record<RigStage, number> = { timeline: 0, world: 0, constraints: 0, geometry: 0, readout: 0, frame: 0 };
 
   for (let w = 0; w < warmup; w++) {
-    stepRigArm(armA, DT, scratchA);
-    stepRigArm(armB, DT, scratchB);
+    stepRigArm(armA, DT, scratchA, subSteps);
+    stepRigArm(armB, DT, scratchB, subSteps);
   }
+  Bun.gc(true);
   Bun.gc(true);
 
   const keys = [...RIG_STAGES, 'total'] as const;
@@ -1057,11 +1092,11 @@ export function runRigVsRigBench(
   if (interleave === 'frame') {
     for (let f = 0; f < frames; f++) {
       if ((f & 1) === 0) {
-        sink += stepRigArm(armA, DT, scratchA);
-        sink += stepRigArm(armB, DT, scratchB);
+        sink += stepRigArm(armA, DT, scratchA, subSteps);
+        sink += stepRigArm(armB, DT, scratchB, subSteps);
       } else {
-        sink += stepRigArm(armB, DT, scratchB);
-        sink += stepRigArm(armA, DT, scratchA);
+        sink += stepRigArm(armB, DT, scratchB, subSteps);
+        sink += stepRigArm(armA, DT, scratchA, subSteps);
       }
       recordA();
       recordB();
@@ -1072,30 +1107,34 @@ export function runRigVsRigBench(
     for (let r = 0; r < rounds; r++) {
       if ((r & 1) === 0) {
         for (let f = 0; f < perRound; f++) {
-          sink += stepRigArm(armA, DT, scratchA);
+          sink += stepRigArm(armA, DT, scratchA, subSteps);
           recordA();
         }
         for (let f = 0; f < perRound; f++) {
-          sink += stepRigArm(armB, DT, scratchB);
+          sink += stepRigArm(armB, DT, scratchB, subSteps);
           recordB();
         }
       } else {
         for (let f = 0; f < perRound; f++) {
-          sink += stepRigArm(armB, DT, scratchB);
+          sink += stepRigArm(armB, DT, scratchB, subSteps);
           recordB();
         }
         for (let f = 0; f < perRound; f++) {
-          sink += stepRigArm(armA, DT, scratchA);
+          sink += stepRigArm(armA, DT, scratchA, subSteps);
           recordA();
         }
       }
     }
   }
   if (sink === -1) console.error(sink);
+  armA.tracks.length = 0;
+  armB.tracks.length = 0;
+  Bun.gc(true);
+  Bun.gc(true);
 
   const rows = buildPairedRows(keys, seriesA, seriesB);
-  const allocA = includeAlloc ? measureStageAllocations(modelText, parsedModel, configA, 1) : undefined;
-  const allocB = includeAlloc ? measureStageAllocations(modelText, parsedModel, configB, 1) : undefined;
+  const allocA = includeAlloc ? measureStageAllocations(modelText, parsedModel, configA) : undefined;
+  const allocB = includeAlloc ? measureStageAllocations(modelText, parsedModel, configB) : undefined;
 
   return {
     skeleton,
@@ -1132,17 +1171,20 @@ export function runSpineVsRigBench(
   warmup: number,
   interleave: InterleaveMode,
   includeAlloc = true,
+  subStepsOverride?: number,
 ): SpineVsRigResult {
   Bun.gc(true);
+  const subSteps = subStepsOverride ?? (instances < 16 ? Math.ceil(16 / instances) : 1);
   const spineArm = createSpineInstances(spineJsonText, atlasText, instances);
   const rigArm = createRigArm(modelText, parsedModel, instances, { label: 'rig-c' });
   const scratchSpine: Record<SpineStage, number> = { timeline: 0, world: 0, geometry: 0 };
   const scratchRig: Record<RigStage, number> = { timeline: 0, world: 0, constraints: 0, geometry: 0, readout: 0, frame: 0 };
 
   for (let w = 0; w < warmup; w++) {
-    stepSpineArm(spineArm, DT, scratchSpine);
-    stepRigArm(rigArm, DT, scratchRig);
+    stepSpineArm(spineArm, DT, scratchSpine, subSteps);
+    stepRigArm(rigArm, DT, scratchRig, subSteps);
   }
+  Bun.gc(true);
   Bun.gc(true);
 
   const rigKeys = [...RIG_STAGES, 'total'] as const;
@@ -1204,11 +1246,11 @@ export function runSpineVsRigBench(
   if (interleave === 'frame') {
     for (let f = 0; f < frames; f++) {
       if ((f & 1) === 0) {
-        sink += stepSpineArm(spineArm, DT, scratchSpine);
-        sink += stepRigArm(rigArm, DT, scratchRig);
+        sink += stepSpineArm(spineArm, DT, scratchSpine, subSteps);
+        sink += stepRigArm(rigArm, DT, scratchRig, subSteps);
       } else {
-        sink += stepRigArm(rigArm, DT, scratchRig);
-        sink += stepSpineArm(spineArm, DT, scratchSpine);
+        sink += stepRigArm(rigArm, DT, scratchRig, subSteps);
+        sink += stepSpineArm(spineArm, DT, scratchSpine, subSteps);
       }
       recordSpine();
       recordRig();
@@ -1219,26 +1261,30 @@ export function runSpineVsRigBench(
     for (let r = 0; r < rounds; r++) {
       if ((r & 1) === 0) {
         for (let f = 0; f < perRound; f++) {
-          sink += stepSpineArm(spineArm, DT, scratchSpine);
+          sink += stepSpineArm(spineArm, DT, scratchSpine, subSteps);
           recordSpine();
         }
         for (let f = 0; f < perRound; f++) {
-          sink += stepRigArm(rigArm, DT, scratchRig);
+          sink += stepRigArm(rigArm, DT, scratchRig, subSteps);
           recordRig();
         }
       } else {
         for (let f = 0; f < perRound; f++) {
-          sink += stepRigArm(rigArm, DT, scratchRig);
+          sink += stepRigArm(rigArm, DT, scratchRig, subSteps);
           recordRig();
         }
         for (let f = 0; f < perRound; f++) {
-          sink += stepSpineArm(spineArm, DT, scratchSpine);
+          sink += stepSpineArm(spineArm, DT, scratchSpine, subSteps);
           recordSpine();
         }
       }
     }
   }
   if (sink === -1) console.error(sink);
+  spineArm.length = 0;
+  rigArm.tracks.length = 0;
+  Bun.gc(true);
+  Bun.gc(true);
 
   const rigStages = {} as Record<RigStage | 'total', StageStats>;
   for (const k of rigKeys) rigStages[k] = computeStats(rigSeries[k]);
@@ -1246,7 +1292,7 @@ export function runSpineVsRigBench(
   for (const k of spineKeys) spineStages[k] = computeStats(spineSeries[k]);
 
   const mappedRows = buildPairedRows(MAPPED_GROUPS, mappedSpine, mappedRig);
-  const allocRig = includeAlloc ? measureStageAllocations(modelText, parsedModel, { label: 'rig-c' }, 1) : undefined;
+  const allocRig = includeAlloc ? measureStageAllocations(modelText, parsedModel, { label: 'rig-c' }) : undefined;
 
   return {
     skeleton,
@@ -1270,9 +1316,18 @@ export interface PlantedControlsReport {
   busyLoopDeltaUsByStage: Record<RigStage, number>;
   busyLoopPassed: boolean;
   allocStage: RigStage;
-  allocFloats: number;
+  allocUnretainedArrays: number;
+  allocExpectedBytes: number;
   allocDeltaBytesByStage: Record<RigStage, number>;
   allocPassed: boolean;
+  driftControlStage: RigStage;
+  driftControlRun1Us: number;
+  driftControlRun2Us: number;
+  driftControlTotalUs: number;
+  driftControlDiffPct: number;
+  driftControlShareDeltaPct: number;
+  driftControlWithin2Pct: boolean;
+  driftControlPassed: boolean;
 }
 
 export function verifyPlantedControls(modelText: string, parsedModel: unknown): PlantedControlsReport {
@@ -1296,11 +1351,12 @@ export function verifyPlantedControls(modelText: string, parsedModel: unknown): 
     parsedModel,
     1,
     120,
-    30,
+    200,
     'frame',
     { label: 'base' },
     busyConfig,
     false,
+    1,
   );
   const busyLoopDeltaUsByStage = {} as Record<RigStage, number>;
   for (const s of RIG_STAGES) {
@@ -1313,29 +1369,15 @@ export function verifyPlantedControls(modelText: string, parsedModel: unknown): 
   );
   const busyLoopPassed = worldDelta >= busyLoopTargetUs * 0.8 && otherMaxBusyDelta < 10;
 
-  // 2. Per-frame allocation control planted in `constraints` (`plant.constraints`)
-  const allocFloats = 2048; // 16,384 bytes backing store (+ JSC TypedArray cell)
-  let keepFn: ((v: unknown) => void) | null = null;
-  const baseAlloc = measureStageAllocations(modelText, parsedModel, { label: 'base' }, 1, 30, 12);
-  const plantedAlloc = measureStageAllocations(
-    modelText,
-    parsedModel,
-    {
-      label: 'alloc-constraints',
-      plant: {
-        constraints: (records) => {
-          keepFn?.(new Float64Array(allocFloats));
-          return records;
-        },
-      },
-    },
-    1,
-    30,
-    12,
-    (keep) => {
-      keepFn = keep;
-    },
-  );
+  // 2. Unretained temporary per-frame allocation control planted in `constraints`
+  // (`plant.constraints` allocates 256 4-element `[i, i+1, i+2, i+3]` temporary
+  // arrays per frame — 16,384 B theoretical — passes each to `noInline`
+  // `touchUnretainedTemp` and retains NOTHING). Measured in a child process with
+  // `BUN_JSC_useGC=0`.
+  const allocUnretainedArrays = UNRETAINED_TEMP_ARRAY_COUNT;
+  const allocExpectedBytes = allocUnretainedArrays * 64; // 16,384 B
+  const baseAlloc = measureStageAllocations(modelText, parsedModel, configForAllocWorkerMode('default'));
+  const plantedAlloc = measureStageAllocations(modelText, parsedModel, configForAllocWorkerMode('planted-unretained'));
   const allocDeltaBytesByStage = {} as Record<RigStage, number>;
   for (const s of RIG_STAGES) {
     allocDeltaBytesByStage[s] = plantedAlloc.perStageBytes[s] - baseAlloc.perStageBytes[s];
@@ -1344,10 +1386,39 @@ export function verifyPlantedControls(modelText: string, parsedModel: unknown): 
   const otherMaxAllocDelta = Math.max(
     ...RIG_STAGES.filter((s) => s !== 'constraints').map((s) => Math.abs(allocDeltaBytesByStage[s])),
   );
-  const expectedAllocBytes = allocFloats * 8;
   const allocPassed =
-    constraintsAllocDelta >= expectedAllocBytes * 0.9 &&
-    otherMaxAllocDelta <= expectedAllocBytes * 0.12;
+    constraintsAllocDelta >= allocExpectedBytes * 0.88 &&
+    otherMaxAllocDelta <= allocExpectedBytes * 0.1;
+
+  // 3. Per-stage relative repeatability drift control (`1 µs → 2 µs` inside a `1000 µs` total):
+  // `world` doubles from `1.00 µs` to `2.00 µs` (`+100.00%` relative stage drift) while its
+  // share of `total` (`1000.00 µs`) only moves from `0.10%` to `0.20%` (`shareDeltaPct = +0.10%`).
+  // `compareRepeatability` must apply the 2% threshold to each stage's own relative drift
+  // (`Math.abs(diffPct) <= 2.0`) and therefore mark `world` as `within2Pct === false`.
+  const stat = (p50: number): StageStats => ({ p50, p95: p50, mean: p50, iqr: 0 });
+  const syntheticRun = (worldUs: number, readoutUs: number): SpineVsRigResult => ({
+    skeleton: 'spineboy',
+    instances: 100,
+    frames: 240,
+    interleave: 'frame',
+    rigStages: {
+      timeline: stat(200),
+      world: stat(worldUs),
+      constraints: stat(200),
+      geometry: stat(200),
+      readout: stat(readoutUs),
+      frame: stat(100),
+      total: stat(200 + worldUs + 200 + 200 + readoutUs + 100),
+    },
+    spineStages: { timeline: stat(200), world: stat(400), geometry: stat(400), total: stat(1000) },
+    mappedRows: [],
+  });
+  const synthRows = compareRepeatability([syntheticRun(1, 299)], [syntheticRun(2, 298)]);
+  const worldDriftRow = synthRows.find((r) => r.stage === 'world')!;
+  const driftControlPassed =
+    Math.abs(worldDriftRow.diffPct - 100) < 1e-9 &&
+    Math.abs(worldDriftRow.shareDeltaPct - 0.1) < 1e-9 &&
+    worldDriftRow.within2Pct === false;
 
   return {
     busyLoopStage: 'world',
@@ -1355,9 +1426,18 @@ export function verifyPlantedControls(modelText: string, parsedModel: unknown): 
     busyLoopDeltaUsByStage,
     busyLoopPassed,
     allocStage: 'constraints',
-    allocFloats,
+    allocUnretainedArrays,
+    allocExpectedBytes,
     allocDeltaBytesByStage,
     allocPassed,
+    driftControlStage: 'world',
+    driftControlRun1Us: worldDriftRow.run1P50Us,
+    driftControlRun2Us: worldDriftRow.run2P50Us,
+    driftControlTotalUs: 1000,
+    driftControlDiffPct: worldDriftRow.diffPct,
+    driftControlShareDeltaPct: worldDriftRow.shareDeltaPct,
+    driftControlWithin2Pct: worldDriftRow.within2Pct,
+    driftControlPassed,
   };
 }
 
@@ -1577,7 +1657,7 @@ export function compareRepeatability(run1: SpineVsRigResult[], run2: SpineVsRigR
         share1Pct,
         share2Pct,
         shareDeltaPct,
-        within2Pct: Math.abs(diffPct) <= 2.0 || (s !== 'total' && Math.abs(shareDeltaPct) <= 2.0),
+        within2Pct: Math.abs(diffPct) <= 2.0,
       });
     }
   }
@@ -1654,6 +1734,15 @@ function parseCli(argv: readonly string[]): CliOptions {
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === '--alloc-worker') {
+    const mode = (process.argv[3] ?? 'default') as AllocWorkerMode;
+    const modelText = readFileSync(0, 'utf8');
+    const parsedModel: unknown = JSON.parse(modelText);
+    const report = measureStageAllocationsInProcess(modelText, parsedModel, configForAllocWorkerMode(mode));
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    return;
+  }
+
   const opts = parseCli(process.argv.slice(2));
   const assets = await ensureBenchAssets(opts.benchDir);
 
@@ -1677,20 +1766,22 @@ async function main(): Promise<void> {
   }
   console.log('');
 
-  // 2. Run CPU timing benchmark arm(s) BEFORE any allocation pass (so
-  // `globalThis.Map` tracking in the dedicated allocation pass never touches
-  // JSC inline caches during CPU timing).
+  // 2. Run CPU timing benchmark arm(s); dedicated allocation pass runs in a
+  // separate child process with `BUN_JSC_useGC=0`.
   const jsonPayload: Record<string, unknown> = {
     bun: Bun.version,
     options: opts,
   };
 
   if (opts.card === 'vs-spine') {
-    // One-time FTL + heap steady-state pre-warm (100 instances × 180 frames)
-    // so Pass 1 and Pass 2 run at identical FTL tiering and steady-state heap capacity.
+    // One-time FTL + heap steady-state pre-warm across every configured
+    // `(skeleton, instances)` pair so Pass 1 and Pass 2 run at identical FTL
+    // tiering and steady-state heap capacity.
     for (const skel of opts.skeletons) {
       const a = assets[skel];
-      runSpineVsRigBench(skel, a.modelText, a.parsedModel, a.spineJsonText, a.atlasText, 100, 180, 60, opts.interleave, false);
+      for (const count of opts.instances) {
+        runSpineVsRigBench(skel, a.modelText, a.parsedModel, a.spineJsonText, a.atlasText, count, 120, 40, opts.interleave, false);
+      }
     }
 
     const allPasses: SpineVsRigResult[][] = [];
@@ -1740,12 +1831,12 @@ async function main(): Promise<void> {
       }
     }
 
-    // Dedicated allocation pass after CPU timing completes
+    // Dedicated child-process allocation pass (`BUN_JSC_useGC=0`)
     if (allPasses.length > 0) {
       for (const res of allPasses[0]) {
         if (res.instances === 1) {
           const a = assets[res.skeleton];
-          res.allocRig = measureStageAllocations(a.modelText, a.parsedModel, { label: 'rig-c' }, 1);
+          res.allocRig = measureStageAllocations(a.modelText, a.parsedModel, { label: 'rig-c' });
         }
       }
     }
@@ -1760,12 +1851,16 @@ async function main(): Promise<void> {
       console.log(
         `  - Per-stage Δ p50: ${RIG_STAGES.map((s) => `\`${s}\`: ${fmtSignedUs(controlsReport!.busyLoopDeltaUsByStage[s])}`).join(', ')}`,
       );
-      console.log(`- **Allocation control (\`new Float64Array(${controlsReport.allocFloats})\` planted in \`${controlsReport.allocStage}\`)**: **${controlsReport.allocPassed ? 'PASS' : 'FAIL'}**`);
+      console.log(`- **Unretained temporary allocation control (\`${controlsReport.allocUnretainedArrays} × 4-element arrays\` = \`${controlsReport.allocExpectedBytes} B\` unretained temporaries planted in \`${controlsReport.allocStage}\`, measured in child process with \`BUN_JSC_useGC=0\`)**: **${controlsReport.allocPassed ? 'PASS' : 'FAIL'}**`);
       console.log(
         `  - Per-stage Δ bytes/frame: ${RIG_STAGES.map((s) => `\`${s}\`: ${controlsReport!.allocDeltaBytesByStage[s] >= 0 ? '+' : ''}${controlsReport!.allocDeltaBytesByStage[s]} B`).join(', ')}`,
       );
+      console.log(`- **Repeatability per-stage relative drift control (\`1.00 µs → 2.00 µs\` in \`${controlsReport.driftControlStage}\` inside \`${controlsReport.driftControlTotalUs.toFixed(2)} µs\` total)**: **${controlsReport.driftControlPassed ? 'PASS (correctly flagged within2Pct: false)' : 'FAIL'}**`);
+      console.log(
+        `  - \`${controlsReport.driftControlStage}\`: \`${fmtUs(controlsReport.driftControlRun1Us)} → ${fmtUs(controlsReport.driftControlRun2Us)}\`, relative \`diffPct = ${fmtPct(controlsReport.driftControlDiffPct)}\`, context \`shareDeltaPct = ${fmtPct(controlsReport.driftControlShareDeltaPct)}\`, \`within2Pct = ${controlsReport.driftControlWithin2Pct}\` (\`FAIL\` as required)`,
+      );
       console.log('');
-      if (!controlsReport.busyLoopPassed || !controlsReport.allocPassed) {
+      if (!controlsReport.busyLoopPassed || !controlsReport.allocPassed || !controlsReport.driftControlPassed) {
         throw new Error('Planted controls verification failed');
       }
     }
@@ -1797,9 +1892,9 @@ async function main(): Promise<void> {
       const repRows = compareRepeatability(allPasses[0], allPasses[1]);
       jsonPayload.repeatability = repRows;
       jsonPayload.selfRepeatability = selfRepeatResults;
-      console.log('#### Repeatability — Back-to-Back Invocations (Pass 1 vs Pass 2, `2%` bar per stage)');
+      console.log('#### Repeatability — Back-to-Back Invocations (Pass 1 vs Pass 2, `2%` bar on each stage\'s own relative drift; share reported as context)');
       console.log('');
-      console.log('| Case | Stage | Pass 1 p50 (Share) | Pass 2 p50 (Share) | Raw Drift % | Share Δ % | Within 2% |');
+      console.log('| Case | Stage | Pass 1 p50 (Share) | Pass 2 p50 (Share) | Stage Relative Drift % | Share Δ % (context) | Within 2% (`|Drift %| ≤ 2%`) |');
       console.log('|---|---|---:|---:|---:|---:|---|');
       for (const r of repRows) {
         const sh1 = r.stage === 'total' ? '100.0%' : `${r.share1Pct.toFixed(1)}%`;
@@ -1851,19 +1946,19 @@ async function main(): Promise<void> {
       }
     }
 
-    // Dedicated allocation pass after CPU timing completes
+    // Dedicated child-process allocation pass (`BUN_JSC_useGC=0`)
     for (const res of results) {
       if (res.instances === 1) {
         const a = assets[res.skeleton];
-        res.allocA = measureStageAllocations(a.modelText, a.parsedModel, configA, 1);
-        res.allocB = measureStageAllocations(a.modelText, a.parsedModel, configB, 1);
+        res.allocA = measureStageAllocations(a.modelText, a.parsedModel, configA);
+        res.allocB = measureStageAllocations(a.modelText, a.parsedModel, configB);
       }
     }
 
     if (opts.verifyControls) {
       const controlsReport = verifyPlantedControls(assets.spineboy.modelText, assets.spineboy.parsedModel);
       jsonPayload.controls = controlsReport;
-      if (!controlsReport.busyLoopPassed || !controlsReport.allocPassed) {
+      if (!controlsReport.busyLoopPassed || !controlsReport.allocPassed || !controlsReport.driftControlPassed) {
         throw new Error('Planted controls verification failed');
       }
     }

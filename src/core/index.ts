@@ -1076,7 +1076,7 @@ export type CoreStage = 'timeline' | 'world' | 'constraints' | 'geometry' | 'rea
 /** Zero-cost-when-absent per-stage instrumentation callbacks on `CorePlant` (issue #1589). */
 export interface StageHooks {
   begin(stage: CoreStage): void;
-  end(stage: CoreStage, keep?: unknown): void;
+  end(stage: CoreStage): void;
 }
 
 /**

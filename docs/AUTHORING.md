@@ -12577,3 +12577,21 @@ side here. The selftest's `runtime-poser` suite holds the gate to its plants (a
 refused feature smuggled through — each caught by name), a seeded population of
 every construct above, the looping step against `openTrack`, and a steady-state
 frame measured at 0 bytes with the collector off.
+
+## 16. Compare sequential mesh candidates against one motion reference
+
+Programmatic callers that gate candidates one at a time can import
+`prepareMotionReference` and `comparePreparedMotion` from `rig-c/meshcompare`.
+Pass the one-shot `MotionComparisonInput` without `candidates` to preparation,
+then pass each complete input with its candidate list to comparison. The handle
+reuses the reference's parsed build, art samples, carriers and poses only while
+the reference model text, schedule, attachments (including mask alpha bytes),
+art-fit bounds and motion options match exactly. A changed bound field, even
+`+0` to `-0`, throws `MeshReductionError` with
+`COMPARE_PREPARED_MISMATCH` naming the field; a forged handle throws
+`COMPARE_PREPARED_HANDLE`. Prepare a new handle for a different selection or
+held-out schedule. Returned reports are detached from the prepared state, and
+the one-shot `compareMeshesInMotion` retains its report and refusal contract.
+The full comparison contract and its input types are in the repository's
+[MESH_REDUCTION.md](https://github.com/rig-c/core/blob/main/docs/MESH_REDUCTION.md#the-comparison-as-implemented-stage-c1),
+which is not shipped in the package.

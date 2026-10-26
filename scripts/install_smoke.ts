@@ -608,6 +608,13 @@ const OBSERVED_SYMBOLS: ObservedEntry[] = [
     types: ['MotionComparisonInput', 'BuiltCandidate', 'CompareAttachment'],
   },
   {
+    entry: './meshcompare',
+    observed: 'rig-c/parts#776 and rig-c/core#1595',
+    needsRuntime: false,
+    values: { prepareMotionReference: 'function', comparePreparedMotion: 'function' },
+    types: ['MotionReferenceInput', 'PreparedMotionReference'],
+  },
+  {
     entry: './core',
     observed: OBSERVED_IN_1275,
     needsRuntime: false,
@@ -1241,6 +1248,17 @@ if (mc !== null && plate !== null && typeof mc.compareMeshesInMotion === 'functi
     const perFrame = (c) => (c && c.perFrame ? c.perFrame.filter((p) => p.code === 'MQ_LOCAL_DEFORMATION') : []);
     const self = timed([{ id: 'itself', model }], 0);
     const plant = timed([{ id: 'moved', model: movedText }], plan.moved);
+    if (typeof mc.prepareMotionReference !== 'function' || typeof mc.comparePreparedMotion !== 'function') {
+      said('the installed meshcompare entry has no prepared-reference pair');
+    } else if (self !== null && plant !== null) {
+      const bound = input([], 0);
+      const { candidates: _unused, ...reference } = bound;
+      try {
+        const handle = mc.prepareMotionReference(reference);
+        const preparedSelf = mc.comparePreparedMotion(handle, input([{ id: 'itself', model }], 0));
+        if (JSON.stringify(preparedSelf) !== JSON.stringify(self.report)) said('the installed prepared self report differs from the one-shot report');
+      } catch (e) { said('the installed prepared comparison threw ' + why(e)); }
+    }
     if (self !== null) {
       const r = self.report;
       if (r.operation !== 'compare') said('the report has operation ' + JSON.stringify(r.operation) + ', and "compare" was required');

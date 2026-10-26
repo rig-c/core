@@ -107,6 +107,7 @@ import {
   type SourceMesh,
   type WorstSample,
 } from './meshquality.ts';
+import { createHash } from 'node:crypto';
 import { areaBand, stretchSingularValues, triangleAreas } from './areaband.ts';
 import { uvCarriers, uvCarriersWith, type Carrier, type CarrierPlant } from './meshcarriers.ts';
 import { CoreInputError, readModel, underNoSkin, underSkin, type CompiledDocument } from './core/index.ts';
@@ -186,6 +187,12 @@ export interface MotionComparisonInput {
    */
   overBound?: OverBoundRequest;
 }
+
+/** The candidate list is supplied on each use; every other input is bound to the reference. */
+export type MotionReferenceInput = Omit<MotionComparisonInput, 'candidates'>;
+
+/** An opaque reference prepared by {@link prepareMotionReference}. Its data is held outside the returned object. */
+export interface PreparedMotionReference { readonly kind: 'prepared-motion-reference/1' }
 
 /**
  * Issue #1291's faults in carrying `motionAmplitude` into the setup measurement, for the `mesh-compare` suite's
@@ -896,6 +903,110 @@ function foldingSlots(raw: unknown, who: string): Set<string> {
   return new Set(list as string[]);
 }
 
+type GeometryRead = { geometry: EvidenceSection | null; counts: MeshCounts | null };
+type MotionRead = { section: EvidenceSection & { schedule: ScheduleUsed }; perFrame: NonNullable<CandidateReport['perFrame']>; overBound: OverBoundReport | null } | null;
+interface PreparedMotionData {
+  frames: Planned[];
+  walks: Walk[];
+  folding: Set<string>;
+  scheduleUsed: ScheduleUsed;
+  samplesOf: Array<{ samples: Sample[]; art: number }>;
+  refCarriers: Array<Array<Carrier | null>>;
+  posedRef: Posed | { refused: string };
+}
+interface PreparedState {
+  reference: Build;
+  refs: AttachmentRef[];
+  order: number[];
+  refGeometry: GeometryRead;
+  motionData: PreparedMotionData | null;
+  referenceMotion: MotionRead;
+  digests: Record<string, string>;
+}
+
+const preparedReferences = new WeakMap<PreparedMotionReference, PreparedState>();
+
+/** One digest per bound field, so a mismatch names the field instead of accepting a stale pose or mask. */
+function boundDigests(input: MotionReferenceInput): Record<string, string> {
+  // JSON.stringify maps -0 to 0, drops undefined object fields, and maps non-finite numbers to null. A bound
+  // option's signed zero can survive validation and is echoed in a report, so these are not safe digest aliases.
+  const exact = (value: unknown, visiting = new Set<object>()): unknown => {
+    if (value === null) return ['null'];
+    if (typeof value === 'number') return ['number', Object.is(value, -0) ? '-0' : String(value)];
+    if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'undefined') return [typeof value, value ?? null];
+    if (typeof value !== 'object') return [typeof value, String(value)];
+    if (visiting.has(value)) throw new Error('cyclic bound input');
+    visiting.add(value);
+    const encoded = Array.isArray(value)
+      ? ['array', Array.from({ length: value.length }, (_, i) => Object.prototype.hasOwnProperty.call(value, i) ? exact(value[i], visiting) : ['hole'])]
+      : ['object', Object.keys(value).map((key) => [key, exact((value as Record<string, unknown>)[key], visiting)])];
+    visiting.delete(value);
+    return encoded;
+  };
+  const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(exact(value))).digest('hex');
+  return {
+    reference: digest(input.reference),
+    schedule: digest(input.schedule),
+    attachments: digest(input.attachments.map((a) => ({
+      attachment: a.attachment,
+      art: { threshold: a.art.threshold, frame: a.art.frame, mask: {
+        width: a.art.mask.width,
+        height: a.art.mask.height,
+        alpha: createHash('sha256').update(a.art.mask.alpha).digest('hex'),
+      } },
+      finalThreshold: a.finalThreshold,
+      minArtSamples: a.minArtSamples,
+      regions: a.regions,
+    }))),
+    referenceArtFit: digest(input.referenceArtFit),
+    candidateArtFit: digest(input.candidateArtFit),
+    bounds: digest(input.bounds),
+    motionRequired: digest(input.motionRequired),
+    perFrame: digest(input.perFrame),
+    motionAmplitude: digest({ present: Object.prototype.hasOwnProperty.call(input, 'motionAmplitude'), value: input.motionAmplitude }),
+    overBound: digest({ present: Object.prototype.hasOwnProperty.call(input, 'overBound'), value: input.overBound }),
+  };
+}
+
+/** Prepare the source once for sequential candidates on the same schedule and the same art. */
+export function prepareMotionReference(input: MotionReferenceInput): PreparedMotionReference {
+  if (!isObject(input)) missing('the prepared reference input', input, 'a MotionReferenceInput object');
+  const ref: unknown = input.reference;
+  let id = 'prepared-candidate';
+  while (isObject(ref) && id === ref.id) id += '-';
+  const model = isObject(ref) && typeof ref.model === 'string' ? ref.model : '';
+  validateInput({ ...input, candidates: [{ id, model }] }, null);
+  // No caller-owned array enters the cache: a later mutation is detected against this snapshot at use.
+  let snapshot: MotionReferenceInput;
+  try { snapshot = structuredClone(input); }
+  catch (e) { refuse('COMPARE_INPUT_MISSING', `the prepared reference input cannot be copied (${(e as Error).message}); required cloneable model, schedule, art and options`); }
+  let state: PreparedState | null = null;
+  const asComparison: MotionComparisonInput = { ...snapshot, candidates: [{ id, model: snapshot.reference.model }] };
+  compareMeshesInMotionWith(asComparison, null, undefined, (ready) => { state = ready; });
+  if (state === null) throw new Error('prepareMotionReference: reference preparation produced no state');
+  const ready: PreparedState = state;
+  try { ready.digests = boundDigests(snapshot); }
+  catch (e) { refuse('COMPARE_INPUT_MISSING', `the prepared reference input cannot be digested (${(e as Error).message}); required a complete mask and comparison options`); }
+  const handle: PreparedMotionReference = Object.freeze({ kind: 'prepared-motion-reference/1' });
+  preparedReferences.set(handle, ready);
+  return handle;
+}
+
+/** Compare a candidate against the prepared source; every bound input must still have the prepared bytes. */
+export function comparePreparedMotion(handle: PreparedMotionReference, input: MotionComparisonInput): MeshQualityReport {
+  const ready = preparedReferences.get(handle);
+  if (ready === undefined) refuse('COMPARE_PREPARED_HANDLE', 'the prepared reference handle was not made by prepareMotionReference; required its opaque handle');
+  let now: Record<string, string>;
+  try { now = boundDigests(input); }
+  catch { refuse('COMPARE_PREPARED_MISMATCH', 'the bound input cannot be digested; required the reference, schedule, attachments and options used to prepare the handle'); }
+  for (const [field, digest] of Object.entries(ready.digests)) {
+    if (now[field] !== digest) refuse('COMPARE_PREPARED_MISMATCH', `${field} changed after prepareMotionReference; required the same reference, schedule, art and options for this handle`);
+  }
+  const report = compareMeshesInMotionWith(input, null, ready);
+  if (report === null) throw new Error('comparePreparedMotion: comparison produced no report');
+  return report;
+}
+
 /**
  * Compare one or more candidate builds with a reference build in motion — §3
  * and §4's motion rows — and measure each build's art fit at the setup pose
@@ -907,7 +1018,9 @@ function foldingSlots(raw: unknown, who: string): Set<string> {
  * undercut at the setup pose fails `referenceArtFit`, and `measureMeshQuality`'s own codes for the art).
  */
 export function compareMeshesInMotion(input: MotionComparisonInput): MeshQualityReport {
-  return compareMeshesInMotionWith(input, null);
+  const report = compareMeshesInMotionWith(input, null);
+  if (report === null) throw new Error('compareMeshesInMotion: comparison produced no report');
+  return report;
 }
 
 /**
@@ -916,18 +1029,20 @@ export function compareMeshesInMotion(input: MotionComparisonInput): MeshQuality
  * surface*).
  */
 export function compareMeshesInMotionPlanted(input: MotionComparisonInput, plant: ComparePlant): MeshQualityReport {
-  return compareMeshesInMotionWith(input, plant);
+  const report = compareMeshesInMotionWith(input, plant);
+  if (report === null) throw new Error('compareMeshesInMotionPlanted: comparison produced no report');
+  return report;
 }
 
-function compareMeshesInMotionWith(input: MotionComparisonInput, plant: ComparePlant | null): MeshQualityReport {
+function compareMeshesInMotionWith(input: MotionComparisonInput, plant: ComparePlant | null, prepared?: PreparedState, capture?: (state: PreparedState) => void): MeshQualityReport | null {
   validateInput(input, plant);
   const amplitude = input.motionAmplitude;
   // What the setup measurement is handed: the field as the caller set it — left out as left out, `null` as `null`.
   const handed: { motionAmplitude?: MotionAmplitude | null } =
     plant === 'amplitude-not-carried' || amplitude === undefined || (plant === 'null-read-as-left-out' && amplitude === null) ? {} : { motionAmplitude: amplitude };
-  const refs = input.attachments.map((a) => a.attachment);
-  const reference = readBuild(input.reference, 'reference', refs);
-  const candidates = input.candidates.map((c, i) => readBuild(c, `candidates[${i}]`, refs));
+  const refs = prepared?.refs ?? input.attachments.map((a) => a.attachment);
+  const reference = prepared?.reference ?? readBuild(input.reference, 'reference', refs);
+  const candidates = capture === undefined ? input.candidates.map((c, i) => readBuild(c, `candidates[${i}]`, refs)) : [];
   for (const c of candidates) {
     const d = firstDifference(reference.raw, c.raw, [], refs);
     if (d !== null) {
@@ -939,13 +1054,13 @@ function compareMeshesInMotionWith(input: MotionComparisonInput, plant: CompareP
   }
   // The slots in skeleton order fix the order attachments are reported in (§2).
   const slotRank = new Map(reference.doc.slots.map((s, i) => [s.name, i]));
-  const order = input.attachments.map((_a, i) => i).sort((p, q) => (slotRank.get(refs[p].slot) ?? 0) - (slotRank.get(refs[q].slot) ?? 0) || (refs[p].attachment < refs[q].attachment ? -1 : refs[p].attachment > refs[q].attachment ? 1 : 0));
+  const order = prepared?.order ?? input.attachments.map((_a, i) => i).sort((p, q) => (slotRank.get(refs[p].slot) ?? 0) - (slotRank.get(refs[q].slot) ?? 0) || (refs[p].attachment < refs[q].attachment ? -1 : refs[p].attachment > refs[q].attachment ? 1 : 0));
   for (const ref of refs) {
     if (!slotRank.has(ref.slot)) missing(`attachment ${nameOf(ref)}'s slot`, ref.slot, `one of the reference's slots [${[...slotRank.keys()].join(', ')}]`);
   }
 
   // --- the setup art fit, each build under its own bounds (§3 (a)) ----------------------------
-  const geometryOf = (b: Build, fit: ArtFitBounds): { geometry: EvidenceSection | null; counts: MeshCounts | null } => {
+  const geometryOf = (b: Build, fit: ArtFitBounds): GeometryRead => {
     const sections: EvidenceSection[] = [];
     const counts: MeshCounts[] = [];
     for (const i of order) {
@@ -987,7 +1102,7 @@ function compareMeshesInMotionWith(input: MotionComparisonInput, plant: CompareP
     };
     return { geometry: joinSections(sections), counts: total };
   };
-  const refGeometry = geometryOf(reference, input.referenceArtFit);
+  const refGeometry = prepared?.refGeometry ?? geometryOf(reference, input.referenceArtFit);
   // §3 *Independent evidence* (a), P8: a reference that fails its own art fit — coverage, overshoot or undercut against
   // its own mask under `referenceArtFit` — is refused AS A REFERENCE: a deviation from a reference that does not carry
   // its own art is not evidence, so no candidate is measured against it. (a) is those three rows and no other: winding
@@ -1006,24 +1121,26 @@ function compareMeshesInMotionWith(input: MotionComparisonInput, plant: CompareP
 
   // --- motion ---------------------------------------------------------------------------------
   const schedule = input.schedule;
-  type Motion = { section: EvidenceSection & { schedule: ScheduleUsed }; perFrame: NonNullable<CandidateReport['perFrame']>; overBound: OverBoundReport | null } | null;
   // Issue #1315: the request as the caller set it; `?? undefined` only matters under the unvalidated plant.
   const overBound: OverBoundRequest | undefined = input.overBound ?? undefined;
-  let motionOf: (b: Build, isReference: boolean) => Motion = () => null;
+  let motionOf: (b: Build, isReference: boolean) => MotionRead = () => null;
+  let motionData: PreparedMotionData | null = null;
   if (schedule !== null) {
-    const physicsConstraints = reference.doc.constraints.filter((c) => c.kind === 'physics').length;
-    const { frames, walks, walkSteps } = planSchedule(schedule, reference.doc, physicsConstraints);
-    const folding = foldingSlots(reference.raw, `reference "${reference.id}"`);
-    const scheduleUsed: ScheduleUsed = {
+    const existing = prepared?.motionData;
+    const planned = existing === undefined ? planSchedule(schedule, reference.doc, reference.doc.constraints.filter((c) => c.kind === 'physics').length) : null;
+    const frames = existing?.frames ?? planned!.frames;
+    const walks = existing?.walks ?? planned!.walks;
+    const folding = existing?.folding ?? foldingSlots(reference.raw, `reference "${reference.id}"`);
+    const scheduleUsed: ScheduleUsed = existing?.scheduleUsed ?? {
       ...schedule,
       walked: frames.map((f) => f.ref),
       roles: (['baseline', 'selection', 'held-out'] as const).filter((r) => frames.some((f) => f.ref.role === r)),
       heldOutClaim: frames.some((f) => f.ref.role === 'held-out'),
       reset: 'physics reset at time 0',
-      walks: walks.map((w, i) => ({ animation: w.animation, phase: w.phase, steps: walkSteps[i] })),
+      walks: walks.map((w, i) => ({ animation: w.animation, phase: w.phase, steps: planned!.walkSteps[i] })),
     };
     // The samples, per attachment: art pixel centres at the final threshold, then the reference hull's UVs (§3).
-    const samplesOf = order.map((i) => {
+    const samplesOf = existing?.samplesOf ?? order.map((i) => {
       const a = input.attachments[i];
       const { mask, frame } = a.art;
       const bits = artOf(mask, a.finalThreshold);
@@ -1046,9 +1163,10 @@ function compareMeshesInMotionWith(input: MotionComparisonInput, plant: CompareP
     const carrierPlant: CarrierPlant | null = plant === 'slack-support-unread' || plant === 'narrowest-slack' || plant === 'any-shared-vertex' ? plant : null;
     const carriersOf = (uvs: readonly number[], triangles: readonly number[], samples: ReadonlyArray<{ uv: [number, number] }>, who: string): Array<Carrier | null> =>
       uvCarriersWith(uvs, triangles, samples, who, carrierPlant);
-    const refCarriers = order.map((i, k) => carriersOf(reference.meshes[i].uvs, reference.meshes[i].triangles, samplesOf[k].samples, `reference "${reference.id}", attachment ${nameOf(refs[i])}`));
+    const refCarriers = existing?.refCarriers ?? order.map((i, k) => carriersOf(reference.meshes[i].uvs, reference.meshes[i].triangles, samplesOf[k].samples, `reference "${reference.id}", attachment ${nameOf(refs[i])}`));
     const clock = plant === 'frame-physics-clock' ? 'frame' : 'render';
-    const posedRef = poseBuild(reference.doc, order.map((i) => refs[i]), frames, walks, clock);
+    const posedRef = existing?.posedRef ?? poseBuild(reference.doc, order.map((i) => refs[i]), frames, walks, clock);
+    motionData = { frames, walks, folding, scheduleUsed, samplesOf, refCarriers, posedRef };
 
     motionOf = (b: Build, isReference: boolean) => {
       const carriers = isReference ? refCarriers : order.map((i, k) => carriersOf(b.meshes[i].uvs, b.meshes[i].triangles, samplesOf[k].samples, `candidate "${b.id}", attachment ${nameOf(refs[i])}`));
@@ -1311,9 +1429,13 @@ function compareMeshesInMotionWith(input: MotionComparisonInput, plant: CompareP
       return { section: { ...sectionOf(grouped), schedule: scheduleUsed }, perFrame, overBound: located };
     };
   }
-  const referenceMotion = motionOf(reference, true);
+  const referenceMotion = prepared?.referenceMotion ?? motionOf(reference, true);
+  if (capture !== undefined) {
+    capture({ reference, refs, order, refGeometry, motionData, referenceMotion, digests: {} });
+    return null;
+  }
   const candidateMotions = candidates.map((c) => motionOf(c, false));
-  const reportOf = (b: Build, geometry: { geometry: EvidenceSection | null; counts: MeshCounts | null }, measured: Motion, isCandidate: boolean): CandidateReport => {
+  const reportOf = (b: Build, geometry: GeometryRead, measured: MotionRead, isCandidate: boolean): CandidateReport => {
     const motion = measured === null ? null : measured.section;
     // P6: the geometry verdict pass (every required row measured and passing), and — when motion is required — the motion verdict pass.
     const accepted = geometry.geometry !== null && geometry.geometry.verdict === 'pass' && (!input.motionRequired || (motion !== null && motion.verdict === 'pass'));
@@ -1354,7 +1476,7 @@ function compareMeshesInMotionWith(input: MotionComparisonInput, plant: CompareP
         : {}
       : { overBound: { maxSamples: overBound.maxSamples, triangles: overBound.triangles } }),
   };
-  return {
+  const report: MeshQualityReport = {
     spec: MESH_QUALITY_REPORT_SPEC,
     operation: 'compare',
     effective,
@@ -1365,4 +1487,6 @@ function compareMeshesInMotionWith(input: MotionComparisonInput, plant: CompareP
     candidates: candidates.map((c, i) => reportOf(c, candGeometry[i], candidateMotions[i], true)),
     termination: null,
   };
+  // The prepared geometry, pose and reference rows live across calls. A caller may edit a returned report.
+  return prepared === undefined ? report : structuredClone(report);
 }

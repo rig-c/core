@@ -12521,6 +12521,11 @@ pose.computeVertices();
 // pose.vertices: model.attachments[i].count numbers at model.attachments[i].offset
 ```
 
+Each `model.attachments[i]` also carries readonly `skin` and `placeholder`: the
+exact resolved table identity `(skin, model.slots[attachment.slot].name, placeholder)`.
+The display `name` may be shared by different placeholders; it is never a table
+key to guess the source from. These load-time strings do not change the pose path.
+
 | | what stage 0 poses |
 | --- | --- |
 | bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |

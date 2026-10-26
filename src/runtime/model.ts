@@ -185,6 +185,9 @@ export const RAD = RUNTIME_PI / 180;
 export interface RuntimeAttachment {
   readonly slot: number;
   readonly name: string;
+  /** Exact resolved source table identity; display names need not be unique. */
+  readonly skin: string;
+  readonly placeholder: string;
   readonly path: string | null;
   readonly draw: number;
   readonly bone: number;
@@ -456,7 +459,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     if ('conflict' in shown) return { index: -1, missing: ['skin-conflict', `slot "${slot.name}" placeholder "${placeholder}" is filled by skins that disagree`] };
     const row = shownRow(shown);
     const g = shown.record.geometry;
-    const at = { slot: si, name: row.name, path: CORE_REGION_KINDS.has(shown.record.kind) ? row.path : null, bone: indexOf(slot.bone), offset: vertexCount };
+    const at = { slot: si, name: row.name, skin: shown.skin, placeholder: shown.placeholder, path: CORE_REGION_KINDS.has(shown.record.kind) ? row.path : null, bone: indexOf(slot.bone), offset: vertexCount };
     let made: RuntimeAttachment | null = null;
     let missing: readonly [RuntimeFeature, string] | null = null;
     if (g?.kind === 'clipping') missing = ['clipping', `slot "${slot.name}" shows clipping attachment "${row.name}"`];
@@ -562,7 +565,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   };
 }
 
-type AttachmentHead = { slot: number; name: string; path: string | null; bone: number; offset: number };
+type AttachmentHead = { slot: number; name: string; skin: string; placeholder: string; path: string | null; bone: number; offset: number };
 
 const NO_INTS = new Int32Array(0);
 const NO_NUMBERS = new Float64Array(0);

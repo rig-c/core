@@ -958,7 +958,11 @@ export function posedBoneRows(doc: CompiledDocument, timelines: CoreAnimationTim
 /** `posedBoneRows`, with the world transforms the rows were read off — what the sample's attachments are posed through. */
 export function posedBoneWorld(doc: CompiledDocument, timelines: CoreAnimationTimelines, t: number, plant: TimelinePlant = {}, constraints?: CoreConstraintTimelines, sliders?: SliderApplication[], step?: PoseStep): { rows: CoreBoneRow[]; world: Map<string, CoreWorld> } {
   const posed = posedBoneStep(doc, timelines, t, plant, constraints, sliders, step);
-  return { rows: stepRows(posed), world: posed.world };
+  const stage = plant.stage;
+  if (stage !== undefined) stage.begin('readout');
+  const rows = stepRows(posed);
+  if (stage !== undefined) stage.end('readout', rows);
+  return { rows, world: posed.world };
 }
 
 /**
@@ -1003,20 +1007,51 @@ function stepRows(posed: PosedStep): CoreBoneRow[] {
 
 /** `posedBoneWorld` up to its rows, refusing a bone the evaluator gave no transform (`PosedStep`). */
 function posedBoneStep(doc: CompiledDocument, timelines: CoreAnimationTimelines, t: number, plant: TimelinePlant, constraints: CoreConstraintTimelines | undefined, sliders: SliderApplication[] | undefined, step: PoseStep | undefined): PosedStep {
+  const stage = plant.stage;
+  if (stage !== undefined) stage.begin('timeline');
   const bones = posedBones(doc, timelines, t, plant);
+  if (stage !== undefined) stage.end('timeline', bones);
   // One step of the stepped phase (issue #956, `./constraints_physics.ts`): the physics records posed by their timelines and stepped under the walk's context; the deformed curve a path walks as above.
-  if (constraints !== undefined && step !== undefined) return steppedLocals(doc, bones, plant, () => pathDeformed(doc, posedRecords(constraintRecords(doc), constraints, t), timelines, t, plant), constraints.physicsKeyed ?? [], t, sliders, step);
+  if (constraints !== undefined && step !== undefined) {
+    let kept: unknown;
+    return steppedLocals(
+      doc,
+      bones,
+      plant,
+      () => {
+        const base = constraintRecords(doc);
+        const posed = posedRecords(base, constraints, t);
+        const def = pathDeformed(doc, posed, timelines, t, plant);
+        if (stage !== undefined) kept = [base, posed, def];
+        return def;
+      },
+      constraints.physicsKeyed ?? [],
+      t,
+      sliders,
+      step,
+      () => kept,
+    );
+  }
   const active = activeBones(doc);
   // The caller's adjustment, after the timelines and before anything reads the locals (`LocalAdjust`).
-  if (step?.adjustment !== undefined) adjustLocals(doc, bones, step.adjustment.callback, step.adjustment.context);
-  let world = (plant.evaluate ?? worldTransforms)(bones, active);
+  if (step?.adjustment !== undefined) {
+    if (stage !== undefined) stage.begin('timeline');
+    adjustLocals(doc, bones, step.adjustment.callback, step.adjustment.context);
+    if (stage !== undefined) stage.end('timeline', bones);
+  }
+  if (stage !== undefined) stage.begin('world');
+  const initialWorld = (plant.evaluate ?? worldTransforms)(bones, active);
+  if (stage !== undefined) stage.end('world', initialWorld);
+  let world = initialWorld;
   if (constraints !== undefined) {
+    if (stage !== undefined) stage.begin('constraints');
     const setupRecords = constraintRecords(doc);
     // A path walks the curve the sample's deform timelines left on its slot (`./deform.ts`); a slider's deform of a walked path leaves the bones out (`pathAnimationsWhy`).
     const records = pathDeformed(doc, posedRecords(setupRecords, constraints, t), timelines, t, plant);
     // A path constraint may read a slot bone the runtime has not yet brought up to date in this pass, as the previous pass left it (`./constraints_path.ts`, *Which slot bone*); `poseAnimations` holds that pass to the setup pose's reading.
     const previous = setupRecords.some((r) => r.kind === 'path') ? applyConstraints(doc.bones, (plant.evaluate ?? worldTransforms)(doc.bones, active), active, plant.constraints ? plant.constraints(setupRecords) : setupRecords, null, undefined, undefined, undefined, solverRules(plant.solver)) : null;
-    world = applyConstraints(bones, world, active, plant.constraints ? plant.constraints(records) : records, previous, sliders, undefined, undefined, solverRules(plant.solver));
+    world = applyConstraints(bones, initialWorld, active, plant.constraints ? plant.constraints(records) : records, previous, sliders, undefined, undefined, solverRules(plant.solver));
+    if (stage !== undefined) stage.end('constraints', records);
   }
   for (const b of bones) if (world.get(b.name) === undefined) throw new CoreInputError(`the evaluator returned no transform for bone "${b.name}"`);
   return { bones, world, active, round: plant.round ?? gridRound };
@@ -1032,13 +1067,24 @@ function posedBoneStep(doc: CompiledDocument, timelines: CoreAnimationTimelines,
  * (`./tracks.ts`) with the locals their mixed entries posed — one pose path
  * past the timelines for both.
  */
-function steppedLocals(doc: CompiledDocument, bones: ModelBone[], plant: TimelinePlant, records: () => CoreConstraintRecord[], physicsKeyed: NonNullable<CoreConstraintTimelines['physicsKeyed']>, t: number, sliders: SliderApplication[] | undefined, step: PoseStep): PosedStep {
+function steppedLocals(doc: CompiledDocument, bones: ModelBone[], plant: TimelinePlant, records: () => CoreConstraintRecord[], physicsKeyed: NonNullable<CoreConstraintTimelines['physicsKeyed']>, t: number, sliders: SliderApplication[] | undefined, step: PoseStep, kept?: () => unknown): PosedStep {
+  const stage = plant.stage;
   const active = activeBones(doc);
   // The caller's adjustment, after the timelines and before anything reads the locals (`LocalAdjust`).
-  if (step.adjustment !== undefined) adjustLocals(doc, bones, step.adjustment.callback, step.adjustment.context);
-  let world = (plant.evaluate ?? worldTransforms)(bones, active);
+  if (step.adjustment !== undefined) {
+    if (stage !== undefined) stage.begin('timeline');
+    adjustLocals(doc, bones, step.adjustment.callback, step.adjustment.context);
+    if (stage !== undefined) stage.end('timeline', bones);
+  }
+  if (stage !== undefined) stage.begin('world');
+  const initialWorld = (plant.evaluate ?? worldTransforms)(bones, active);
+  if (stage !== undefined) {
+    stage.end('world', initialWorld);
+    stage.begin('constraints');
+  }
   const stepped = stepPhysicsRecords(records(), physicsKeyed, t, active, step.ctx, step.before);
-  world = applyConstraints(bones, world, active, plant.constraints ? plant.constraints(stepped) : stepped, null, sliders, step.ctx, undefined, solverRules(plant.solver));
+  const world = applyConstraints(bones, initialWorld, active, plant.constraints ? plant.constraints(stepped) : stepped, null, sliders, step.ctx, undefined, solverRules(plant.solver));
+  if (stage !== undefined) stage.end('constraints', kept === undefined ? stepped : [kept(), stepped]);
   for (const b of bones) if (world.get(b.name) === undefined) throw new CoreInputError(`the evaluator returned no transform for bone "${b.name}"`);
   return { bones, world, active, round: plant.round ?? gridRound };
 }

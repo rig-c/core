@@ -108834,16 +108834,6 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
     );
   }
 
-  unit('CO64', () => {
-    const result = physicsScopeCases();
-    say(
-      'CO64_SCOPED_PHYSICS_MOVEMENT_IS_NAMED_ATOMIC_AND_LEAVES_INDEPENDENT_STATES_IDENTICAL',
-      result.ok,
-      probeDetail(result.ok, result.problems, `${result.checks} checks on single/composed tracks under both resets: selected origins match native translate/rotate; independent states stay identical; absent/all/empty/duplicate scopes and named atomic refusals; whole-context movement plant detected`),
-      'play #197: explicit constraint scope changes only the selected remembered origins before evaluation; no scope keeps whole-rig movement, and selection is not a solver dependency barrier',
-    );
-  });
-
   unit('CO29+CO30', () => {
     // ===========================================================================
     // No skin set (issue #1051): what a fresh skeleton whose `setSkin` was never
@@ -109150,6 +109140,16 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
         'issue #1049: the rule held on a population is a measurement only while each reading it rejected is seen to differ there — that the keys write, from which value, which kinds add, how a mass blends, how long a write lasts and whether a reset key fires',
       );
     }
+  });
+
+  unit('CO64', () => {
+    const result = physicsScopeCases();
+    say(
+      'CO64_SCOPED_PHYSICS_MOVEMENT_IS_NAMED_ATOMIC_AND_LEAVES_INDEPENDENT_STATES_IDENTICAL',
+      result.ok,
+      probeDetail(result.ok, result.problems, `${result.checks} checks on single/composed tracks under both resets: selected origins match native translate/rotate; independent states stay identical; absent/all/empty/duplicate scopes and named atomic refusals; whole-context movement plant detected`),
+      'play #197: explicit constraint scope changes only the selected remembered origins before evaluation; no scope keeps whole-rig movement, and selection is not a solver dependency barrier',
+    );
   });
 
   // --- CO33, CO34: issue #1039 — the order of an animation's bone timelines, and whether it reaches a pose --------

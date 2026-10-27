@@ -1247,6 +1247,79 @@ export function runtimeStage7Cases(say: Say): void {
     } finally { rmSync(work, { recursive: true, force: true }); }
     say('RP46_NOSCALE_WORLD_TARGET_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
   }
+  runtimeStage8Cases(say);
+}
+
+/** Additive flags change only the transform being measured; ordered readers/writers stay absolute. */
+export function additiveTransformProbe(localSource: boolean, localTarget: boolean, from = 'all', to = 'all', mode = 'normal', mix = 0.375, shape = 'ordinary', profile = 'reflected-x'): string {
+  const raw = JSON.parse(noScaleWorldProbe(mode, from, to, localSource, mix, shape === 'zero-target-scale' ? 'ordinary' : shape, profile)) as { bones: Array<Record<string, unknown>>; constraints: Array<Record<string, unknown>> };
+  const measured = raw.constraints.find(c => c.name === 'local')!;
+  measured.additive = true; measured.localTarget = localTarget;
+  if (shape === 'source-collapsed') {
+    const source = raw.bones.find(b => b.name === 'source')!; source.scaleX = 0; source.scaleY = 0;
+  }
+  if (shape === 'zero-target-scale' || shape === 'tiny-target-scale') {
+    // A zero child column with a finite parent is in the oracle's finite domain.
+    measured.bones = ['b']; measured.mixScaleX = 1;
+    measured.properties = { x: { to: { scaleX: { scale: 0, offset: shape === 'zero-target-scale' ? 0 : 0.00001 } } } };
+  }
+  if (shape === 'rotate-big-positive' || shape === 'rotate-big-negative' || shape === 'shear-boundary') {
+    const property = shape === 'shear-boundary' ? 'shearY' : 'rotate';
+    const value = shape === 'rotate-big-positive' ? 1080 : shape === 'rotate-big-negative' ? -1080 : 540.123;
+    measured.properties = { x: { to: { [property]: { scale: 0, offset: value } } } };
+  }
+  return JSON.stringify(raw);
+}
+
+/** Shared with baseline admission measurements so every before/after fixture byte is identical. */
+export function additiveTransformFixtures(source: boolean, target: boolean): Array<[string, string]> {
+  const out: Array<[string, string]> = [], props = ['rotate', 'x', 'y', 'scaleX', 'scaleY', 'shearY'];
+  const push = (name: string, from = 'all', to = 'all', mode = 'normal', mix = 0.375, shape = 'ordinary', profile = 'reflected-x'): void => { out.push([name, additiveTransformProbe(source, target, from, to, mode, mix, shape, profile)]); };
+  for (const from of props) for (const to of props) push(`${from}->${to}`, from, to);
+  for (const mode of ['normal', 'onlyTranslation', 'noRotationOrReflection', 'noScale', 'noScaleOrReflection']) for (const profile of ['reflected-x', 'reflected-y', 'anisotropic']) for (const mix of [0.375, 1, -0.25, 1.25]) push(`${mode}/${profile}/mix=${mix}`, 'all', 'all', mode, mix, 'ordinary', profile);
+  for (const shape of ['self', 'reverse', 'swapped', 'duplicates', 'timeline-linear', 'timeline-stepped', ...['mixRotate', 'mixX', 'mixY', 'mixScaleX', 'mixScaleY', 'mixShearY'].map(p => `zero-${p}`), 'source-collapsed', 'collapsed', 'near-collapsed', 'zero-target-scale', 'tiny-target-scale', 'rotate-big-positive', 'rotate-big-negative', 'shear-boundary']) push(shape, 'all', 'all', 'normal', 0.6, shape);
+  for (const mode of ['noScale', 'noScaleOrReflection']) push(`${mode}/clamp`, 'all', 'all', mode, 0.6, 'clamp');
+  return out;
+}
+
+export function runtimeStage8Cases(say: Say): void {
+  const groups: Array<[string, boolean, boolean]> = [['WORLD_TO_WORLD', false, false], ['LOCAL_TO_WORLD', true, false], ['WORLD_TO_LOCAL', false, true], ['LOCAL_TO_LOCAL', true, true]];
+  const all: Array<[string, string]> = [];
+  for (const [index, [label, source, target]] of groups.entries()) {
+    const problems: string[] = []; let identical = 0, refused = 0, poses = 0, livePoses = 0, values = 0;
+    const fixtures = additiveTransformFixtures(source, target);
+    for (const [name, text] of fixtures) {
+      all.push([`${label}/${name}`, text]);
+      const row = runtimeOfTexts(name, text, ''); poses += row.poses; values += row.values;
+      if (row.refusedAtLoad?.some(m => String(m.feature) === 'additive-transform')) refused++;
+      if (row.verdict !== 'IDENTICAL') { if (problems.length < 5) problems.push(`${name}: ${row.verdict}: ${row.why}`); continue; }
+      identical++; const live = stepAgainstTrack(text, 'a', steps); livePoses += live.poses; values += live.values;
+      if (live.first !== null && problems.length < 5) problems.push(`${name}: ${live.first}`);
+    }
+    say(`RP${47 + index}_ADDITIVE_${label}_MATCHES_ORACLE_AT_ZERO`, problems, `${identical}/${fixtures.length} fixtures IDENTICAL, ${refused} refused as additive-transform; ${poses} none/step sampled poses, ${livePoses} looping live poses (setup included), ${values} Object.is cells; all properties and cross-mappings, five inherit modes, reflection, finite collapsed axes, keyed/zero/out-of-range mixes, wrap boundaries, clamp, repeated targets, local readers and later parent edits`);
+  }
+  {
+    const problems: string[] = []; let red = 0;
+    for (const [name, text] of all) {
+      const row = runtimeOfTexts(name, text, '', { omitAdditiveTransform: true });
+      if (row.verdict === 'DIFF') red++; else if (problems.length < 5) problems.push(`${name}: omitted additive read ${row.verdict}: ${row.why}`);
+    }
+    say('RP51_OMITTED_ADDITIVE_TRANSFORM_MAKES_EVERY_FIXTURE_RED', problems, `${red}/${all.length} fixtures DIFF under omission; unplanted fixtures measured above`);
+  }
+  {
+    const problems: string[] = [], details: string[] = [], work = mkdtempSync(join(tmpdir(), 'runtime-stage8-'));
+    try {
+      for (const [label, source, target] of groups) {
+        const file = join(work, `${label}.model.json`); writeFileSync(file, additiveTransformProbe(source, target));
+        const clean = allocationPerFrame(resolve(import.meta.dir, '..'), file, 'a', 'none');
+        const plant = allocationPerFrame(resolve(import.meta.dir, '..'), file, 'a', 'object');
+        details.push(`${label}: ${clean.said}; object plant ${plant.said}`);
+        if (clean.bytes !== 0) problems.push(`${label}: ${clean.said}`);
+        if (plant.bytes === null || plant.bytes < 16) problems.push(`${label} plant: ${plant.said}`);
+      }
+    } finally { rmSync(work, { recursive: true, force: true }); }
+    say('RP52_ADDITIVE_TRANSFORMS_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
+  }
 }
 
 if (import.meta.main) {

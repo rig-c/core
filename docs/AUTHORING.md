@@ -12647,7 +12647,7 @@ verdict on those figures.
 | <a id="CE_COMPILE_ALPHA_CLIP_CONFLICT"></a>`CE_COMPILE_ALPHA_CLIP_CONFLICT` | Names authored fields or convex/inverse flags conflicting with generated inside-clipping geometry. Use one authored/generated form.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦: alphaClip conflicts with [⟧<br>⟦vertexCount⟧<br>⟦vertices⟧<br>⟦weights⟧<br>⟦boneIndexing⟧<br>⟦, ⟧<br>⟦], convex=⟧<br>⟦, inverse=⟧<br>⟦; required ordinary inside clipping with generated geometry only. Remove authored geometry/flags.⟧ |
 | <a id="CE_COMPILE_ALPHA_CLIP_DEFORM"></a>`CE_COMPILE_ALPHA_CLIP_DEFORM` | Names animation and source/clip key/frame counts that cannot share the existing projection contract. Give matching explicit supported transform keys in compatible actual frames, with constant world shares where needed, or author the corresponding clip geometry and motion; weighted binding does not copy source deform.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦ alphaClip from "⟧<br>⟦"⟧<br>⟦: animation "⟧<br>⟦" has ⟧<br>⟦ source and ⟧<br>⟦ clip keys; source frame=⟧<br>⟦no vertex geometry⟧<br>⟦clip frame=⟧<br>⟦, constant world influence shares=⟧<br>⟦Required matching explicit affine/depth-yaw/pitch transforms in compatible DeformGeometry frames, ⟧<br>⟦with constant shares for world-space transfer. Fix the named frame/keys or author corresponding clip motion.⟧ |
 
-## 15. Posing in place for a player — the runtime poser (stage 7)
+## 15. Posing in place for a player — the runtime poser (stage 8)
 
 rigc poses a model document twice over, on purpose (issue #1591). The **oracle**
 (`src/core/`) is the reference: each pose is a pure function of the document,
@@ -12682,11 +12682,11 @@ exact resolved table identity `(skin, model.slots[attachment.slot].name, placeho
 The display `name` may be shared by different placeholders; it is never a table
 key to guess the source from. These load-time strings do not change the pose path.
 
-| | what stage 7 poses |
+| | what stage 8 poses |
 | --- | --- |
 | bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |
 | timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, light colour (`rgba`, `rgb`, `alpha`) and dark colour (`rgba2`, `rgb2`); `drawOrder`; ik, transform and path timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
-| constraints | physics with its exact clock, reset and parameter timelines, and optional constraint-scoped external translate/rotate; value-mapped sliders with bone/slot/draw-order/deform/physics composition; path constraints across all position, spacing and rotate modes on open or closed, constant-speed or arc-length, weighted or unweighted, deformed curves; one- and two-bone ik; absolute transform constraints with local or world sources and targets; the document's order, each followed by the bones below what it moved posed again |
+| constraints | physics with its exact clock, reset and parameter timelines, and optional constraint-scoped external translate/rotate; value-mapped sliders with bone/slot/draw-order/deform/physics composition; path constraints across all position, spacing and rotate modes on open or closed, constant-speed or arc-length, weighted or unweighted, deformed curves; one- and two-bone ik; absolute/additive transform constraints with local or world sources and targets; the document's order, each followed by the bones below what it moved posed again |
 | vertices | regions, meshes, weighted meshes and linked meshes, written into the pose's buffer |
 | deform | weighted and unweighted mesh and path timelines, linear/stepped/Bézier, per-pose key cursors and in-place buffers; linked meshes inherit their source's timelines only with `timelines: true` |
 | skins and events | named/no-skin views with their skin-required bones and constraints; event delivery in key order over `(last, time]`, tail then head across a wrap |
@@ -12767,7 +12767,7 @@ constraints later in update order. An unsupported timeline in a slider's
 animation refuses the whole model under that timeline's existing feature name,
 so an unselected track cannot hide a construct the slider always applies.
 
-Absolute transform constraints read each source property from the current local
+Transform constraints read each source property from the current local
 values (`localSource: true`) or world matrix, including earlier constraints'
 read-back, apply offsets and cross-mappings in declaration order, then clamp and
 blend by the keyed property mix. `localTarget: true` writes local values and
@@ -12782,13 +12782,23 @@ parent reflection and `noScaleOrReflection` removes it. This is the oracle's
 `localFromWorld`, `noScaleDirection` and `decompose` order; subsequent local
 readers and parent edits observe those same locals. Stage-seven controls
 `RP43`–`RP46` hold both modes to the oracle with omission and allocation plants.
-Additive transforms
-remain refused. Stage-six controls `RP38`–`RP42` hold local-source, local-target
+With `additive: true`, a local position, rotation or shear adds `v * mix`
+and a local scale multiplies by `1 + (v - 1) * mix`. A world rotation turns by
+`v * RAD` wrapped once at the runtime pi before applying mix; world translation
+adds `v * mix`, and world scale multiplies by `1 + (v - 1) * mix` (a zero-length
+column is left alone). World additive shear uses `(v + 90) * RAD - 90 * RAD`
+without wrapping, then adds the mixed angle to the existing y-column angle.
+That subtraction order is kept exactly, as in the oracle's `applyWorld`;
+replacing it with `v * RAD` is not bit-equivalent. Source reading, mappings,
+clamp, keyed mixes and the final union repose retain `solveTransform` order.
+Stage-eight controls `RP47`–`RP52` hold all four source/target forms to the
+oracle, with an omission plant and the steady-state allocation meter.
+Stage-six controls `RP38`–`RP42` hold local-source, local-target
 and both forms to the oracle with omission and allocation plants.
 
 **Everything else is refused at load, by name.** `RuntimeRefusal.missing` lists
 every construct met, each `{ feature, detail, animation }`, and the message
-reads `not posed by the runtime poser (stage 7), N construct(s) missing:
+reads `not posed by the runtime poser (stage 8), N construct(s) missing:
 <feature>: <detail>; …`. A model-level feature refuses the whole model; an
 animation-level one refuses that animation alone (`model.refused`;
 `model.animation(name)` and `setAnimation(name)` throw its refusal) and every
@@ -12797,7 +12807,6 @@ refused: nothing is posed approximately.
 
 | feature | refuses | what it is |
 | --- | --- | --- |
-| `additive-transform` | the model | a transform constraint with `additive: true` |
 | `inactive-constrained-bone` | the model | an applied ik, transform or path constraint naming a bone the view leaves inactive (what the oracle writes there depends on the pass before) |
 | `clipping`, `null-atlas-region` | the model when shown at setup, else the animation that keys it | a clipping attachment; a region whose atlas rectangle the model states as `null` |
 | `skin-conflict` | as above | a placeholder the skins fill differently |

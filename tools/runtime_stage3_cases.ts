@@ -2,14 +2,15 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { readModel, underNoSkin } from '../src/core/index.ts';
+import { readModel, underNoSkin, underSkin } from '../src/core/index.ts';
 import { openTrack } from '../src/core/track.ts';
 import { physicsClockStep, type RawPose } from '../src/core/raw.ts';
-import { compileRuntime, RuntimePose, RuntimeRefusal, type RuntimePlant } from '../src/runtime/index.ts';
+import { compileRuntime, RuntimeInputError, RuntimePose, RuntimeRefusal, type RuntimePlant } from '../src/runtime/index.ts';
 import { runtimeOfTexts, sliderPhysicsPair, sliderPhysicsShape, SLIDER_PHYSICS_PROBES } from './core_gate.ts';
 import { allocationPerFrame, probeModel, stepAgainstTrack } from './runtime_poser_cases.ts';
+import { galleryRecipe, runRecipe } from './emit_hashes.ts';
 import { compile } from '../src/compile.ts';
-import { modelDocument } from '../src/model.ts';
+import { MODEL_DOCUMENT_FILE, modelDocument } from '../src/model.ts';
 import { skirtFixture, passThroughFixture, legStopFixture } from '../fixtures/public.ts';
 import { stepRuntimePhysics, freshPhysicsState } from '../src/runtime/physics.ts';
 import { stepPhysics, freshStepContext, type CorePhysicsRecord } from '../src/core/constraints_physics.ts';
@@ -229,6 +230,490 @@ export function runtimeStage3Cases(say: Say): void {
     }
   } finally { rmSync(work, { recursive: true, force: true }); }
   say('RP25_PHYSICS_SLIDER_STEADY_STATE_ZERO_ALLOCATION', alloc, detail);
+  runtimeStage4Cases(say);
+}
+
+interface PathProbeOptions {
+  positionMode?: 'fixed' | 'percent';
+  spacingMode?: 'length' | 'fixed' | 'percent' | 'proportional';
+  rotateMode?: 'tangent' | 'chain' | 'chainScale';
+  closed?: boolean;
+  constantSpeed?: boolean;
+  weighted?: boolean;
+  offsetRotation?: number;
+  slotSign?: 'plain' | 'before' | 'after';
+  deform?: boolean;
+  withPhysics?: boolean;
+  withSlider?: boolean;
+}
+
+export function pathProbe(opts: PathProbeOptions = {}): string {
+  const {
+    positionMode = 'percent',
+    spacingMode = 'length',
+    rotateMode = 'tangent',
+    closed = false,
+    constantSpeed = true,
+    weighted = false,
+    offsetRotation = 0,
+    slotSign = 'plain',
+    deform = false,
+    withPhysics = false,
+    withSlider = false,
+  } = opts;
+  const onlyGuides = slotSign === 'before';
+  const vertices = weighted || onlyGuides
+    ? {
+        weighted: true,
+        bindings: [
+          onlyGuides ? [{ bone: 'guide1', x: -15, y: -5, weight: 0.7 }, { bone: 'guide2', x: -40, y: -20, weight: 0.3 }] : [{ bone: 'slotBone', x: -15, y: -5, weight: 0.7 }, { bone: 'guide1', x: -40, y: -20, weight: 0.3 }],
+          onlyGuides ? [{ bone: 'guide1', x: 0, y: 0, weight: 0.6 }, { bone: 'guide2', x: -25, y: -15, weight: 0.4 }] : [{ bone: 'slotBone', x: 0, y: 0, weight: 0.6 }, { bone: 'guide1', x: -25, y: -15, weight: 0.4 }],
+          onlyGuides ? [{ bone: 'guide1', x: 15, y: 8, weight: 0.5 }, { bone: 'guide2', x: -10, y: -7, weight: 0.5 }] : [{ bone: 'slotBone', x: 15, y: 8, weight: 0.5 }, { bone: 'guide1', x: -10, y: -7, weight: 0.5 }],
+          [{ bone: 'guide1', x: 5, y: 4, weight: 0.65 }, { bone: 'guide2', x: -35, y: 30, weight: 0.35 }],
+          [{ bone: 'guide1', x: 20, y: 0, weight: 0.45 }, { bone: 'guide2', x: -20, y: 24, weight: 0.55 }],
+          [{ bone: 'guide1', x: 40, y: -18, weight: 0.25 }, { bone: 'guide2', x: 0, y: 6, weight: 0.75 }],
+        ],
+      }
+    : { weighted: false, xy: [-15, -5, 0, 0, 15, 8, 35, 22, 55, 18, 75, -6] };
+  const signConstraints = slotSign === 'before'
+    ? [
+        { kind: 'transform', name: 'orderSlotChild', bones: ['slotChild'], source: 'guide1', properties: { x: { to: { x: {} } } } },
+        { kind: 'transform', name: 'flipCarrier', bones: ['carrier'], source: 'driver', properties: { scaleX: { to: { scaleX: {} } } } },
+      ]
+    : slotSign === 'after'
+      ? [
+          { kind: 'transform', name: 'flipSlotBone', bones: ['slotBone'], source: 'driver', properties: { scaleX: { to: { scaleX: {} } } } },
+          { kind: 'transform', name: 'flipCarrier', bones: ['carrier'], source: 'driver', properties: { scaleX: { to: { scaleX: {} } } } },
+        ]
+      : [];
+  const posSetup = positionMode === 'fixed' ? 8.5 : 0.15;
+  const spcSetup = spacingMode === 'fixed' ? 12.5 : spacingMode === 'length' ? 2.5 : 0.2;
+  const deformCount = (weighted || onlyGuides) ? 24 : 12;
+  return probeModel({
+    bones: [
+      { name: 'root', rotation: 7 },
+      { name: 'carrier', parent: 'root', x: 5, y: -3, rotation: 11 },
+      { name: 'slotBone', parent: 'carrier', x: 4, y: 2, rotation: -9 },
+      { name: 'slotChild', parent: 'slotBone', x: 6 },
+      { name: 'guide1', parent: 'root', x: 35, y: 18, rotation: 23 },
+      { name: 'guide2', parent: 'root', x: 80, y: -12, rotation: -19 },
+      { name: 'driver', parent: 'root', x: -10, scaleX: -1.2 },
+      { name: 'c1', parent: 'root', x: 2, y: 1, length: 18, rotation: 5 },
+      { name: 'c2', parent: 'c1', x: 18, length: 22, rotation: -12 },
+      { name: 'c3', parent: 'c2', x: 22, length: 14, rotation: 8 },
+      { name: 'tip', parent: 'c3', x: 14, length: 10 },
+    ],
+    slots: [
+      { name: 'pathSlot', bone: 'slotBone', setup: 'curve' },
+      { name: 'badge', bone: 'tip', setup: 'dot' },
+    ],
+    attachments: {
+      pathSlot: {
+        curve: { kind: 'path', closed, constantSpeed, vertexCount: 6, lengths: [42.5, 91.25], vertices },
+      },
+      badge: {
+        dot: { kind: 'region', width: 8, height: 8, atlas: { width: 8, height: 8, originalWidth: 8, originalHeight: 8, offsetX: 0, offsetY: 0 } },
+      },
+    },
+    constraints: [
+      ...signConstraints,
+      ...(withSlider ? [{ kind: 'slider', name: 'dial', animation: 'slidePose', bone: 'guide1', property: 'rotate', from: 0, to: 0.1, scale: 0.02, mix: 0.6 }] : []),
+      {
+        kind: 'path',
+        name: 'p',
+        bones: ['c1', 'c2', 'c3'],
+        slot: 'pathSlot',
+        positionMode,
+        spacingMode,
+        rotateMode,
+        rotation: offsetRotation,
+        position: posSetup,
+        spacing: spcSetup,
+        mixRotate: 0.85,
+        mixX: 0.9,
+        mixY: 0.75,
+      },
+      ...(withPhysics ? [{ kind: 'physics', name: 'tail', bone: 'tip', x: 0.6, y: 0.5, rotate: 0.7, scaleX: 0.3, shearX: 0.2, fps: 60, mass: 1.5, wind: 0.3, gravity: 0.9, mix: 0.8 }] : []),
+    ],
+    animations: [
+      {
+        name: 'walk',
+        duration: 1,
+        bones: [
+          { name: 'root', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.5, value: 25, curve: [0.15, 5, 0.35, 20] }, { time: 1, value: -10 }] }] },
+          { name: 'guide1', timelines: [{ name: 'translate', keys: [{ time: 0, x: 0, y: 0 }, { time: 0.5, x: 8, y: -6 }, { time: 1, x: -4, y: 5 }] }, { name: 'rotate', keys: key(0, 35) }] },
+          { name: 'guide2', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.5, value: -30 }, { time: 1, value: 15 }] }] },
+        ],
+        constraints: {
+          ik: [],
+          transform: [],
+          slider: [],
+          physics: [],
+          path: [
+            {
+              name: 'p',
+              timelines: [
+                {
+                  name: 'position',
+                  keys: [
+                    { time: 0, value: positionMode === 'fixed' ? -5 : -0.1, curve: [0.1, 0, 0.3, 0.4] },
+                    { time: 0.45, value: positionMode === 'fixed' ? 35 : 0.65, curve: 'stepped' },
+                    { time: 0.75, value: positionMode === 'fixed' ? 70 : 1.15 },
+                    { time: 1, value: positionMode === 'fixed' ? 12 : 0.25 },
+                  ],
+                },
+                {
+                  name: 'spacing',
+                  keys: [
+                    { time: 0, value: spacingMode === 'fixed' ? 10 : spacingMode === 'length' ? 0 : 0.18 },
+                    { time: 0.5, value: spacingMode === 'fixed' ? 18 : spacingMode === 'length' ? 5 : 0.32, curve: [0.6, 0.2, 0.85, 0.25] },
+                    { time: 1, value: spacingMode === 'fixed' ? 6 : spacingMode === 'length' ? -3 : 0.12 },
+                  ],
+                },
+                {
+                  name: 'mix',
+                  keys: [
+                    { time: 0, mixRotate: 1, mixX: 1, mixY: 0.8 },
+                    { time: 0.35, mixRotate: 0.5, mixX: 0.7, mixY: 0.4, curve: [0.4, 0.6, 0.55, 0.2, 0.4, 0.8, 0.55, 0.3, 0.4, 0.5, 0.55, 0.2] },
+                    { time: 0.6, mixRotate: 0, mixX: 0, mixY: 0, curve: 'stepped' },
+                    { time: 0.8, mixRotate: 0.9, mixX: 0.85, mixY: 0.95 },
+                    { time: 1, mixRotate: 1, mixX: 1, mixY: 1 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        attachments: deform
+          ? [
+              {
+                name: 'default',
+                slots: [
+                  {
+                    name: 'pathSlot',
+                    attachments: [
+                      {
+                        name: 'curve',
+                        deform: [
+                          { time: 0.125, offset: 2, vertices: [4.25, -3.5, -2.75, 6.125], curve: [0.2, 0.05, 0.4, 0.95] },
+                          { time: 0.55, curve: 'stepped', vertices: Array.from({ length: deformCount }, (_, i) => ((i % 5) - 2) * 1.375) },
+                          { time: 0.9 },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ]
+          : [],
+      },
+      ...(withSlider
+        ? [
+            {
+              name: 'slidePose',
+              duration: 1,
+              bones: [{ name: 'c1', timelines: [{ name: 'rotate', keys: key(-15, 25) }] }, { name: 'slotBone', timelines: [{ name: 'translatex', keys: key(-3, 6) }] }],
+            },
+          ]
+        : []),
+    ],
+  });
+}
+
+function scopedPhysicsProbe(): string {
+  return probeModel({
+    bones: [
+      { name: 'root', rotation: 5 },
+      { name: 'a', parent: 'root', x: 10, y: 2, length: 18 },
+      { name: 'b', parent: 'root', x: -12, y: 4, length: 22 },
+      { name: 'c', parent: 'root', x: 0, y: 15, length: 16 },
+      { name: 'target', parent: 'root', x: 14, y: 18 },
+    ],
+    constraints: [
+      { kind: 'ik', name: 'onlyIk', bones: ['c'], target: 'target', mix: 0.25 },
+      { kind: 'ik', name: 'shared', bones: ['c'], target: 'target', mix: 0.15 },
+      { kind: 'physics', name: 'pa', bone: 'a', x: 0.8, y: 0.7, rotate: 0.6, scaleX: 0.4, shearX: 0.3, fps: 60, mass: 1.8, wind: 0.2, gravity: 0.8, mix: 1 },
+      { kind: 'physics', name: 'pb', bone: 'b', x: 0.75, y: 0.65, rotate: 0.55, scaleX: 0.35, shearX: 0.25, fps: 60, mass: 2.1, wind: -0.3, gravity: 1.1, mix: 0.9 },
+      { kind: 'physics', name: 'shared', bone: 'c', x: 0.6, y: 0.5, rotate: 0.7, scaleX: 0.3, shearX: 0.2, fps: 60, mass: 1.4, wind: 0.1, gravity: 0.5, mix: 0.85 },
+    ],
+    animations: [
+      {
+        name: 'sway',
+        duration: 1,
+        bones: [{ name: 'root', timelines: [{ name: 'rotate', keys: key(0, 20) }] }],
+      },
+    ],
+  });
+}
+
+function runtimeStage4Cases(say: Say): void {
+  // --- RP30: path constraints across all modes, curves, deforms and slot-bone determinant snapshots match the oracle at 0 ---
+  {
+    const problems: string[] = [];
+    let fixtures = 0;
+    let poses = 0;
+    let values = 0;
+    const specs: Array<[string, PathProbeOptions]> = [];
+    for (const positionMode of ['fixed', 'percent'] as const) {
+      for (const spacingMode of ['length', 'fixed', 'percent', 'proportional'] as const) {
+        for (const rotateMode of ['tangent', 'chain', 'chainScale'] as const) {
+          const idx = specs.length;
+          specs.push([
+            `${positionMode}/${spacingMode}/${rotateMode}`,
+            {
+              positionMode,
+              spacingMode,
+              rotateMode,
+              closed: idx % 2 === 1,
+              constantSpeed: idx % 3 !== 0,
+              weighted: idx % 2 === 0,
+              offsetRotation: idx % 4 === 0 ? 0 : idx % 2 === 0 ? 17.5 : -23.25,
+              deform: idx % 3 === 0,
+              withPhysics: idx % 5 === 0,
+              withSlider: idx % 7 === 0,
+            },
+          ]);
+        }
+      }
+    }
+    for (const closed of [false, true]) {
+      for (const constantSpeed of [false, true]) {
+        for (const weighted of [false, true]) {
+          specs.push([
+            `curve closed=${closed} const=${constantSpeed} weighted=${weighted}`,
+            { positionMode: 'percent', spacingMode: 'proportional', rotateMode: 'chainScale', closed, constantSpeed, weighted, offsetRotation: 13.75, deform: true },
+          ]);
+        }
+      }
+    }
+    for (const slotSign of ['plain', 'before', 'after'] as const) {
+      specs.push([`slotSign=${slotSign}`, { positionMode: 'fixed', spacingMode: 'length', rotateMode: 'tangent', offsetRotation: 29.5, slotSign, weighted: slotSign === 'before' }]);
+    }
+    for (const [label, opts] of specs) {
+      const text = pathProbe(opts);
+      fixtures++;
+      const row = runtimeOfTexts(label, text, '');
+      poses += row.poses;
+      values += row.values;
+      if (row.verdict !== 'IDENTICAL' && problems.length < 5) problems.push(`${label}: ${row.verdict} — ${row.why}`);
+      const live = stepAgainstTrack(text, 'walk', steps.slice(0, 60));
+      poses += live.poses;
+      values += live.values;
+      if (live.first !== null && problems.length < 5) problems.push(`${label} step: ${live.first}`);
+    }
+    say(
+      'RP30_PATH_CONSTRAINTS_ALL_MODES_DEFORM_AND_SLOT_BONE_SIGNS_MATCH_ORACLE_AT_ZERO',
+      problems,
+      `${fixtures} path fixtures (${poses} poses / ${values} values at tolerance 0, sample grid + 60 looping steps each): fixed/percent position, length/fixed/percent/proportional spacing, tangent/chain/chainScale rotate, open/closed, constantSpeed true/false, unweighted/weighted, path deform, slider + physics composition, and before/after slot-bone determinant snapshots`,
+    );
+  }
+
+  // --- RP31: path plants (omitPath, omitDeform, bindingIndex) fail by name and boundary refusals are named ---
+  {
+    const problems: string[] = [];
+    const caught: string[] = [];
+    const baseText = pathProbe({ weighted: true, deform: true, rotateMode: 'chainScale', offsetRotation: 15 });
+    const cleanRow = runtimeOfTexts('clean path', baseText, '');
+    if (cleanRow.verdict !== 'IDENTICAL') problems.push(`clean path probe read ${cleanRow.verdict}: ${cleanRow.why}`);
+    const plants: Array<[string, string, RuntimePlant, string]> = [
+      ['omitPath', baseText, { omitPath: true }, '"c1"'],
+      ['omitDeform on path', pathProbe({ weighted: false, deform: true, rotateMode: 'tangent' }), { omitDeform: true }, '"c1"'],
+      ['bindingIndex on weighted path', pathProbe({ weighted: true, deform: false, rotateMode: 'chain' }), { bindingIndex: (i, n) => (i + 1) % n }, '"c1"'],
+    ];
+    for (const [label, text, plant, expected] of plants) {
+      const green = runtimeOfTexts(`${label} green`, text, '');
+      const red = runtimeOfTexts(label, text, '', plant);
+      if (green.verdict !== 'IDENTICAL') problems.push(`${label} unplanted read ${green.verdict}: ${green.why}`);
+      else if (red.verdict !== 'DIFF' || !(red.why ?? '').includes(expected)) problems.push(`${label} planted read ${red.verdict}: ${red.why} (expected DIFF naming ${expected})`);
+      else caught.push(`${label} → ${red.verdict} (${expected})`);
+    }
+
+    // Refusal boundaries: inactive constrained bone and oracle-absent path conditions.
+    const inactiveDoc = JSON.parse(pathProbe()) as { bones: Array<Record<string, unknown>> };
+    inactiveDoc.bones = inactiveDoc.bones.map((b) => (b.name === 'c2' ? { ...b, skinRequired: true } : b));
+    const switchDoc = JSON.parse(pathProbe()) as { animations: Array<Record<string, unknown>> };
+    switchDoc.animations[0].slots = [{ name: 'pathSlot', timelines: [{ name: 'attachment', keys: [{ time: 0.5, name: null }] }] }];
+    const conflictDoc = JSON.parse(pathProbe()) as { skins: Array<Record<string, unknown>> };
+    conflictDoc.skins.push({
+      name: 'alt',
+      bones: [],
+      constraints: {},
+      attachments: {
+        pathSlot: {
+          curve: { kind: 'path', closed: true, constantSpeed: false, vertexCount: 6, lengths: [10, 20], vertices: { weighted: false, xy: [0, 0, 5, 5, 10, 0, 15, -5, 20, 0, 25, 5] } },
+        },
+      },
+    });
+    const prevPassDoc = JSON.parse(pathProbe({ slotSign: 'before', offsetRotation: 20 })) as { constraints: Array<Record<string, unknown>>; animations: Array<{ bones: Array<Record<string, unknown>> }> };
+    prevPassDoc.constraints = prevPassDoc.constraints.filter((c) => c.name === 'p');
+    prevPassDoc.animations[0].bones.push({ name: 'slotBone', timelines: [{ name: 'scalex', keys: [{ time: 0, value: 1 }, { time: 0.5, value: -1 }] }] });
+    const sliderDeformDoc = JSON.parse(pathProbe({ withSlider: true, deform: true })) as { animations: Array<Record<string, unknown>> };
+    sliderDeformDoc.animations[1].attachments = sliderDeformDoc.animations[0].attachments;
+
+    const refusals: Array<[string, () => unknown, string, string]> = [
+      ['inactive path bone', () => compileRuntime(underNoSkin(readModel(JSON.stringify(inactiveDoc)))), 'inactive-constrained-bone', 'path constraint "p" names bone(s) "c2"'],
+      ['switched path slot', () => compileRuntime(underNoSkin(readModel(JSON.stringify(switchDoc)))), 'oracle-absent', 'keys the attachment of slot "pathSlot"'],
+      ['conflicting skin path under all', () => compileRuntime(underSkin(readModel(JSON.stringify(conflictDoc)), 'all')), 'oracle-absent', 'walks slot "pathSlot"'],
+      ['previous-pass slot bone reflection', () => compileRuntime(underNoSkin(readModel(JSON.stringify(prevPassDoc)))), 'oracle-absent', 'reads slot bone "slotBone" from the previous pose'],
+      ['slider deforming walked path', () => compileRuntime(underNoSkin(readModel(JSON.stringify(sliderDeformDoc)))), 'oracle-absent', 'deforms walked path'],
+    ];
+    for (const [label, run, feature, snippet] of refusals) {
+      try {
+        run();
+        problems.push(`${label}: compiled without refusal`);
+      } catch (err) {
+        if (!(err instanceof RuntimeRefusal) || !err.missing.some((m) => m.feature === feature && m.detail.includes(snippet))) {
+          problems.push(`${label}: refused as ${String(err)}`);
+        } else caught.push(`${label} → ${feature}`);
+      }
+    }
+    say(
+      'RP31_PATH_FAULTS_DEFORM_AND_BINDING_PLANTS_AND_BOUNDARY_REFUSALS_ARE_NAMED',
+      problems,
+      `${caught.length} controls (3 plants RED when planted / GREEN when unplanted, 5 refusal boundaries): ${caught.join('; ')}`,
+    );
+  }
+
+  // --- RP32: physicsTranslate and physicsRotate scope match the oracle, plant turns RED, and invalid scopes fail atomically ---
+  {
+    const problems: string[] = [];
+    const text = scopedPhysicsProbe();
+    const doc = underNoSkin(readModel(text));
+    const pose = new RuntimePose(compileRuntime(doc));
+    const planted = new RuntimePose(compileRuntime(doc, {}, { ignorePhysicsScope: true }));
+    pose.setAnimation('sway');
+    pose.resetPhysics('animation');
+    planted.setAnimation('sway');
+    planted.resetPhysics('animation');
+    const track = openTrack(doc, 'sway', { loop: true, reset: 'animation' });
+    let diff = mismatch(pose, track.first);
+    if (diff) problems.push(`first: ${diff}`);
+
+    // Empty scope is a strict no-op; duplicate names in scope apply once, not twice, and leave unselected constraints untouched.
+    const emptyPose = new RuntimePose(compileRuntime(doc));
+    const singlePose = new RuntimePose(compileRuntime(doc));
+    const dupPose = new RuntimePose(compileRuntime(doc));
+    for (const p of [emptyPose, singlePose, dupPose]) {
+      p.setAnimation('sway');
+      p.resetPhysics('animation');
+    }
+    const baseB = [...singlePose.world.slice(2 * 6, 3 * 6)];
+    emptyPose.physicsTranslate(99, -99, []);
+    emptyPose.physicsRotate(15, -25, 45, []);
+    emptyPose.step(steps[0]);
+    const refPose = new RuntimePose(compileRuntime(doc));
+    refPose.setAnimation('sway');
+    refPose.resetPhysics('animation');
+    refPose.step(steps[0]);
+    if (emptyPose.world.some((v, idx) => !Object.is(v, refPose.world[idx]))) problems.push('empty scope mutated physics state');
+
+    singlePose.physicsTranslate(4.5, -3.25, ['pa']);
+    dupPose.physicsTranslate(4.5, -3.25, ['pa', 'pa']);
+    singlePose.physicsRotate(2, 3, 18, ['pa']);
+    dupPose.physicsRotate(2, 3, 18, ['pa', 'pa']);
+    singlePose.step(steps[0]);
+    dupPose.step(steps[0]);
+    if (singlePose.world.some((v, idx) => !Object.is(v, dupPose.world[idx]))) problems.push('duplicate name in scope applied more than once');
+    if (singlePose.world.slice(2 * 6, 3 * 6).some((v, idx) => !Object.is(v, refPose.world[2 * 6 + idx])) || baseB.length !== 6) {
+      problems.push('scoped physicsTranslate/Rotate mutated unselected constraint pb');
+    }
+
+    // Negative control: ignorePhysicsScope moves unselected constraint pb when scope is ['pa'], turning bone b RED while bone a stays GREEN.
+    const cleanScoped = new RuntimePose(compileRuntime(doc));
+    cleanScoped.setAnimation('sway');
+    cleanScoped.resetPhysics('animation');
+    planted.physicsTranslate(4.5, -3.25, ['pa']);
+    planted.physicsRotate(2, 3, 18, ['pa']);
+    cleanScoped.physicsTranslate(4.5, -3.25, ['pa']);
+    cleanScoped.physicsRotate(2, 3, 18, ['pa']);
+    const plantTrack = openTrack(doc, 'sway', { loop: true, reset: 'animation' });
+    plantTrack.physicsTranslate(4.5, -3.25, ['pa']);
+    plantTrack.physicsRotate(2, 3, 18, ['pa']);
+    planted.step(steps[0]);
+    cleanScoped.step(steps[0]);
+    const plantRaw = plantTrack.step(steps[0]);
+    if (mismatch(cleanScoped, plantRaw) !== null) problems.push(`unplanted ['pa'] scope differed: ${mismatch(cleanScoped, plantRaw)}`);
+    const plantDiff = mismatch(planted, plantRaw);
+    if (plantDiff === null || !plantDiff.includes('bone b')) problems.push(`ignorePhysicsScope plant read ${plantDiff ?? 'IDENTICAL'} (expected bone b)`);
+
+    let comparedCells = 0;
+    const scopes: Array<readonly string[] | undefined> = [undefined, [], ['pa'], ['pb'], ['pa', 'pa'], ['shared'], ['pa', 'shared']];
+    for (let i = 0; i < 120; i++) {
+      const sc = scopes[i % scopes.length];
+      if (i % 3 === 0) {
+        pose.physicsTranslate(0.45 * ((i % 5) - 2), -0.35 * ((i % 3) - 1), sc);
+        track.physicsTranslate(0.45 * ((i % 5) - 2), -0.35 * ((i % 3) - 1), sc);
+      }
+      if (i % 5 === 0) {
+        pose.physicsRotate(2.5, -4.5, 11.25 * ((i % 4) - 1.5), sc);
+        track.physicsRotate(2.5, -4.5, 11.25 * ((i % 4) - 1.5), sc);
+      }
+      const dt = steps[i];
+      pose.step(dt);
+      const raw = track.step(dt);
+      diff = mismatch(pose, raw);
+      comparedCells += raw.bones.length * 6;
+      if (diff && problems.length < 5) problems.push(`step ${i} (scope=${JSON.stringify(sc)}): ${diff}`);
+    }
+
+    // Atomicity on invalid inputs: even when the first scope entry is valid ('pa') and the second is invalid, 'pa' is untouched.
+    const invalidCalls: Array<[string, (p: RuntimePose) => void, string]> = [
+      ['non-finite x', (p) => p.physicsTranslate(Number.NaN, 1, ['pa']), 'physicsTranslate: x and y must be finite'],
+      ['non-finite degrees', (p) => p.physicsRotate(1, 2, Number.POSITIVE_INFINITY, ['pa']), 'physicsRotate: x, y and degrees must be finite'],
+      ['non-array scope', (p) => p.physicsTranslate(1, 2, 'pa' as unknown as readonly string[]), 'not an array of physics constraint names'],
+      ['non-string scope item', (p) => p.physicsRotate(1, 2, 15, ['pa', 7 as unknown as string]), 'scope name 7 is not a string'],
+      ['unknown constraint after valid', (p) => p.physicsTranslate(5, 6, ['pa', 'nosuch']), 'no constraint "nosuch"'],
+      ['non-physics constraint after valid', (p) => p.physicsRotate(5, 6, 20, ['pa', 'onlyIk']), 'constraint "onlyIk" is ik, not physics'],
+    ];
+    for (const [label, fn, expected] of invalidCalls) {
+      try {
+        fn(pose);
+        problems.push(`${label}: did not throw`);
+      } catch (err) {
+        if (!(err instanceof RuntimeInputError) || !err.message.includes(expected)) problems.push(`${label}: threw ${String(err)}`);
+      }
+    }
+    // Step both pose (after all 6 rejected calls) and track by one more frame: if any rejected call partially mutated 'pa', bone 'a' diverges now.
+    pose.step(steps[0]);
+    const afterInvalidRaw = track.step(steps[0]);
+    const afterInvalidDiff = mismatch(pose, afterInvalidRaw);
+    if (afterInvalidDiff !== null) problems.push(`rejected calls partially mutated state: ${afterInvalidDiff}`);
+    say(
+      'RP32_PHYSICS_TRANSLATE_AND_ROTATE_SCOPE_MATCH_ORACLE_AND_REFUSE_INVALID_SCOPES_ATOMICALLY',
+      problems,
+      `${comparedCells} bone cells by Object.is over 120 steps with interleaved undefined, [], ['pa'], ['pb'], duplicate ['pa','pa'], and homonymous ['shared'] (ik + physics) scopes; ignorePhysicsScope plant caught on bone b; ${invalidCalls.length} invalid calls refused atomically with 0 state mutations`,
+    );
+  }
+
+  // --- RP33: steady-state frame allocation on path-constrained rigs (probe + gallery/ride) is 0 B/frame ---
+  {
+    const problems: string[] = [];
+    const work = mkdtempSync(join(tmpdir(), 'runtime-stage4-'));
+    const root = resolve(import.meta.dir, '..');
+    const details: string[] = [];
+    try {
+      const probeFile = join(work, 'path-physics.model.json');
+      writeFileSync(probeFile, pathProbe({ weighted: true, deform: true, rotateMode: 'chainScale', closed: true, withPhysics: true, withSlider: true }));
+      const rideDir = join(work, 'ride');
+      const ride = runRecipe(galleryRecipe(root, 'ride').recipe, rideDir, root);
+      const rideOk = ride.exits.every((e) => e === 0);
+      if (!rideOk) problems.push(`gallery/ride build failed: exits ${JSON.stringify(ride.exits)}`);
+      const targets: Array<[string, string, string]> = [
+        ['path+deform+physics probe', probeFile, 'walk'],
+        ...(rideOk ? [['gallery/ride', join(rideDir, 'out', MODEL_DOCUMENT_FILE), 'ride'] as [string, string, string]] : []),
+      ];
+      for (const [label, file, animation] of targets) {
+        const clean = allocationPerFrame(root, file, animation, 'none');
+        const planted = allocationPerFrame(root, file, animation, 'object');
+        details.push(`${label} "${animation}": ${clean.said}, plant ${planted.said}`);
+        if (clean.bytes !== 0) problems.push(`${label} clean: ${clean.said}`);
+        if (planted.bytes === null || planted.bytes < 16) problems.push(`${label} plant: ${planted.said}`);
+      }
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+    say('RP33_PATH_AND_SCOPED_PHYSICS_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
+  }
 }
 if (import.meta.main) {
   let bad = 0;

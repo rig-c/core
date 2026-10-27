@@ -591,8 +591,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
       if (r.model !== null || !r.features.includes(feature)) probes.push(`${feature}: ${r.model !== null ? 'compiled' : `refused naming [${r.features.join(', ')}]`}`);
       else fired.add(feature);
     }
-    // The gallery's: a path constraint, a slider and a physics constraint.
-    for (const r of gallery) for (const m of r.refusedAtLoad ?? []) if (m.feature === 'path-constraint') fired.add(m.feature);
     // An animation's own constructs: the model compiles, the animation is refused and `animation(name)` throws naming it; `idle` is posed.
     const seqRegion = { kind: 'region', width: 10, height: 10, sequence: { count: 2, start: 0, digits: 0, setup: 0, atlas: [rect(10, 10), rect(8, 8)] } };
     const animationProbes: Array<[RuntimeFeature, ProbeSpec, Obj]> = [
@@ -637,26 +635,25 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     say(
       'RP08_EVERY_CONSTRUCT_STAGE_0_DOES_NOT_POSE_IS_REFUSED_BY_NAME_THE_MODELS_AT_LOAD_AND_AN_ANIMATIONS_ALONE',
       probes,
-      `each of the ${RUNTIME_FEATURES.length} features refused by a probe naming it — ${modelProbes.length} hand-written models refused at load, the path constraint off the gallery, ${animationProbes.length} animations refused alone while the model's other animation is posed; skin views and event delivery are covered by stage-one controls; no animation set, an unknown animation and a time that is not finite refused by name`,
+      `each of the ${RUNTIME_FEATURES.length} features refused by a probe naming it — ${modelProbes.length} hand-written models refused at load, ${animationProbes.length} animations refused alone while the model's other animation is posed; skin views and event delivery are covered by stage-one controls; no animation set, an unknown animation and a time that is not finite refused by name`,
     );
   }
 
   // --- RP09: SKIP is never a pass — a corpus the runtime poses none of is a HOLE, a DIFF is RED --
   {
     const probes: string[] = [];
-    const refusedOnly = gallery.filter((r) => r.refusedAtLoad !== null);
+    const galleryRefused = gallery.filter((r) => r.refusedAtLoad !== null);
+    if (galleryRefused.length > 0) probes.push(`gallery rig(s) still refused at load: ${galleryRefused.map((r) => r.name).join(', ')}`);
+    const refusedOnly = [runtimeOfTexts('refused probe', probeModel({ bones: [{ name: 'root' }], slots: [{ name: 's', bone: 'root', setup: 'c' }], attachments: { s: { c: { kind: 'clipping', vertexCount: 3, vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] } } } } }), '')];
     const hole = runtimeLines(refusedOnly);
-    if (refusedOnly.length === 0) probes.push('no gallery rig is refused at load');
-    else {
-      if (!hole.lines.some((l) => l.startsWith('  HOLE  runtime: the runtime poser posed nothing'))) probes.push(`a corpus of refused rows printed no HOLE: ${hole.lines.join(' | ')}`);
-      if (!hole.lines[hole.lines.length - 1].includes(' 0 covered whole')) probes.push(`a corpus of refused rows counted a covered row: ${hole.lines[hole.lines.length - 1]}`);
-    }
+    if (!hole.lines.some((l) => l.startsWith('  HOLE  runtime: the runtime poser posed nothing'))) probes.push(`a corpus of refused rows printed no HOLE: ${hole.lines.join(' | ')}`);
+    if (!hole.lines[hole.lines.length - 1].includes(' 0 covered whole')) probes.push(`a corpus of refused rows counted a covered row: ${hole.lines[hole.lines.length - 1]}`);
     const red = runtimeLines([...gallery, { ...gallery[0], verdict: 'DIFF', why: 'planted' }]);
     if (red.ok || !red.lines[red.lines.length - 1].startsWith('RUNTIME RED')) probes.push(`a DIFF row read ${red.lines[red.lines.length - 1]}`);
     say(
       'RP09_A_SKIP_IS_NEVER_A_PASS_A_CORPUS_POSED_BY_NONE_IS_A_HOLE_AND_A_DIFF_IS_RED',
       probes,
-      `the ${refusedOnly.length} gallery rig(s) refused at load, alone: a HOLE line and 0 covered whole; a DIFF row among the gallery's: RUNTIME RED`,
+      `all ${gallery.length} gallery rig(s) admitted at load; a probe refused at load, alone: a HOLE line and 0 covered whole; a DIFF row among the gallery's: RUNTIME RED`,
     );
   }
 
@@ -700,7 +697,13 @@ function allocChild(argv: readonly string[]): number {
   pose.setAnimation(animation);
   pose.apply(0);
   let sink: unknown = null;
+  const firstPhysics = runtime.constraints.find((c) => c.kind === 'physics');
+  const scope = runtime.hasPath && firstPhysics !== undefined ? [firstPhysics.name] : undefined;
   const frame = (f: number): void => {
+    if (scope !== undefined) {
+      pose.physicsTranslate(0.01, -0.01, scope);
+      pose.physicsRotate(0, 0, 0.05, scope);
+    }
     pose.step(1 / 60);
     pose.computeVertices();
     if (plant === 'object') sink = { f, x: pose.world[0] };

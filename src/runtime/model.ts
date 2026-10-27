@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 3): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 4): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -12,9 +12,9 @@
  * (`RuntimeMissing`), and:
  *
  * - **refuses the model** (`RuntimeRefusal`, every missing feature listed)
- *   when one is a property of the whole model — a path constraint, a transform constraint reading or
+ *   when one is a property of the whole model — a transform constraint reading or
  *   writing local values or adding (`localSource`, `localTarget`,
- *   `additive`), an ik or transform constraint over a bone the view leaves
+ *   `additive`), an ik, transform or path constraint over a bone the view leaves
  *   inactive, a world-space transform onto a `noScale` or
  *   `noScaleOrReflection` bone, a clipping attachment or a region with no
  *   atlas rectangle shown at setup, a placeholder the skins fill
@@ -26,8 +26,7 @@
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 3 adds indexed physics and value-mapped sliders, including their
- * parameter timelines and per-pass writes. Mesh deforms, named/no-skin views
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 4 adds path constraints and scoped physics movement (`physicsTranslate`/`physicsRotate` with an optional constraint scope) on top of Stage 3's indexed physics and value-mapped sliders. Mesh and path deforms, named/no-skin views
  * and immutable event deliveries remain covered. `ignore: ['events']` remains an explicit diagnostic opt-out; it is
  * never the default. A merged view with conflicting attachments still refuses
  * by name, as the oracle itself cannot resolve that view without file order.
@@ -47,19 +46,19 @@
  */
 import type { ModelVertices } from '../model.ts';
 import { activeBones, constraintRecords, CORE_REGION_KINDS, foldInheritMode, readBlend, readColour, shownAttachment, shownRow, sourceOfDoc, underSkin, type CompiledDocument, type CoreAnimation, type CoreBlendMode } from '../core/index.ts';
-import { constraintInactiveWhy, constraintsAbsentWhy, TRANSFORM_PROPERTIES, type CoreIkRecord, type CoreTransformRecord } from '../core/constraints.ts';
+import { constraintInactiveWhy, constraintsAbsentWhy, pathAnimationsWhy, TRANSFORM_PROPERTIES, type CoreIkRecord, type CoreTransformRecord } from '../core/constraints.ts';
+import { slotBonePlan, type CorePathRecord, type SlotBoneEvent } from '../core/constraints_path.ts';
 import { RUNTIME_PI } from '../core/world.ts';
 import { heldArray, timelineIdentity } from '../core/deform.ts';
-import type { CorePhysicsRecord, PhysicsTimelineKind } from '../core/constraints_physics.ts';
+import { steppedPreviousPassWhy, type CorePhysicsRecord, type PhysicsTimelineKind } from '../core/constraints_physics.ts';
 import type { CoreSliderRecord } from '../core/constraints_slider.ts';
 import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 3;
+export const RUNTIME_STAGE = 4;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
-  'path-constraint',
   'local-transform',
   'additive-transform',
   'inactive-constrained-bone',
@@ -125,11 +124,13 @@ export interface RuntimePlant {
   readonly eventWrapOffByOne?: boolean;
   /** The old restore behavior, which repeats keys up to the restored time. */
   readonly restoreEventsFromStart?: boolean;
-  /** Omit deform / multiply offsets by weights too early: negative controls only. */
+  /** Omit deform / multiply offsets by weights too early / omit path / ignore physics scope: negative controls only. */
   readonly omitPhysics?: boolean;
   readonly sliderAsTrack?: boolean;
   readonly omitDeform?: boolean;
   readonly deformAfterWeights?: boolean;
+  readonly omitPath?: boolean;
+  readonly ignorePhysicsScope?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -176,6 +177,17 @@ export const SCALE_Y_VOLUME = 2;
 export const IK_BEND_POSITIVE = 1;
 export const IK_COMPRESS = 2;
 export const IK_STRETCH = 4;
+
+// A path constraint's position, spacing and rotate modes.
+export const PATH_POSITION_FIXED = 0;
+export const PATH_POSITION_PERCENT = 1;
+export const PATH_SPACING_LENGTH = 0;
+export const PATH_SPACING_FIXED = 1;
+export const PATH_SPACING_PERCENT = 2;
+export const PATH_SPACING_PROPORTIONAL = 3;
+export const PATH_ROTATE_TANGENT = 0;
+export const PATH_ROTATE_CHAIN = 1;
+export const PATH_ROTATE_CHAIN_SCALE = 2;
 
 /** Degrees to radians, with the runtime's pi (`src/core/world.ts`). */
 export const RAD = RUNTIME_PI / 180;
@@ -281,6 +293,36 @@ export interface RuntimeSlider {
   animation: RuntimeAnimation;
 }
 
+export interface RuntimePath {
+  readonly kind: 'path';
+  readonly name: string;
+  readonly index: number;
+  readonly applied: boolean;
+  readonly bones: Int32Array;
+  readonly slot: number;
+  readonly slotBone: number;
+  /** Setup path attachment index into `model.attachments`, or −1 when the slot shows no path. */
+  attachment: number;
+  /** Number of vertex coordinates (`2 * vertexCount`) in the setup path attachment. */
+  pathVertices: number;
+  readonly closed: boolean;
+  readonly constantSpeed: boolean;
+  readonly lengths: Float64Array;
+  readonly positionMode: number;
+  readonly spacingMode: number;
+  readonly rotateMode: number;
+  readonly offsetRotation: number;
+  readonly position: number;
+  readonly spacing: number;
+  readonly mixRotate: number;
+  readonly mixX: number;
+  readonly mixY: number;
+  /** Constraint index whose `before` or `after` state sets the slot bone's determinant sign (`slotBonePlan`), or −1. */
+  readonly slotEventAt: number;
+  readonly slotEventAfter: boolean;
+  readonly setup: CorePathRecord;
+}
+
 export interface RuntimePhysicsTimeline {
   readonly kind: PhysicsTimelineKind;
   readonly targets: Int32Array;
@@ -293,7 +335,15 @@ export interface RuntimeSliderTimeline {
   readonly timeCursor: number;
   readonly mixCursor: number;
 }
-export type RuntimeConstraint = RuntimeIk | RuntimeTransform | RuntimePhysics | RuntimeSlider;
+export interface RuntimePathTimeline {
+  readonly position: RuntimeCurve | null;
+  readonly spacing: RuntimeCurve | null;
+  readonly mix: RuntimeCurve | null;
+  readonly positionCursor: number;
+  readonly spacingCursor: number;
+  readonly mixCursor: number;
+}
+export type RuntimeConstraint = RuntimeIk | RuntimeTransform | RuntimePhysics | RuntimeSlider | RuntimePath;
 
 /** A bone timeline: the bone, its curve, and per channel the local field it writes and whether it multiplies the setup value (scale) or adds to it. */
 export interface RuntimeBoneTimeline {
@@ -351,6 +401,7 @@ export interface RuntimeAnimation {
   readonly deforms: readonly RuntimeDeformTimeline[];
   readonly physics: readonly RuntimePhysicsTimeline[];
   readonly sliders: ReadonlyArray<RuntimeSliderTimeline | null>;
+  readonly paths: ReadonlyArray<RuntimePathTimeline | null>;
   readonly slots: readonly RuntimeSlotTimeline[];
   /** Per constraint of the plan, its timeline in this animation or `null`. */
   readonly constraints: ReadonlyArray<RuntimeConstraintTimeline | null>;
@@ -368,6 +419,11 @@ export interface RuntimeModel {
   readonly deformAfterWeights: boolean;
   readonly omitPhysics: boolean;
   readonly sliderAsTrack: boolean;
+  readonly omitPath: boolean;
+  readonly ignorePhysicsScope: boolean;
+  readonly hasPath: boolean;
+  readonly maxPathSpaces: number;
+  readonly maxPathVertices: number;
   readonly deformCount: number;
   readonly eventWrapOffByOne: boolean;
   readonly restoreEventsFromStart: boolean;
@@ -443,7 +499,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   const refusals = new Refusals(new Set(plant.admit ?? []));
   const ignoreEvents = (options.ignore ?? []).includes('events');
 
-  const absentWhy = constraintsAbsentWhy(doc);
+  const absentWhy = constraintsAbsentWhy(doc) ?? pathAnimationsWhy(doc) ?? steppedPreviousPassWhy(doc);
   if (absentWhy !== null) refusals.note('oracle-absent', `the oracle leaves the bones out: ${absentWhy}`);
 
   // --- bones ---
@@ -452,6 +508,12 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   const indexOf = (name: string): number => {
     const i = boneIndex.get(name);
     if (i === undefined) throw new RuntimeInputError(`bone "${name}" is not a bone of this document (readModel refuses it first)`);
+    return i;
+  };
+  const slotIndex = new Map(doc.slots.map((s, i) => [s.name, i]));
+  const slotIndexOf = (name: string): number => {
+    const i = slotIndex.get(name);
+    if (i === undefined) throw new RuntimeInputError(`slot "${name}" is not a slot of this document (readModel refuses it first)`);
     return i;
   };
   const active = activeBones(doc);
@@ -491,9 +553,13 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
 
   // --- constraints, in the document's order ---
   const constraints: RuntimeConstraint[] = [];
-  for (const c of doc.constraints) if (c.kind === 'path') refusals.note(`${c.kind}-constraint`, `${c.kind} constraint "${c.name}"`);
-  for (const r of constraintRecords(doc)) {
-    if (r.kind === 'path') continue;
+  const records = constraintRecords(doc);
+  const skipped = new Set<number>();
+  records.forEach((r, i) => {
+    if (constraintInactiveWhy(r, active) !== null) skipped.add(i);
+  });
+  const pathPlan = records.some((r) => r.kind === 'path') ? slotBonePlan(doc.bones, active, records, skipped) : new Map<number, SlotBoneEvent | null>();
+  for (const r of records) {
     const applied = constraintInactiveWhy(r, active) === null;
     const bones = Int32Array.from((r.kind === 'physics' ? [r.bone] : r.kind === 'slider' ? r.timelines.bones.filter(t => t.timelines.length > 0).map(t => t.name) : r.bones).map(indexOf));
     const index = constraints.length;
@@ -507,7 +573,9 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     }
     if (applied && r.bones.some((b) => !active.has(b))) refusals.note('inactive-constrained-bone', `${r.kind} constraint "${r.name}" names bone(s) ${r.bones.filter((b) => !active.has(b)).map((b) => `"${b}"`).join(', ')}, which the view leaves inactive — what the oracle writes there depends on the pass before`);
     if (r.kind === 'ik') constraints.push(compileIk(r, index, applied, bones, indexOf));
-    else {
+    else if (r.kind === 'path') {
+      constraints.push(compilePath(r, index, applied, bones, indexOf, slotIndexOf, pathPlan.get(index) ?? null));
+    } else {
       if (r.localSource || r.localTarget) refusals.note('local-transform', `transform constraint "${r.name}" ${[r.localSource ? 'reads local values (localSource)' : '', r.localTarget ? 'writes local values (localTarget)' : ''].filter((x) => x !== '').join(' and ')}`);
       if (r.additive) refusals.note('additive-transform', `transform constraint "${r.name}" is additive`);
       const t = compileTransform(r, index, applied, bones, indexOf);
@@ -585,8 +653,10 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
       const source = g.kind === 'mesh' ? g.vertices : sourceOf(g.skin, g.slot, g.source);
       if (typeof source === 'string') throw new RuntimeInputError(`slot "${slot.name}": ${source} (readModel refuses it first)`);
       made = meshAttachment(at, source, indexOf, plant.bindingIndex, nb);
+    } else if (g?.kind === 'path') {
+      made = pathAttachment(at, g.vertices, indexOf, plant.bindingIndex, nb);
     }
-    // A bounding box, a path, a refused record admitted by a plant: the row's name and path, and nothing drawn.
+    // A bounding box, a refused record admitted by a plant: the row's name and path, and nothing drawn.
     if (made === null) made = vertexAttachment(at, DRAW_NONE, new Float64Array(0), 0);
     attachments.push(made);
     vertexCount += made.count;
@@ -607,7 +677,21 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
       blend: readBlend(slot),
     };
   });
-  const slotIndex = new Map(doc.slots.map((s, i) => [s.name, i]));
+  let hasPath = false;
+  let maxPathSpaces = 0;
+  let maxPathVertices = 0;
+  for (const c of constraints) {
+    if (c.kind !== 'path') continue;
+    hasPath = true;
+    c.attachment = c.setup.path === null ? -1 : slots[c.slot].setupAttachment;
+    const spaceCount = c.rotateMode === PATH_ROTATE_TANGENT ? c.bones.length : c.bones.length + 1;
+    if (spaceCount > maxPathSpaces) maxPathSpaces = spaceCount;
+    if (c.attachment >= 0) {
+      const at = attachments[c.attachment];
+      c.pathVertices = at.bindingCounts.length > 0 ? at.bindingCounts.length * 2 : at.local.length;
+      if (c.pathVertices > maxPathVertices) maxPathVertices = c.pathVertices;
+    }
+  }
 
   // --- animations ---
   const animations = new Map<string, RuntimeAnimation>();
@@ -635,6 +719,11 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     sliderAsTrack: plant.sliderAsTrack === true,
     omitDeform: plant.omitDeform === true,
     deformAfterWeights: plant.deformAfterWeights === true,
+    omitPath: plant.omitPath === true,
+    ignorePhysicsScope: plant.ignorePhysicsScope === true,
+    hasPath,
+    maxPathSpaces,
+    maxPathVertices,
     deformCount,
     eventWrapOffByOne: plant.eventWrapOffByOne === true,
     restoreEventsFromStart: plant.restoreEventsFromStart === true,
@@ -700,6 +789,12 @@ function meshAttachment(at: AttachmentHead, vertices: ModelVertices, indexOf: (n
   return { ...at, deformCount: ids.length * 2, draw: DRAW_WEIGHTED, local: NO_NUMBERS, count: counts.length * 2, bindingCounts: Int32Array.from(counts), bindingBones: Int32Array.from(ids), bindingX: Float64Array.from(xs), bindingY: Float64Array.from(ys), bindingWeights: Float64Array.from(ws) };
 }
 
+/** A path attachment's vertices and bindings: stored and deformed like a mesh, never drawn into `RuntimePose.vertices`. */
+function pathAttachment(at: AttachmentHead, vertices: ModelVertices, indexOf: (name: string) => number, rewrite: RuntimePlant['bindingIndex'], bones: number): RuntimeAttachment {
+  const m = meshAttachment(at, vertices, indexOf, rewrite, bones);
+  return { ...m, draw: DRAW_NONE, count: 0 };
+}
+
 function compileIk(r: CoreIkRecord, index: number, applied: boolean, bones: Int32Array, indexOf: (name: string) => number): RuntimeIk {
   return {
     kind: 'ik', name: r.name, index, applied, bones, target: indexOf(r.target),
@@ -710,6 +805,43 @@ function compileIk(r: CoreIkRecord, index: number, applied: boolean, bones: Int3
 
 function ikFlags(bendPositive: boolean, compress: boolean, stretch: boolean): number {
   return (bendPositive ? IK_BEND_POSITIVE : 0) | (compress ? IK_COMPRESS : 0) | (stretch ? IK_STRETCH : 0);
+}
+
+function compilePath(
+  r: CorePathRecord,
+  index: number,
+  applied: boolean,
+  bones: Int32Array,
+  indexOf: (name: string) => number,
+  slotIndexOf: (name: string) => number,
+  ev: SlotBoneEvent | null,
+): RuntimePath {
+  return {
+    kind: 'path',
+    name: r.name,
+    index,
+    applied,
+    bones,
+    slot: slotIndexOf(r.slot),
+    slotBone: indexOf(r.slotBone),
+    attachment: -1,
+    pathVertices: 0,
+    closed: r.path?.closed ?? false,
+    constantSpeed: r.path?.constantSpeed ?? true,
+    lengths: Float64Array.from(r.path?.lengths ?? []),
+    positionMode: r.positionMode === 'fixed' ? PATH_POSITION_FIXED : PATH_POSITION_PERCENT,
+    spacingMode: r.spacingMode === 'fixed' ? PATH_SPACING_FIXED : r.spacingMode === 'percent' ? PATH_SPACING_PERCENT : r.spacingMode === 'proportional' ? PATH_SPACING_PROPORTIONAL : PATH_SPACING_LENGTH,
+    rotateMode: r.rotateMode === 'chain' ? PATH_ROTATE_CHAIN : r.rotateMode === 'chainScale' ? PATH_ROTATE_CHAIN_SCALE : PATH_ROTATE_TANGENT,
+    offsetRotation: r.offsetRotation,
+    position: r.position,
+    spacing: r.spacing,
+    mixRotate: r.mixRotate,
+    mixX: r.mixX,
+    mixY: r.mixY,
+    slotEventAt: ev === null ? -1 : ev.at,
+    slotEventAfter: ev?.when === 'after',
+    setup: r,
+  };
 }
 
 function compileTransform(r: CoreTransformRecord, index: number, applied: boolean, bones: Int32Array, indexOf: (name: string) => number): RuntimeTransform {
@@ -835,6 +967,19 @@ function compileAnimation(
     if (keyed === undefined) return null;
     return { time: keyed.time === null ? null : compileCurve(keyed.time, 1), mix: keyed.mix === null ? null : compileCurve(keyed.mix, 1), timeCursor: cursors++, mixCursor: cursors++ };
   });
+  const paths = constraints.map((c): RuntimePathTimeline | null => {
+    if (c.kind !== 'path') return null;
+    const keyed = anim.constraints.path.find((t) => t.name === c.name);
+    if (keyed === undefined) return null;
+    return {
+      position: keyed.position === undefined ? null : compileCurve(keyed.position, 1),
+      spacing: keyed.spacing === undefined ? null : compileCurve(keyed.spacing, 1),
+      mix: keyed.mix === undefined ? null : compileCurve(keyed.mix, 3),
+      positionCursor: cursors++,
+      spacingCursor: cursors++,
+      mixCursor: cursors++,
+    };
+  });
   const physics: RuntimePhysicsTimeline[] = (anim.constraints.physicsKeyed ?? []).map(t => ({
     kind: t.kind, cursor: cursors++, curve: compileCurve(t.keys, t.kind === 'reset' ? 0 : 1),
     targets: Int32Array.from(constraints.filter((c): c is RuntimePhysics => c.kind === 'physics' && c.applied && (t.name === '*' ? t.kind === 'reset' || c.setup.global[t.kind] : c.name === t.name)).map(c => c.index)),
@@ -846,5 +991,5 @@ function compileAnimation(
     const arrays = keys.map(k => heldArray(g.vertices, k));
     return { identity: `${a.skin}/${a.slot}/${a.attachment}`, cursor: cursors++, curve: compileDeformCurve(keys), count: arrays[0].length, held: Float64Array.from(arrays.flat()) };
   });
-  return { name, duration: tl.duration, physics, sliders, deforms, bones, sliderBones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
+  return { name, duration: tl.duration, physics, sliders, paths, deforms, bones, sliderBones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
 }

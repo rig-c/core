@@ -21,12 +21,12 @@
  * corpus through both at the oracle's samples and compares full doubles at
  * tolerance 0 (*The runtime poser* there). The oracle is not changed for it.
  *
- * ## Stage 3: what it poses, and what it refuses
+ * ## Stage 4: what it poses, and what it refuses
  *
  * Bones and their five inherit modes; the rotate, translate, scale and shear
  * timelines; a slot's attachment and colour (`rgba`, `rgb`, `alpha`)
  * timelines; weighted/unweighted deform timelines; region, mesh, weighted mesh and linked mesh vertices; one- and
- * two-bone ik, world-space absolute transforms, physics and value-mapped sliders with their
+ * two-bone ik, world-space absolute transforms, path constraints, physics (with optional movement scope) and value-mapped sliders with their
  * timelines; skin-required bones and constraints under the view's skin. One
  * animation at full weight from the setup pose, at a time or stepped as a
  * looping track. Everything else is refused at load by name with the list of

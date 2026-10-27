@@ -5578,6 +5578,43 @@ skeleton's units and axes, and its change of rotation as `physicsRotate(0, 0,
 Δ)`, before the `step` that poses the frame. Nothing set, every pose is the
 one the track posed before these existed (`CO57`).
 
+Both `LiveTrack` and `LiveTracks` also accept an optional last `scope` argument
+for movement, a readonly array of **exact physics constraint names** (play #197):
+
+```ts
+track.physicsTranslate(dx, dy, ['hair_left', 'hair_right']);
+track.physicsRotate(pivotX, pivotY, deltaDegrees, ['hair_left', 'hair_right']);
+```
+
+Omitted or `undefined` means every existing state, exactly as before. `[]`
+selects none; repeated names select once, in the existing state order. Every
+name is checked against the document before any state changes: an unknown name
+is refused as `physics movement scope: no constraint "name"`; a non-physics
+constraint is refused naming its kind. A non-array scope or non-string name
+also refuses. Finite movement/pivot checks still apply, including an empty
+scope. A declared inactive constraint is a valid selection; movement creates
+no state for it. No document, parameter override, clock or held pose is changed.
+
+These are synchronous **before-evaluation** inputs: only the selected remembered
+origins (`ux`, `uy`, `cx`, `cy`) change, so the next `step` sees extra apparent
+motion. Distances and the explicit pivot are skeleton world units, x right,
+y up; the angle is degrees CCW **in the XY plane**, not yaw or pitch. The turn
+is the displacement of each remembered origin around the pivot, not a direct
+angular impulse; an origin at the pivot has no displacement. The caller derives
+any projected yaw/pitch displacement from its own geometry and depth. Do not
+supply it again for movement the bone itself already makes.
+
+The ordinary step still owns reset, inertia, limits and integration. A reset
+or first active update can overwrite this input; an intervening `step(0)` may
+consume it without the intended positive-time response. There is no queue or
+motion-history replay. Input writes leave all unselected states unchanged;
+after stepping, exact isolation holds for independent chains. Descendants or
+constraints that read a selected bone may react through their normal solver
+dependencies. Scope does not suppress that coupling or expand itself to cover it.
+`CO64` checks single/composed tracks, both resets, exact independent-state
+isolation, native per-constraint operations, empty/all/repeated selections and
+atomic named refusals; the existing `CO56`/`CO57` cover unscoped movement.
+
 For a live preview of one named constraint (issue #1541), both `LiveTrack` and
 `LiveTracks` on `rig-c/core` expose:
 

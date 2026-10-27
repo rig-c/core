@@ -94450,6 +94450,7 @@ import { drawOrderAt } from './src/core/draw_order.ts';
 import { eventsFired, type CoreEventRow } from './src/core/events.ts';
 import { physicsState, stepPhysics, stepSchedule, type CorePhysicsRecord } from './src/core/constraints_physics.ts';
 import { physicsScaleCases } from './tools/physics_scale_cases.ts';
+import { physicsScopeCases } from './tools/physics_scope_cases.ts';
 import { modeMatrix, worldTransforms, type CoreInheritMode, type CoreWorld, type WorldArithmetic } from './src/core/world.ts';
 import { ADMITTED_CONSTRAINT_KINDS, TRANSFORM_PROPERTIES, type ConstraintPlant, type CoreConstraintRecord, type CoreTransformRecord } from './src/core/constraints.ts';
 // The per-skin view (issue #932), its own statements so the CN controls land as one hunk.
@@ -108830,6 +108831,16 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
       result.ok,
       probeDetail(result.ok, result.problems, `${result.readings.length} mode/setup/state readings exact to native at tolerance 0; None/Uniform/Volume gravity walks all move scale; reciprocal, bounded compression, zero and reflection on aligned and rotated/sheared bones; transverse omission red for Uniform and Volume, None unchanged`),
       'issue #1453: reading scaleY does not establish that the step applies it; compare the actual native matrices with a nonzero scale response and detect the old omission',
+    );
+  }
+
+  if (parent) {
+    const result = physicsScopeCases();
+    say(
+      'CO64_SCOPED_PHYSICS_MOVEMENT_IS_NAMED_ATOMIC_AND_LEAVES_INDEPENDENT_STATES_IDENTICAL',
+      result.ok,
+      probeDetail(result.ok, result.problems, `${result.checks} checks on single/composed tracks under both resets: selected origins match native translate/rotate; independent states stay identical; absent/all/empty/duplicate scopes and named atomic refusals; whole-context movement plant detected`),
+      'play #197: explicit constraint scope changes only the selected remembered origins before evaluation; no scope keeps whole-rig movement, and selection is not a solver dependency barrier',
     );
   }
 

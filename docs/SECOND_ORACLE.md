@@ -436,6 +436,13 @@ a card of its own.
   player (rig-play) poses the model document through the named entry `rig-c/core`
   (#1275, [RELEASING.md](../RELEASING.md) *The import surface*): a module that
   re-exports this core and adds nothing, so what it poses is what the gates above hold.
+  Live track movement accepts an optional final array of exact physics constraint
+  names (`physicsTranslate(x, y, scope)` / `physicsRotate(x, y, degrees, scope)`).
+  Omission preserves the whole-context operation; explicit names are validated
+  atomically before the selected remembered origins change. The native reference
+  calls individual official constraints, while `CO64` holds independent outsider
+  states identical. This is input selection, not isolation from solver dependencies;
+  [AUTHORING](AUTHORING.md) states units, pivot and before-evaluation/reset limits.
 - **The licence posture** in [README.md](../README.md), *Licensing, stated plainly*.
   Step 4 brought that section's text to what the package links and where the Spine
   Runtimes License applies (#1070); this page states nothing about it.

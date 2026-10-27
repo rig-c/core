@@ -12734,6 +12734,18 @@ omitted deform — each caught by name), a seeded population of
 every construct above, the looping step against `openTrack`, and a steady-state
 frame measured at 0 bytes with the collector off.
 
+**Timing is a separate measurement.** Exact poses and an allocation control do
+not establish a browser speed improvement. The
+[browser timing protocol](https://github.com/rig-c/core/blob/main/docs/RUNTIME_TIMING.md)
+requires an official `spine-core` pose-only or matching `spine-pixi-v8` reference
+with current rigc/official ratios first in every timing table, distinguishes that
+reference from rigc's own oracle and a previous product, and requires the actual
+product loader and evaluated runner to pass planted real-browser preflights
+before AA1. It preserves engine/animation row identity,
+and admits a gain only when both A/B paired medians strictly clear the envelope
+fixed by two A/A launches. Browser tooling and full machine receipts belong to
+the consumer; core owns this protocol, without a browser dependency.
+
 ## 16. Compare sequential mesh candidates against one motion reference
 
 Programmatic callers that gate candidates one at a time can import

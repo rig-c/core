@@ -78,7 +78,9 @@ export function compileCurve(keys: readonly CoreKey[], channels: number): Runtim
 /** The last key at or before `t` (−1 before the first), found from `cursors[slot]` and left there — the header's first read. */
 export function keyAt(curve: RuntimeCurve, cursors: Int32Array, slot: number, t: number): number {
   const times = curve.times;
-  let i = cursors[slot];
+  // A slider can evaluate another animation between two reads of this one.
+  // Shared cursor slots are only search hints: keep the hint inside THIS curve.
+  let i = Math.min(cursors[slot], curve.keys - 1);
   while (i >= 0 && times[i] > t) i--;
   while (i + 1 < curve.keys && times[i + 1] <= t) i++;
   cursors[slot] = i;

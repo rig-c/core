@@ -245,3 +245,47 @@ Evidence digests (SHA-256, private raw locations omitted):
 | Inside-advance summary | `062e4d9b3e700d36e38101d5899c35ecd1f4e3e16462ae102dda113887e5cc6b` |
 | Inside-advance source/fixture manifest | `e3b74beb0be4acdce2618cbb20d5af464746170b5902929f974e98e8aa351416` |
 | Earlier full selftest receipt | `666c4b0312997b18de7797264d5b3f89b62d4162f28518790b21ce98124264cd` |
+
+## Stage 3 CPU microbench (2026-10-27)
+
+This is the scoped [#1589](https://github.com/rig-c/core/issues/1589) CPU measurement for runtime stage 3, not another browser capture. The inputs are the paired public `spineboy/walk` and `raptor/walk` models, Spine exports and atlases. Nova ran Bun 1.4.4 on an Intel Core Ultra 7 265K under the farm's exclusive admission. No renderer, player or adapter is loaded. Both fixtures exercise IK/transform constraints; these timings do not measure the new physics/slider workloads. Those have independent tolerance-zero and allocation controls.
+
+`tools/runtime_stage3_bench.ts` uses the existing microbench's asset reader and official spine-core 4.3.13 arm. Each launch retains 300 same-frame pairs after 120 warmup pairs at 1/60 s, alternating AB/BA, with 1 or 100 instances phased by `(i * 0.07) % 1`. A/A compares identical runtime arms; A/B compares official A with runtime B. AA1/AB1/AA2/AB2 ran first, then the fixed doubling rule reached eight launches of each kind because some rows remained unresolved. It stopped there, without waiting for machine silence.
+
+Runtime-only object wrappers time timeline methods and world/constraint methods; the original receiver and arguments are preserved. Their overhead and argument storage remain in these costs. They are absent from ordinary runtime use. Geometry is timed separately, and total covers `step(dt)` plus `computeVertices()`, including bookkeeping outside the named method timers, so stage medians need not sum to total. The runtime writes reused Float64 geometry; the official arm writes reused Float32 scratch and includes its ordinary clip checks, with no clipping active in these walk states. Readout/frame snapshot assembly is absent on the borrowed-buffer runtime path. These are API costs with those boundaries, not isolated formula costs or whole-frame speed claims.
+
+Before timing, all instances at four states matched official bones, slot colours, attachment vertices, draw order and seven-field event deliveries numerically at tolerance zero, treating signed zeros as equivalent. This is not bit-identical reference evidence. Instrumented and plain runtime `world`, `light`, `shown` and `vertices` buffers matched by `Object.is` at the preflight states and the final timed state; that restoration comparison is confined to these two fixtures without physics. Reference equality is not claimed for every retained timing frame.
+
+The table gives ranges across the eight A/B launch statistics, in microseconds for all N instances. The first column is each launch's median of per-frame runtime/official ratios. p50/p95 use the existing #1589 interpolated percentile helper, rather than the browser protocol's floor estimator. The envelope is fixed from AA1 and AA2 as the maximum absolute paired p05/p95. A direction is reported only when every A/B paired median strictly clears it; otherwise the row stays unresolved.
+
+| Runtime / official | Fixture | N | Stage | Official p50 / p95 µs | Runtime p50 / p95 µs | Paired median µs | A/A envelope µs | Result |
+| --- | --- | ---: | --- | --- | --- | --- | ---: | --- |
+| 0.675–0.733 | raptor/walk | 1 | timeline | 4.084–6.567 / 6.305–11.319 | 2.851–4.370 / 3.578–6.931 | -2.061–-1.150 | 1.309 | unresolved |
+| 1.075–1.105 | raptor/walk | 1 | world+constraints | 2.934–4.543 / 4.582–7.877 | 3.218–4.966 / 3.487–7.056 | 0.232–0.382 | 1.538 | unresolved |
+| 0.369–0.393 | raptor/walk | 1 | geometry | 5.120–8.191 / 5.271–9.156 | 1.986–3.023 / 2.136–3.576 | -5.150–-3.110 | 0.210 | runtime lower |
+| 0.662–0.689 | raptor/walk | 1 | total | 12.247–19.825 / 16.355–29.631 | 8.381–12.786 / 10.029–20.876 | -6.546–-3.849 | 6.502 | unresolved |
+| 0.745–0.774 | raptor/walk | 100 | timeline | 398.950–501.362 / 605.914–819.301 | 298.080–376.233 / 428.071–601.387 | -118.481–-89.071 | 64.771 | runtime lower |
+| 0.985–1.008 | raptor/walk | 100 | world+constraints | 335.135–404.558 / 464.548–657.867 | 321.911–377.571 / 422.919–624.531 | -5.720–2.744 | 48.840 | unresolved |
+| 0.360–0.380 | raptor/walk | 100 | geometry | 546.543–670.834 / 718.972–1065.225 | 199.813–249.042 / 281.148–393.105 | -404.611–-343.665 | 46.601 | runtime lower |
+| 0.663–0.682 | raptor/walk | 100 | total | 1309.630–1583.994 / 1785.342–2508.022 | 861.507–1054.052 / 1164.765–1669.014 | -525.441–-423.578 | 157.076 | runtime lower |
+| 0.720–0.763 | spineboy/walk | 1 | timeline | 2.883–4.554 / 5.039–9.145 | 1.972–2.949 / 3.622–7.620 | -0.990–-0.661 | 0.538 | runtime lower |
+| 1.405–1.466 | spineboy/walk | 1 | world+constraints | 3.592–5.480 / 5.495–9.082 | 5.259–7.709 / 7.198–11.823 | 1.534–2.290 | 1.787 | unresolved |
+| 0.750–0.778 | spineboy/walk | 1 | geometry | 2.875–4.181 / 3.165–5.055 | 2.167–3.220 / 2.369–3.580 | -0.934–-0.693 | 0.217 | runtime lower |
+| 1.049–1.082 | spineboy/walk | 1 | total | 9.742–14.639 / 14.874–25.697 | 10.203–15.325 / 15.390–26.034 | 0.497–1.198 | 4.499 | unresolved |
+| 0.869–0.917 | spineboy/walk | 100 | timeline | 151.415–198.149 / 235.386–344.392 | 137.516–175.200 / 184.985–301.198 | -21.853–-14.804 | 40.946 | unresolved |
+| 1.230–1.270 | spineboy/walk | 100 | world+constraints | 213.320–284.639 / 281.449–453.969 | 263.145–340.033 / 327.186–554.860 | 51.611–63.783 | 43.556 | runtime higher |
+| 0.330–0.348 | spineboy/walk | 100 | geometry | 210.490–275.247 / 260.008–418.556 | 70.567–95.483 / 90.925–151.619 | -175.184–-136.609 | 18.757 | runtime lower |
+| 0.839–0.859 | spineboy/walk | 100 | total | 583.704–778.229 / 770.187–1247.566 | 500.146–638.368 / 634.807–1060.465 | -102.727–-80.952 | 86.112 | unresolved |
+
+Eight of the sixteen rows remain unresolved. In particular, the 100-instance spineboy world/constraint stage is measurably higher; its total remains unresolved despite ratios below one. The 100-instance raptor total is lower under this instrument. Neither is a player or renderer result.
+
+Before AA1, the 30 µs world-stage work plant shifted that stage by 29.969 µs, timeline by -0.163 µs and geometry by -0.0015 µs. The separate uninstrumented allocation child read 0 B/frame; its object plant read 32.768 B/frame. Allocation is collector-off heap growth (`BUN_JSC_useGC=0`), after 3,000 warmup frames, the least of three 4,000-frame batches. Stage-three physics and slider-physics controls independently also read 0 B/frame and detected their plants. Timing-wrapper allocations are not represented as zero.
+
+Evidence SHA-256 (raw files retained privately on Nova):
+
+| Record | SHA-256 |
+| --- | --- |
+| Measured source freeze manifest | `a8f5d4cb16b5effbc08a06c3a1dc34299c63549f8340797ebd66239048d59a9c` |
+| Microbench summary, eight A/A and eight A/B launches | `df77fd7a9cf86657f1ed2efc9f22468cd2f03ea8e57dd9a48cccab871d8d3e08` |
+| Calibration | `a85e133ebcdd1825077cd5a99057d6de2072ecd0ee5e61d48eafcea69a8eb04e` |
+

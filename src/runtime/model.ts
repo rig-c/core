@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 2): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 3): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -12,7 +12,7 @@
  * (`RuntimeMissing`), and:
  *
  * - **refuses the model** (`RuntimeRefusal`, every missing feature listed)
- *   when one is a property of the whole model — a path, physics or slider constraint, a transform constraint reading or
+ *   when one is a property of the whole model — a path constraint, a transform constraint reading or
  *   writing local values or adding (`localSource`, `localTarget`,
  *   `additive`), an ik or transform constraint over a bone the view leaves
  *   inactive, a world-space transform onto a `noScale` or
@@ -26,9 +26,9 @@
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 2 adds mesh deform timelines to the
- * named/no-skin views and event keys, with immutable payloads compiled
- * at load. `ignore: ['events']` remains an explicit diagnostic opt-out; it is
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 3 adds indexed physics and value-mapped sliders, including their
+ * parameter timelines and per-pass writes. Mesh deforms, named/no-skin views
+ * and immutable event deliveries remain covered. `ignore: ['events']` remains an explicit diagnostic opt-out; it is
  * never the default. A merged view with conflicting attachments still refuses
  * by name, as the oracle itself cannot resolve that view without file order.
  *
@@ -50,16 +50,16 @@ import { activeBones, constraintRecords, CORE_REGION_KINDS, foldInheritMode, rea
 import { constraintInactiveWhy, constraintsAbsentWhy, TRANSFORM_PROPERTIES, type CoreIkRecord, type CoreTransformRecord } from '../core/constraints.ts';
 import { RUNTIME_PI } from '../core/world.ts';
 import { heldArray, timelineIdentity } from '../core/deform.ts';
+import type { CorePhysicsRecord, PhysicsTimelineKind } from '../core/constraints_physics.ts';
+import type { CoreSliderRecord } from '../core/constraints_slider.ts';
 import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 2;
+export const RUNTIME_STAGE = 3;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
   'path-constraint',
-  'physics-constraint',
-  'slider-constraint',
   'local-transform',
   'additive-transform',
   'inactive-constrained-bone',
@@ -126,6 +126,8 @@ export interface RuntimePlant {
   /** The old restore behavior, which repeats keys up to the restored time. */
   readonly restoreEventsFromStart?: boolean;
   /** Omit deform / multiply offsets by weights too early: negative controls only. */
+  readonly omitPhysics?: boolean;
+  readonly sliderAsTrack?: boolean;
   readonly omitDeform?: boolean;
   readonly deformAfterWeights?: boolean;
 }
@@ -257,7 +259,41 @@ export interface RuntimeTransform {
   readonly clamp: boolean;
 }
 
-export type RuntimeConstraint = RuntimeIk | RuntimeTransform;
+export interface RuntimePhysics {
+  readonly kind: 'physics';
+  readonly name: string;
+  readonly index: number;
+  readonly applied: boolean;
+  readonly bones: Int32Array;
+  readonly setup: CorePhysicsRecord;
+}
+
+export interface RuntimeSlider {
+  readonly kind: 'slider';
+  readonly name: string;
+  readonly index: number;
+  readonly applied: boolean;
+  readonly bones: Int32Array;
+  readonly bone: number;
+  readonly property: number;
+  readonly setup: CoreSliderRecord;
+  /** Resolved after every animation is compiled. Never a track. */
+  animation: RuntimeAnimation;
+}
+
+export interface RuntimePhysicsTimeline {
+  readonly kind: PhysicsTimelineKind;
+  readonly targets: Int32Array;
+  readonly curve: RuntimeCurve;
+  readonly cursor: number;
+}
+export interface RuntimeSliderTimeline {
+  readonly time: RuntimeCurve | null;
+  readonly mix: RuntimeCurve | null;
+  readonly timeCursor: number;
+  readonly mixCursor: number;
+}
+export type RuntimeConstraint = RuntimeIk | RuntimeTransform | RuntimePhysics | RuntimeSlider;
 
 /** A bone timeline: the bone, its curve, and per channel the local field it writes and whether it multiplies the setup value (scale) or adds to it. */
 export interface RuntimeBoneTimeline {
@@ -311,6 +347,8 @@ export interface RuntimeAnimation {
   readonly duration: number;
   readonly bones: readonly RuntimeBoneTimeline[];
   readonly deforms: readonly RuntimeDeformTimeline[];
+  readonly physics: readonly RuntimePhysicsTimeline[];
+  readonly sliders: ReadonlyArray<RuntimeSliderTimeline | null>;
   readonly slots: readonly RuntimeSlotTimeline[];
   /** Per constraint of the plan, its timeline in this animation or `null`. */
   readonly constraints: ReadonlyArray<RuntimeConstraintTimeline | null>;
@@ -326,6 +364,8 @@ export interface RuntimeModel {
   /** Control-only boundary defect; fixed at load. */
   readonly omitDeform: boolean;
   readonly deformAfterWeights: boolean;
+  readonly omitPhysics: boolean;
+  readonly sliderAsTrack: boolean;
   readonly deformCount: number;
   readonly eventWrapOffByOne: boolean;
   readonly restoreEventsFromStart: boolean;
@@ -449,13 +489,21 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
 
   // --- constraints, in the document's order ---
   const constraints: RuntimeConstraint[] = [];
-  for (const c of doc.constraints) if (c.kind === 'path' || c.kind === 'physics' || c.kind === 'slider') refusals.note(`${c.kind}-constraint`, `${c.kind} constraint "${c.name}"`);
+  for (const c of doc.constraints) if (c.kind === 'path') refusals.note(`${c.kind}-constraint`, `${c.kind} constraint "${c.name}"`);
   for (const r of constraintRecords(doc)) {
-    if (r.kind !== 'ik' && r.kind !== 'transform') continue;
+    if (r.kind === 'path') continue;
     const applied = constraintInactiveWhy(r, active) === null;
-    const bones = Int32Array.from(r.bones.map(indexOf));
-    if (applied && r.bones.some((b) => !active.has(b))) refusals.note('inactive-constrained-bone', `${r.kind} constraint "${r.name}" names bone(s) ${r.bones.filter((b) => !active.has(b)).map((b) => `"${b}"`).join(', ')}, which the view leaves inactive — what the oracle writes there depends on the pass before`);
+    const bones = Int32Array.from((r.kind === 'physics' ? [r.bone] : r.kind === 'slider' ? r.timelines.bones.filter(t => t.timelines.length > 0).map(t => t.name) : r.bones).map(indexOf));
     const index = constraints.length;
+    if (r.kind === 'physics') {
+      constraints.push({ kind: 'physics', name: r.name, index, applied, bones, setup: r });
+      continue;
+    }
+    if (r.kind === 'slider') {
+      constraints.push({ kind: 'slider', name: r.name, index, applied, bones, setup: r, bone: r.bone === null ? -1 : indexOf(r.bone), property: TRANSFORM_PROPERTIES.indexOf(r.property), animation: null as unknown as RuntimeAnimation });
+      continue;
+    }
+    if (applied && r.bones.some((b) => !active.has(b))) refusals.note('inactive-constrained-bone', `${r.kind} constraint "${r.name}" names bone(s) ${r.bones.filter((b) => !active.has(b)).map((b) => `"${b}"`).join(', ')}, which the view leaves inactive — what the oracle writes there depends on the pass before`);
     if (r.kind === 'ik') constraints.push(compileIk(r, index, applied, bones, indexOf));
     else {
       if (r.localSource || r.localTarget) refusals.note('local-transform', `transform constraint "${r.name}" ${[r.localSource ? 'reads local values (localSource)' : '', r.localTarget ? 'writes local values (localTarget)' : ''].filter((x) => x !== '').join(' and ')}`);
@@ -573,9 +621,16 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     }
   }
 
+  for (const c of constraints) if (c.kind === 'slider') {
+    const a = animations.get(c.setup.animation);
+    if (a !== undefined) c.animation = a;
+    else for (const m of refusals.byAnimation.get(c.setup.animation) ?? []) refusals.note(m.feature, `slider "${c.name}" applies refused animation "${c.setup.animation}": ${m.detail}`);
+  }
   if (refusals.model.length > 0) throw new RuntimeRefusal(refusals.model);
   const names = doc.animations.map((a) => a.name);
   return {
+    omitPhysics: plant.omitPhysics === true,
+    sliderAsTrack: plant.sliderAsTrack === true,
     omitDeform: plant.omitDeform === true,
     deformAfterWeights: plant.deformAfterWeights === true,
     deformCount,
@@ -752,12 +807,22 @@ function compileAnimation(
       const keyed = anim.constraints.ik.find((x) => x.name === c.name);
       if (keyed === undefined) continue;
       constraintTimelines[c.index] = { constraint: c.index, curve: compileCurve(keyed.keys, 2), cursor: cursors++, flags: Uint8Array.from(keyed.keys.map((k) => ikFlags(k.flags.bendPositive, k.flags.compress, k.flags.stretch))) };
-    } else {
+    } else if (c.kind === 'transform') {
       const keyed = anim.constraints.transform.find((x) => x.name === c.name);
       if (keyed === undefined) continue;
       constraintTimelines[c.index] = { constraint: c.index, curve: compileCurve(keyed.keys, TRANSFORM_PROPERTIES.length), cursor: cursors++, flags: null };
     }
   }
+  const sliders = constraints.map((c): RuntimeSliderTimeline | null => {
+    if (c.kind !== 'slider') return null;
+    const keyed = anim.constraints.slider.find(t => t.name === c.name);
+    if (keyed === undefined) return null;
+    return { time: keyed.time === null ? null : compileCurve(keyed.time, 1), mix: keyed.mix === null ? null : compileCurve(keyed.mix, 1), timeCursor: cursors++, mixCursor: cursors++ };
+  });
+  const physics: RuntimePhysicsTimeline[] = (anim.constraints.physicsKeyed ?? []).map(t => ({
+    kind: t.kind, cursor: cursors++, curve: compileCurve(t.keys, t.kind === 'reset' ? 0 : 1),
+    targets: Int32Array.from(constraints.filter((c): c is RuntimePhysics => c.kind === 'physics' && c.applied && (t.name === '*' ? t.kind === 'reset' || c.setup.global[t.kind] : c.name === t.name)).map(c => c.index)),
+  }));
   const deforms: RuntimeDeformTimeline[] = deform.map(a => {
     const g = doc.skins.find(s => s.name === a.skin)?.attachments[a.slot]?.[a.attachment]?.geometry;
     if (g === undefined || g.kind === 'region' || g.kind === 'linkedmesh') throw new RuntimeInputError(`deform "${a.skin}/${a.slot}/${a.attachment}" has no vertex geometry (readModel refuses it first)`);
@@ -765,5 +830,5 @@ function compileAnimation(
     const arrays = keys.map(k => heldArray(g.vertices, k));
     return { identity: `${a.skin}/${a.slot}/${a.attachment}`, cursor: cursors++, curve: compileDeformCurve(keys), count: arrays[0].length, held: Float64Array.from(arrays.flat()) };
   });
-  return { name, duration: tl.duration, deforms, bones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
+  return { name, duration: tl.duration, physics, sliders, deforms, bones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
 }

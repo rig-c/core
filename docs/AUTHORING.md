@@ -12647,7 +12647,7 @@ verdict on those figures.
 | <a id="CE_COMPILE_ALPHA_CLIP_CONFLICT"></a>`CE_COMPILE_ALPHA_CLIP_CONFLICT` | Names authored fields or convex/inverse flags conflicting with generated inside-clipping geometry. Use one authored/generated form.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦: alphaClip conflicts with [⟧<br>⟦vertexCount⟧<br>⟦vertices⟧<br>⟦weights⟧<br>⟦boneIndexing⟧<br>⟦, ⟧<br>⟦], convex=⟧<br>⟦, inverse=⟧<br>⟦; required ordinary inside clipping with generated geometry only. Remove authored geometry/flags.⟧ |
 | <a id="CE_COMPILE_ALPHA_CLIP_DEFORM"></a>`CE_COMPILE_ALPHA_CLIP_DEFORM` | Names animation and source/clip key/frame counts that cannot share the existing projection contract. Give matching explicit supported transform keys in compatible actual frames, with constant world shares where needed, or author the corresponding clip geometry and motion; weighted binding does not copy source deform.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦ alphaClip from "⟧<br>⟦"⟧<br>⟦: animation "⟧<br>⟦" has ⟧<br>⟦ source and ⟧<br>⟦ clip keys; source frame=⟧<br>⟦no vertex geometry⟧<br>⟦clip frame=⟧<br>⟦, constant world influence shares=⟧<br>⟦Required matching explicit affine/depth-yaw/pitch transforms in compatible DeformGeometry frames, ⟧<br>⟦with constant shares for world-space transfer. Fix the named frame/keys or author corresponding clip motion.⟧ |
 
-## 15. Posing in place for a player — the runtime poser (stage 2)
+## 15. Posing in place for a player — the runtime poser (stage 3)
 
 rigc poses a model document twice over, on purpose (issue #1591). The **oracle**
 (`src/core/`) is the reference: each pose is a pure function of the document,
@@ -12682,11 +12682,11 @@ exact resolved table identity `(skin, model.slots[attachment.slot].name, placeho
 The display `name` may be shared by different placeholders; it is never a table
 key to guess the source from. These load-time strings do not change the pose path.
 
-| | what stage 2 poses |
+| | what stage 3 poses |
 | --- | --- |
 | bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |
 | timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, `rgba`, `rgb` and `alpha`; ik and transform timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
-| constraints | one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
+| constraints | physics with its exact clock, reset and parameter timelines; value-mapped sliders with bone/slot/deform/physics composition; one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
 | vertices | regions, meshes, weighted meshes and linked meshes, written into the pose's buffer |
 | deform | weighted and unweighted mesh timelines, linear/stepped/Bézier, per-pose key cursors and in-place buffers; linked meshes inherit their source's timelines only with `timelines: true` |
 | skins and events | named/no-skin views with their skin-required bones and constraints; event delivery in key order over `(last, time]`, tail then head across a wrap |
@@ -12729,9 +12729,38 @@ back to the definition's **volume**, matching the measured runtime rather than
 inventing a correction. An explicit `ignore: ['events']` diagnostic still mutes
 the list; normal compilation never does.
 
+Physics is explicit on a direct pose: `apply(time, 'none')` leaves physics inert;
+`apply(time, 'reset', delta)` or `apply(time, 'update', delta)` first applies
+reset keys over `(last, time]` against the old clock, then adds `delta` to the
+physics clock and solves. A backwards animation time crosses the tail then head
+of the interval, as a looping track does. `step(dt)` updates physics and the
+looping track; it takes the initial reset at animation zero if needed.
+`resetPhysics('animation')` starts at that animation's pose zero;
+`resetPhysics('setup')` starts from setup before applying the animation.
+The physics clock is a running sum, never the animation time; constructor option
+`{ clock: physicsClockStep }` can select the render clock without changing track
+time. `physicsTime` exposes that sum. A non-finite or negative delta/clock result
+throws `RuntimeInputError` naming the call. `physicsTranslate(x, y)` and
+`physicsRotate(x, y, degrees)` shift the previous origins; `setEnvironment({
+wind: [x, y], gravity: [x, y] })` supplies the skeleton directions (positive y
+points down), all numbers finite. Offsets, velocities, lags and buffers belong
+to each pose; a zero physics mix does not consume its constraint's clock.
+
+A slider reads its dial where earlier constraints left it: local or world
+property mapped as `to + (value - from) * scale`, clamped at zero or looped by
+its animation duration. A boneless slider uses its keyed `time`. The selected
+animation is applied at that value, never advanced as a track, and fires no
+events or physics reset keys. Mix zero does not re-pose bones; nonzero mix
+re-poses every keyed bone even before its first key. Absolute/additive bone and
+deform blends and slot switches follow the oracle, including direct scale and
+colour targets at mix one. Slider physics writes last one pass and affect only
+constraints later in update order. An unsupported timeline in a slider's
+animation refuses the whole model under that timeline's existing feature name,
+so an unselected track cannot hide a construct the slider always applies.
+
 **Everything else is refused at load, by name.** `RuntimeRefusal.missing` lists
 every construct met, each `{ feature, detail, animation }`, and the message
-reads `not posed by the runtime poser (stage 2), N construct(s) missing:
+reads `not posed by the runtime poser (stage 3), N construct(s) missing:
 <feature>: <detail>; …`. A model-level feature refuses the whole model; an
 animation-level one refuses that animation alone (`model.refused`;
 `model.animation(name)` and `setAnimation(name)` throw its refusal) and every
@@ -12740,7 +12769,7 @@ refused: nothing is posed approximately.
 
 | feature | refuses | what it is |
 | --- | --- | --- |
-| `path-constraint`, `physics-constraint`, `slider-constraint` | the model | a constraint of that kind |
+| `path-constraint` | the model | a constraint of that kind |
 | `local-transform`, `additive-transform` | the model | a transform constraint with `localSource` or `localTarget`, or `additive` |
 | `inactive-constrained-bone` | the model | an applied ik or transform constraint naming a bone the view leaves inactive (what the oracle writes there depends on the pass before) |
 | `noscale-world-target` | the model | a world-space transform onto a `noScale` or `noScaleOrReflection` bone, whose local values would be read back in that mode |
@@ -12755,7 +12784,7 @@ this document's [...]`, `apply: the time NaN is not finite`.
 
 **The gate.** `tools/core_gate.ts` runs a third dumper (`runtimeDump` in
 `tools/pose_oracle.ts`) over every row it builds, at the oracle's samples, and
-compares its document with the oracle's in full doubles at tolerance 0 twice:
+compares both unstepped and stepped documents with the oracle's in full doubles at tolerance 0 twice:
 through `compare` and cell by cell (which reads the bones `compare`'s
 ill-conditioned rule leaves out). One `RUNTIME` line per row reads `IDENTICAL`
 (covered whole and equal), `SKIP` (refused at load, or animations or events left

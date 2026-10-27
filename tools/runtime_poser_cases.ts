@@ -310,14 +310,27 @@ function population(n: number, seed: number, input: RuntimeCasesInput, plant: Ru
 }
 
 /**
- * The last bone no constraint names: its own setup rotation reaches its world
+ * The last bone no constraint reads or writes: its own setup rotation reaches its world
  * matrix whatever its mode, where a constrained bone's can be overwritten by
  * the constraint (a one-bone ik at mix 1 turns it to the target again).
  */
 function freeBone(doc: ReturnType<typeof readModel>): string {
-  const named = new Set(doc.constraints.flatMap((c) => (c.record !== undefined && 'bones' in c.record && Array.isArray(c.record.bones) ? c.record.bones : [])));
-  const free = doc.bones.filter((b) => b.parent !== undefined && !named.has(b.name));
-  return (free[free.length - 1] ?? doc.bones[doc.bones.length - 1]).name;
+  const named = new Set<string>();
+  for (const c of doc.constraints) {
+    const r = c.record;
+    if (r === undefined) continue;
+    if (r.kind === 'physics') named.add(r.bone);
+    else if (r.kind === 'slider') {
+      if (r.bone !== null) named.add(r.bone);
+      for (const target of r.timelines.bones) named.add(target.name);
+    } else {
+      for (const bone of r.bones) named.add(bone);
+      if (r.kind === 'ik') named.add(r.target);
+      if (r.kind === 'transform') named.add(r.source);
+    }
+  }
+  const free = doc.bones.filter((b) => b.parent !== undefined && !named.has(b.name) && !b.skinRequired);
+  return (free[free.length - 1] ?? doc.bones[0]).name;
 }
 
 /** The control's figures off a set of rows. */
@@ -336,12 +349,12 @@ export function allocationPerFrame(root: string, model: string, animation: strin
 }
 
 /** Every pose of a looping walk, the runtime's `step` against the core's live track (`openTrack`), every bone's world, every slot's colour and every drawn vertex by `Object.is`. */
-function stepAgainstTrack(text: string, animation: string, steps: readonly number[]): { first: string | null; poses: number; values: number } {
+export function stepAgainstTrack(text: string, animation: string, steps: readonly number[]): { first: string | null; poses: number; values: number } {
   const view = underNoSkin(readModel(text));
   const runtime = compileRuntime(view);
   const pose = new RuntimePose(runtime);
   pose.setAnimation(animation);
-  pose.apply(0);
+  pose.apply(0, 'reset', 0);
   const track = openTrack(view, animation, { loop: true, reset: 'animation' });
   let values = 0;
   let poses = 0;
@@ -579,7 +592,7 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
       else fired.add(feature);
     }
     // The gallery's: a path constraint, a slider and a physics constraint.
-    for (const r of gallery) for (const m of r.refusedAtLoad ?? []) if (m.feature === 'path-constraint' || m.feature === 'slider-constraint' || m.feature === 'physics-constraint') fired.add(m.feature);
+    for (const r of gallery) for (const m of r.refusedAtLoad ?? []) if (m.feature === 'path-constraint') fired.add(m.feature);
     // An animation's own constructs: the model compiles, the animation is refused and `animation(name)` throws naming it; `idle` is posed.
     const seqRegion = { kind: 'region', width: 10, height: 10, sequence: { count: 2, start: 0, digits: 0, setup: 0, atlas: [rect(10, 10), rect(8, 8)] } };
     const animationProbes: Array<[RuntimeFeature, ProbeSpec, Obj]> = [
@@ -624,7 +637,7 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     say(
       'RP08_EVERY_CONSTRUCT_STAGE_0_DOES_NOT_POSE_IS_REFUSED_BY_NAME_THE_MODELS_AT_LOAD_AND_AN_ANIMATIONS_ALONE',
       probes,
-      `each of the ${RUNTIME_FEATURES.length} features refused by a probe naming it — ${modelProbes.length} hand-written models refused at load, the path, slider and physics constraints off the gallery, ${animationProbes.length} animations refused alone while the model's other animation is posed; skin views and event delivery are covered by stage-one controls; no animation set, an unknown animation and a time that is not finite refused by name`,
+      `each of the ${RUNTIME_FEATURES.length} features refused by a probe naming it — ${modelProbes.length} hand-written models refused at load, the path constraint off the gallery, ${animationProbes.length} animations refused alone while the model's other animation is posed; skin views and event delivery are covered by stage-one controls; no animation set, an unknown animation and a time that is not finite refused by name`,
     );
   }
 

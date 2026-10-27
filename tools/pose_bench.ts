@@ -1463,7 +1463,7 @@ async function fetchFileIfMissing(url: string, dest: string): Promise<void> {
   writeFileSync(dest, new Uint8Array(await res.arrayBuffer()));
 }
 
-async function ensureBenchAssets(benchDir?: string): Promise<Record<SkeletonName, SkeletonAssets>> {
+export async function ensureBenchAssets(benchDir?: string): Promise<Record<SkeletonName, SkeletonAssets>> {
   const fallbackTmpDir = join(tmpdir(), 'rigc-pose-bench-assets');
   const candidates = [
     ...(benchDir === undefined ? [] : [resolve(benchDir)]),

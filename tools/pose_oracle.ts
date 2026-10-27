@@ -467,7 +467,7 @@ import { CORE_DUMPER, CoreInputError, gridRound, poseSetup, rawNumber, readModel
 import { REGION_TRIANGLES, REGION_UVS } from '../src/core/clipping.ts';
 import { IRR_OFFSET as CORE_IRR_OFFSET, poseAnimations, sampleTime as coreSampleTime, type TimelinePlant } from '../src/core/animation.ts';
 import { pathAttachmentRows, pathRows, type CorePathRecord } from '../src/core/constraints_path.ts';
-import { freshStepContext, physicsRows, poseSteppedAnimations, type CorePhysicsRecord } from '../src/core/constraints_physics.ts';
+import { freshStepContext, physicsRows, stepSchedule, poseSteppedAnimations, type CorePhysicsRecord } from '../src/core/constraints_physics.ts';
 import { poseUvs, readUvSequences, shownAtSample, shownAtSetup, steppedUvsWhy, type UvReading, type UvSource } from '../src/core/uvs.ts';
 import { atlasRegionLookup, parseAtlasText } from '../src/atlas.ts';
 import { poseLoopingWalk, poseWalkSetup, walkHistory, type WalkPlant, type WalkPose } from '../src/core/walk.ts';
@@ -1143,7 +1143,6 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
     if (err instanceof CoreInputError) throw new OracleInputError(`runtime dump: ${err.message}`);
     throw err;
   }
-  if (options.physics !== 'none') throw new OracleInputError(`runtime dump: --physics ${options.physics} is not posed by the runtime poser (stage ${RUNTIME_STAGE}), which has no physics clock`);
   const round = roundOf(options);
   const runtime = compileRuntime(doc, {}, plant);
   const pose = new RuntimePose(runtime);
@@ -1166,7 +1165,7 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
     // No draw-order timeline and no clipping attachment is posed (both refused at load): the setup order, and nothing clipped.
     return { bones, slots, drawOrder: runtime.slots.map((s) => s.name), attachments, clips: [], clipped: [], uvs: null };
   };
-  pose.setupPose();
+  pose.setupPose(options.physics === 'step' ? 'reset' : 'none');
   const setup = read();
   const covered = doc.animations.filter((a) => runtime.animations.has(a.name));
   // One pose for the whole document, every animation in turn: a value one pose left behind is a difference in the next.
@@ -1174,10 +1173,17 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
     pose.setAnimation(a.name);
     const d = a.timelines.duration;
     const samples: OracleDocumentSample[] = [];
+    const schedule = options.physics === 'step' ? stepSchedule(options.phase, d, options.samples, options.dt!) : null;
+    let previous = 0;
+    let lastSample = -1;
+    if (schedule !== null) pose.apply(0, 'reset', 0);
     for (let i = 0; i < options.samples; i++) {
       const t = coreSampleTime(options.phase, d, i, options.samples);
-      pose.apply(t);
-      samples.push({ t: round(t), events: pose.events.map(e => [e.name, round(e.time), e.int, round(e.float), e.string]), ...read() });
+      if (schedule === null) pose.apply(t);
+      else for (const next of schedule[i]) { pose.apply(next, 'update', next - previous); previous = next; }
+      const sampleEvents = a.timelines.events.filter(e => e.time > lastSample && e.time <= t).map(e => [e.name, round(e.time), e.int, round(e.float), e.string] as [string, number | null, number, number | null, string | null]);
+      lastSample = t;
+      samples.push({ t: round(t), events: schedule === null ? pose.events.map(e => [e.name, round(e.time), e.int, round(e.float), e.string]) : sampleEvents, ...read() });
     }
     return { name: a.name, duration: round(d), samples };
   });
@@ -1187,14 +1193,14 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
       spec: options.raw === true ? ORACLE_RAW_SPEC : ORACLE_SPEC,
       dumper: RUNTIME_DUMPER,
       source: { spine: null, hash: null },
-      options: { phase: options.phase, samples: options.samples, skin: options.skin, physics: options.physics, dt: null },
+      options: { phase: options.phase, samples: options.samples, skin: options.skin, physics: options.physics, dt: options.dt },
       absent,
       bones: doc.bones.map((b) => b.name),
       slots: doc.slots.map((s): [string, string] => [s.name, s.bone]),
       skins: doc.skins.map((s) => s.name),
       constraints: doc.constraints.map((c): [string, string] => [c.kind, c.name]),
-      // No physics or path constraint is posed (both refused at load); the path attachments are the document's own records.
-      physics: [],
+      // Physics setup parameters are stated even under none; paths remain refused.
+      physics: physicsRows(doc.constraints.flatMap(c => c.record?.kind === 'physics' ? [c.record as CorePhysicsRecord] : []), round) as unknown as OraclePhysicsRow[],
       paths: [],
       pathAttachments: pathAttachmentRows(doc.skins, round),
       setup,

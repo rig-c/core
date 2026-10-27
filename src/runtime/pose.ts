@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 2): one
+ * The runtime poser's per-instance half (issue #1591, stage 3): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -13,8 +13,9 @@
  * document's order with their timelines' values at `t`, each followed by the
  * bones below what it moved posed again; then each slot's colour and what it
  * shows; then, when asked, every shown attachment's world vertices. Nothing
- * of one pose survives into the next but the key cursors, which only make
- * the key search start nearer.
+ * of one unstepped pose survives but key cursors. A stepped pose also keeps
+ * its physics clock, offsets, velocities and lags; sliders select values
+ * within this pose rather than advancing an independent track.
  *
  * ## The arithmetic is the oracle's
  *
@@ -37,6 +38,8 @@
  * exactly 0 touching nothing; an inactive bone posed as zeros by the
  * hierarchy and never posed again by a constraint, nor the bones below it.
  */
+import type { CorePhysicsRecord } from '../core/constraints_physics.ts';
+import { freshPhysicsState, resetPhysicsState, stepRuntimePhysics, type PhysicsState } from './physics.ts';
 import { COLLAPSED_X_AXIS_SQ, RUNTIME_DEG, RUNTIME_PI } from '../core/world.ts';
 import { channelValue, keyAt, deformFraction, CURVE_STEPPED } from './curves.ts';
 import {
@@ -75,6 +78,8 @@ import {
   type RuntimeIk,
   type RuntimeModel,
   type RuntimeTransform,
+  type RuntimeSlider,
+  type RuntimePhysicsTimeline,
 } from './model.ts';
 
 const DEG = RUNTIME_DEG;
@@ -97,6 +102,10 @@ function volumeScaleY(scaleY: number, s: number): number {
 }
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/** A caller-supplied physics clock; animation/track time still uses dt itself. */
+export interface RuntimePoseOptions { readonly clock?: (dt: number) => number }
+export type RuntimePhysicsPhase = 'none' | 'reset' | 'update';
 
 /** One skeleton's pose, every value in place. Read `world`, `light`, `shown` and `vertices` after a pose. */
 export class RuntimePose {
@@ -139,8 +148,29 @@ export class RuntimePose {
   private readonly visit: Uint8Array;
   private readonly w = new Float64Array(WORLDS);
 
-  constructor(model: RuntimeModel) {
+  /** Sum of caller-supplied physics deltas, independent of animation time. */
+  physicsTime = 0;
+  private physicsLast = -1;
+  private physicsPhase: RuntimePhysicsPhase = 'none';
+  private physicsReady = false;
+  private readonly hasPhysics: boolean;
+  private readonly physicsStates: PhysicsState[];
+  private readonly physicsRecords: Array<CorePhysicsRecord | null>;
+  private readonly environment = new Float64Array([1, 0, 0, 1]);
+  private readonly sliderTime: Float64Array;
+  private readonly sliderMix: Float64Array;
+  private readonly sliderAt: Float64Array;
+  private readonly clock: ((dt: number) => number) | undefined;
+
+  constructor(model: RuntimeModel, options: RuntimePoseOptions = {}) {
     this.model = model;
+    this.clock = options.clock;
+    this.hasPhysics = model.constraints.some(c => c.kind === 'physics');
+    this.physicsStates = model.constraints.map(() => freshPhysicsState());
+    this.physicsRecords = model.constraints.map(c => c.kind === 'physics' ? { ...c.setup } : null);
+    this.sliderTime = new Float64Array(model.constraints.length);
+    this.sliderMix = new Float64Array(model.constraints.length);
+    this.sliderAt = new Float64Array(model.constraints.length);
     const nb = model.boneNames.length;
     const ns = model.slots.length;
     const nc = model.constraints.length;
@@ -168,6 +198,10 @@ export class RuntimePose {
   /** The animation this pose plays (a covered one: `model.animation` throws a `RuntimeRefusal` for a refused one), from track time 0. */
   setAnimation(name: string): void {
     this.current = this.model.animation(name);
+    this.physicsTime = 0;
+    this.physicsLast = -1;
+    this.physicsReady = false;
+    for (let k = 0; k < this.physicsStates.length; k++) resetPhysicsState(this.physicsStates[k], 0);
     this.cursors.fill(-1);
     this.trackTime = 0;
     this.time = 0;
@@ -190,40 +224,57 @@ export class RuntimePose {
   }
 
   /** The setup pose: every constraint applied with its own values, every slot as it is set up. */
-  setupPose(): void {
+  setupPose(physics: RuntimePhysicsPhase = 'none'): void {
+    this.physicsPhase = physics;
     this.current = null;
     this.time = 0;
     this.eventTime = -1;
     this.fired.length = 0;
+    this.physicsValues(null, 0, false);
     this.locals.set(this.model.setup);
     this.hierarchy();
     this.constraintValues(null, 0);
     this.solveConstraints();
-    this.slotValues(null, 0);
-    this.deformValues(null, 0);
+    this.attachmentValues(null, 0);
   }
 
   /** The animation posed at its time `t`, from the setup pose (the header). */
-  apply(t: number): void {
+  apply(t: number, physics: RuntimePhysicsPhase = 'none', delta = 0): void {
     const anim = this.current;
     if (anim === null) throw new RuntimeInputError('apply: no animation is set (setAnimation first)');
     if (!Number.isFinite(t)) throw new RuntimeInputError(`apply: the time ${t} is not finite`);
+    if (!Number.isFinite(delta) || delta < 0) throw new RuntimeInputError(`apply: physics delta ${delta} is not finite and at or above 0`);
+    this.physicsPhase = physics;
+    // Reset keys see the old clock. The skeleton moves by delta only after application.
+    this.physicsValues(anim, t, physics !== 'none');
+    if (physics !== 'none') {
+      this.physicsTime += delta;
+      this.physicsReady = true;
+    }
     this.collectEvents(anim, t);
     this.time = t;
     this.boneTimelines(anim, t);
     this.hierarchy();
     this.constraintValues(anim, t);
     this.solveConstraints();
-    this.slotValues(anim, t);
-    this.deformValues(anim, t);
+    this.attachmentValues(anim, t);
   }
 
   /** One step of a looping track: the track time moved by `dt`, the animation posed at it wrapped by the duration (`loopedTime` in src/core/raw.ts). */
   step(dt: number): void {
     const anim = this.current;
     if (anim === null) throw new RuntimeInputError('step: no animation is set (setAnimation first)');
+    if (!Number.isFinite(dt) || dt < 0) throw new RuntimeInputError(`step: delta ${dt} is not finite and at or above 0`);
+    if (!this.physicsReady && this.hasPhysics) {
+      // Initial physics setup must not consume the event interval of this step.
+      const lastEventTime = this.eventTime;
+      this.apply(this.time, 'reset', 0);
+      this.eventTime = lastEventTime;
+    }
+    const moved = this.clock === undefined ? dt : this.clock(dt);
+    if (!Number.isFinite(moved) || moved < 0) throw new RuntimeInputError(`step: physics clock moved by ${moved}, not finite and at or above 0`);
     this.trackTime += dt;
-    this.apply(anim.duration === 0 ? 0 : this.trackTime % anim.duration);
+    this.apply(anim.duration === 0 ? 0 : this.trackTime % anim.duration, 'update', moved);
   }
 
   /** The oracle interval (last,t], tail then head on a wrap; never copies a payload. */
@@ -427,9 +478,24 @@ export class RuntimePose {
           this.ikSoftness[k] = c.softness + (channelValue(tl.curve, i, 1, t) - c.softness) * 1;
           this.ikFlags[k] = (tl.flags as Uint8Array)[i];
         }
-      } else {
+      } else if (c.kind === 'transform') {
         const o = k * 6;
         for (let p = 0; p < 6; p++) this.mixes[o + p] = tl === null || i < 0 ? c.mixes[p] : c.mixes[p] + (channelValue(tl.curve, i, p, t) - c.mixes[p]) * 1;
+      } else if (c.kind === 'slider') {
+        const keyed = anim === null ? null : anim.sliders[k];
+        let time = c.setup.time, mix = c.setup.mix;
+        if (keyed !== null) {
+          if (keyed.time !== null) {
+            const q = keyAt(keyed.time, this.cursors, keyed.timeCursor, t);
+            if (q >= 0) time += (channelValue(keyed.time, q, 0, t) - time) * 1;
+          }
+          if (keyed.mix !== null) {
+            const q = keyAt(keyed.mix, this.cursors, keyed.mixCursor, t);
+            if (q >= 0) mix += (channelValue(keyed.mix, q, 0, t) - mix) * 1;
+          }
+        }
+        this.sliderTime[k] = time;
+        this.sliderMix[k] = mix;
       }
     }
   }
@@ -441,7 +507,222 @@ export class RuntimePose {
       const c = cs[k];
       if (!c.applied) continue;
       if (c.kind === 'ik') this.solveIk(c, k);
-      else this.solveTransform(c, k);
+      else if (c.kind === 'transform') this.solveTransform(c, k);
+      else if (c.kind === 'slider') this.solveSlider(c, k);
+      else if (this.physicsPhase !== 'none' && !this.model.omitPhysics) {
+        const b = c.bones[0];
+        if (stepRuntimePhysics(this.physicsRecords[k]!, this.physicsStates[k], this.world, b * WORLDS, this.model.lengths[b], this.physicsTime, this.physicsPhase === 'reset', this.environment)) {
+          this.changed[0] = this.inWorld[0] = b;
+          this.repose(1, 1);
+        }
+      }
+    }
+  }
+
+  /** Reset where the consumer starts: the setup pose or animation pose zero. */
+  resetPhysics(at: 'setup' | 'animation' = 'animation'): void {
+    this.physicsTime = 0;
+    this.physicsLast = -1;
+    for (let k = 0; k < this.physicsStates.length; k++) resetPhysicsState(this.physicsStates[k], 0);
+    if (at === 'animation') this.apply(0, 'reset', 0);
+    else {
+      const current = this.current;
+      this.setupPose('reset');
+      this.current = current;
+    }
+    this.physicsReady = true;
+  }
+
+  /** External motion changes the previous origin, never the authored locals. */
+  physicsTranslate(x: number, y: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new RuntimeInputError('physicsTranslate: x and y must be finite');
+    for (let k = 0; k < this.physicsStates.length; k++) {
+      const s = this.physicsStates[k];
+      s.ux -= x; s.uy -= y; s.cx -= x; s.cy -= y;
+    }
+  }
+
+  physicsRotate(x: number, y: number, degrees: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(degrees)) throw new RuntimeInputError('physicsRotate: x, y and degrees must be finite');
+    const r = degrees * RAD, cos = Math.cos(r), sin = Math.sin(r);
+    for (let k = 0; k < this.physicsStates.length; k++) {
+      const s = this.physicsStates[k];
+      const dx = s.cx - x, dy = s.cy - y;
+      const tx = dx * cos - dy * sin - dx, ty = dx * sin + dy * cos - dy;
+      s.ux -= tx; s.uy -= ty; s.cx -= tx; s.cy -= ty;
+    }
+  }
+
+  setEnvironment(env: { readonly wind: readonly [number, number]; readonly gravity: readonly [number, number] }): void {
+    if (!Number.isFinite(env.wind[0]) || !Number.isFinite(env.wind[1]) || !Number.isFinite(env.gravity[0]) || !Number.isFinite(env.gravity[1])) throw new RuntimeInputError('setEnvironment: wind and gravity must be finite');
+    this.environment[0] = env.wind[0]; this.environment[1] = env.wind[1];
+    this.environment[2] = env.gravity[0]; this.environment[3] = env.gravity[1];
+  }
+
+  /** The per-pass values start at setup, before any slider writes. */
+  private physicsValues(anim: RuntimeAnimation | null, t: number, resets: boolean): void {
+    const cs = this.model.constraints;
+    for (let k = 0; k < cs.length; k++) {
+      const c = cs[k];
+      if (c.kind !== 'physics') continue;
+      const r = this.physicsRecords[k]!;
+      r.inertia = c.setup.inertia; r.strength = c.setup.strength; r.damping = c.setup.damping;
+      r.massInverse = c.setup.massInverse; r.wind = c.setup.wind; r.gravity = c.setup.gravity; r.mix = c.setup.mix;
+    }
+    if (anim !== null) this.physicsTimelines(anim.physics, t, 1, false, true, resets);
+    if (resets) this.physicsLast = t;
+  }
+
+  private physicsTimelines(timelines: readonly RuntimePhysicsTimeline[], t: number, alpha: number, additive: boolean, setup: boolean, resets = false): void {
+    for (let q = 0; q < timelines.length; q++) {
+      const tl = timelines[q];
+      if (tl.kind === 'reset') {
+        if (!resets) continue; // a slider applies at one value; no key is crossed
+        let crossed = false;
+        const last = this.physicsLast;
+        for (let i = 0; i < tl.curve.keys; i++) {
+          const time = tl.curve.times[i];
+          if (t < last ? time > last || time <= t : time > last && time <= t) crossed = true;
+        }
+        if (crossed) for (let j = 0; j < tl.targets.length; j++) resetPhysicsState(this.physicsStates[tl.targets[j]], this.physicsTime);
+        continue;
+      }
+      const i = keyAt(tl.curve, this.cursors, tl.cursor, t);
+      if (i < 0) {
+        // A track's before-first key restores setup even if an earlier global
+        // timeline wrote this parameter. A slider's before-first key writes nothing.
+        if (setup) for (let j = 0; j < tl.targets.length; j++) {
+          const k = tl.targets[j], r = this.physicsRecords[k]!;
+          const original = (this.model.constraints[k] as { setup: CorePhysicsRecord }).setup;
+          if (tl.kind === 'mass') r.massInverse = original.massInverse;
+          else r[tl.kind] = original[tl.kind];
+        }
+        continue;
+      }
+      const v = channelValue(tl.curve, i, 0, t);
+      for (let j = 0; j < tl.targets.length; j++) {
+        const k = tl.targets[j], r = this.physicsRecords[k]!;
+        const from = setup ? (this.model.constraints[k] as { setup: CorePhysicsRecord }).setup : r;
+        if (tl.kind === 'mass') {
+          const mass = 1 / from.massInverse;
+          r.massInverse = 1 / (mass + (v - mass) * alpha);
+        } else {
+          r[tl.kind] = additive && (tl.kind === 'wind' || tl.kind === 'gravity') ? r[tl.kind] + v * alpha : from[tl.kind] + (v - from[tl.kind]) * alpha;
+        }
+      }
+    }
+  }
+
+  /** Read the dial where previous constraints left it; this value is never track time. */
+  private solveSlider(c: RuntimeSlider, k: number): void {
+    const alpha = this.sliderMix[k];
+    if (alpha === 0) return;
+    let time = this.sliderTime[k];
+    const r = c.setup, a = c.animation;
+    if (c.bone >= 0) {
+      const b = c.bone, w = b * WORLDS, l = b * LOCALS;
+      let value: number;
+      if (r.local) {
+        const field = c.property === 0 ? L_ROTATION : c.property === 1 ? L_X : c.property === 2 ? L_Y : c.property === 3 ? L_SCALE_X : c.property === 4 ? L_SCALE_Y : L_SHEAR_Y;
+        value = this.locals[l + field] + 0;
+      } else {
+        const W = this.world, x = W[w], y = W[w + 2], bx = W[w + 1], by = W[w + 3];
+        switch (c.property) {
+          case 0: value = Math.atan2(y, x) * DEG + (x * by - bx * y > 0 ? 0 : -0); if (value < 0) value += 360; break;
+          case 1: value = x * 0 + bx * 0 + W[w + W_X]; break;
+          case 2: value = y * 0 + by * 0 + W[w + W_Y]; break;
+          case 3: value = Math.sqrt(x * x + y * y) + 0; break;
+          case 4: value = Math.sqrt(bx * bx + by * by) + 0; break;
+          default: value = (Math.atan2(by, bx) - Math.atan2(y, x)) * DEG - 90 + 0;
+        }
+      }
+      time = r.to + (value - r.from) * r.scale;
+      time = r.loop ? a.duration === 0 ? 0 : a.duration + time % a.duration : Math.max(0, time);
+    }
+    const at = this.model.sliderAsTrack ? this.time : r.loop && a.duration !== 0 ? time % a.duration : time;
+    this.sliderAt[k] = at;
+    if (this.physicsPhase !== 'none') this.physicsTimelines(a.physics, at, alpha, r.additive, false);
+    const L = this.locals, S = this.model.setup;
+    for (let q = 0; q < a.sliderBones.length; q++) {
+      const tl = a.sliderBones[q], i = keyAt(tl.curve, this.cursors, tl.cursor, at);
+      if (i < 0) continue;
+      const o = tl.bone * LOCALS;
+      for (let f = 0; f < tl.fields.length; f++) {
+        const n = o + tl.fields[f], v = channelValue(tl.curve, i, f, at), current = L[n], setup = S[n];
+        if (tl.multiply[f]) {
+          if (r.additive) L[n] = current + (v * setup - setup) * alpha;
+          else {
+            const target = setup * v, from = Math.abs(current) * Math.sign(target);
+            L[n] = alpha === 1 ? target : from + (target - from) * alpha;
+          }
+        } else L[n] = r.additive ? current + v * alpha : current + (setup + v - current) * alpha;
+      }
+    }
+    for (let q = 0; q < c.bones.length; q++) this.changed[q] = c.bones[q];
+    if (c.bones.length > 0) this.repose(c.bones.length, 0);
+  }
+
+  private attachmentValues(anim: RuntimeAnimation | null, t: number): void {
+    this.slotValues(anim, t);
+    this.deformValues(anim, t);
+    for (let k = 0; k < this.model.constraints.length; k++) {
+      this.sliderSlots(k);
+      this.sliderDeforms(k);
+    }
+  }
+
+  private sliderSlots(index: number): void {
+    const cs = this.model.constraints;
+    {
+      const k = index, c = cs[k];
+      if (c.kind !== 'slider' || !c.applied || this.sliderMix[k] === 0) return;
+      const a = c.animation, t = this.sliderAt[k], alpha = this.sliderMix[k];
+      for (let q = 0; q < a.slots.length; q++) {
+        const tl = a.slots[q], i = keyAt(tl.curve, this.cursors, tl.cursor, t);
+        if (i < 0) continue;
+        if (tl.attachments !== null) {
+          const next = tl.attachments[i];
+          if (next !== this.shown[tl.slot] && next >= 0) this.deformed[next] = 0;
+          this.shown[tl.slot] = next;
+        }
+        else {
+          const channels = tl.channels!;
+          for (let f = 0; f < channels.length; f++) {
+            const n = tl.slot * 4 + channels[f], v = channelValue(tl.curve, i, f, t);
+            this.light[n] = clamp01(alpha === 1 ? v : this.light[n] + (v - this.light[n]) * alpha);
+          }
+        }
+      }
+    }
+  }
+
+  private sliderDeforms(index: number): void {
+    if (this.model.omitDeform) return;
+    const cs = this.model.constraints;
+    {
+      const k = index, c = cs[k];
+      if (c.kind !== 'slider' || !c.applied || this.sliderMix[k] === 0) return;
+      const a = c.animation, t = this.sliderAt[k], alpha = this.sliderMix[k];
+      for (let q = 0; q < a.deforms.length; q++) {
+        const tl = a.deforms[q], i = keyAt(tl.curve, this.cursors, tl.cursor, t);
+        if (i < 0) continue;
+        const held = i + 1 === tl.curve.keys || tl.curve.kinds[i] === CURVE_STEPPED;
+        const p = held ? 0 : deformFraction(tl.curve, i, t), start = i * tl.count;
+        for (let slot = 0; slot < this.shown.length; slot++) {
+          const index = this.shown[slot];
+          if (index < 0 || !this.model.slots[slot].live) continue;
+          const at = this.model.attachments[index];
+          if (at.timeline !== tl.identity || at.deformCount === 0) continue;
+          const current = this.deformed[index] !== 0;
+          for (let f = 0; f < tl.count; f++) {
+            const v = tl.held[start + f], target = held ? v : v + (tl.held[start + tl.count + f] - v) * p;
+            const setup = at.draw === DRAW_MESH ? at.local[f] : 0, n = at.deformOffset + f;
+            const from = current ? this.deform[n] : setup;
+            this.deform[n] = alpha === 1 && (!c.setup.additive || !current) ? target : c.setup.additive ? from + (target - setup) * alpha : from + (target - from) * alpha;
+          }
+          this.deformed[index] = 1;
+        }
+      }
     }
   }
 
@@ -868,6 +1149,20 @@ export class RuntimePose {
     const wb = W[w + W_B];
     const wc = W[w + W_C];
     const wd = W[w + W_D];
+    if (mode === MODE_NO_SCALE || mode === MODE_NO_SCALE_OR_REFLECTION) {
+      const det = pa * pd - pb * pc;
+      const flip = mode === MODE_NO_SCALE && det < 0 ? -1 : 1;
+      const sign = det < 0 ? -1 : 1;
+      const rotation = Math.atan2((pa * wc - pc * wa) * sign, (pd * wa - pb * wc) * sign) * DEG;
+      const rr = rotation * RAD;
+      const cos = Math.cos(rr), sin = Math.sin(rr);
+      let ux = pa * cos + pb * sin, uy = pc * cos + pd * sin;
+      const length = 1 / Math.sqrt(ux * ux + uy * uy);
+      ux *= length; uy *= length;
+      this.decompose(l, ux * wa + uy * wc, (ux * wc - uy * wa) * flip, ux * wb + uy * wd, (ux * wd - uy * wb) * flip, true);
+      L[l + L_ROTATION] = rotation;
+      return;
+    }
     if (mode === MODE_ONLY_TRANSLATION) {
       this.decompose(l, wa, wc, wb, wd);
       return;
@@ -887,7 +1182,7 @@ export class RuntimePose {
   }
 
   /** A local matrix with columns `(la, lc)` and `(lb, ld)` as rotation, scales and shear (`decompose`). */
-  private decompose(l: number, la: number, lc: number, lb: number, ld: number): void {
+  private decompose(l: number, la: number, lc: number, lb: number, ld: number, shearX = false): void {
     const L = this.locals;
     const sx = Math.sqrt(la * la + lc * lc);
     const yLength = Math.sqrt(lb * lb + ld * ld);
@@ -901,11 +1196,11 @@ export class RuntimePose {
     const xAngle = Math.atan2(lc, la) * DEG;
     const det = la * ld - lb * lc;
     const yAngle = Math.atan2(ld, lb) * DEG;
-    L[l + L_ROTATION] = xAngle;
+    L[l + (shearX ? L_SHEAR_X : L_ROTATION)] = xAngle;
     L[l + L_SCALE_X] = sx;
     L[l + L_SCALE_Y] = det < 0 ? -yLength : yLength;
     const right = det < 0 ? -90 : 90;
-    let shear = yAngle - (xAngle + right);
+    let shear = yAngle - ((shearX ? 0 : xAngle) + right);
     shear = shear > 180 ? shear - 360 : shear < -180 ? shear + 360 : shear;
     L[l + L_SHEAR_Y] = yLength > 0.00001 ? shear : 0;
   }

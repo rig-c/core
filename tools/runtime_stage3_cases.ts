@@ -45,7 +45,60 @@ function mismatch(p: RuntimePose, raw: RawPose): string | null {
   return null;
 }
 
+/** Duplicate targets are legal model input: sliders compose all entries, tracks keep the last. */
+export function duplicateSliderProbe(additive: boolean, mix: number, ending: 'full' | 'empty' | 'late' | 'inherit', shared: boolean, enabled = true): string {
+  const first = ending === 'inherit' ? [{ name: 'inherit', keys: [{ time: 0, inherit: 'onlyTranslation' }] }] : [
+    { name: 'rotate', keys: key(10, 31) }, { name: 'translatex', keys: key(3, 7) },
+    { name: 'scalex', keys: key(1.2, 1.4) }, { name: 'translate', keys: [{ time: 0.25, x: 2, y: -3 }, { time: 1, x: 5, y: 4 }] },
+  ];
+  const start = ending === 'late' ? 0.5 : 0;
+  const last = ending === 'empty' ? [] : [
+    { name: 'rotate', keys: [{ time: start, value: -7 }, { time: 1, value: 15 }] },
+    { name: 'translatex', keys: [{ time: start, value: -2 }, { time: 1, value: -5 }] },
+    { name: 'scalex', keys: [{ time: start, value: -0.7 }, { time: 1, value: 0.8 }] },
+    { name: 'shearx', keys: [{ time: 0.75, value: 3 }] },
+  ];
+  return probeModel({ bones: [{ name: 'root', rotation: 13 }, { name: 'a', parent: 'root', x: 7, y: 2, rotation: 17, scaleX: 1.3 }, { name: 'b', parent: 'root', x: -4 }, { name: 'tip', parent: 'a', x: 20 }],
+    constraints: !enabled ? [] : [{ kind: 'slider', name: 's', animation: 'pose', time: 0.125, additive, mix }, ...(shared ? [{ kind: 'slider', name: 's2', animation: 'pose', time: 0.875, additive: !additive, mix: 0.25 }] : [])],
+    animations: [{ name: 'pose', duration: 1, bones: [{ name: 'a', timelines: first }, { name: 'b', timelines: [{ name: 'rotate', keys: key(4, -9) }] }, { name: 'a', timelines: last }] },
+      { name: 'drive', duration: 1, constraints: { ik: [], transform: [], path: [], physics: [], slider: !enabled ? [] : [
+        { name: 's', timelines: [{ name: 'time', keys: key(0, 1) }, { name: 'mix', keys: key(mix, mix) }] },
+        ...(shared ? [{ name: 's2', timelines: [{ name: 'time', keys: key(1, 0) }] }] : []),
+      ] } }],
+  });
+}
+
+export function duplicateSliderCases(): { problems: string[]; detail: string } {
+  const problems: string[] = []; let views = 0, poses = 0, values = 0;
+  const deltas = [0.125, 0.25, 0.375, 0.125, 0.25, 0.625, 0.5, 0.125];
+  for (const additive of [false, true]) for (const mix of [0, 0.375, 1]) for (const ending of ['full', 'empty', 'late'] as const) for (const shared of [false, true]) {
+    const text = duplicateSliderProbe(additive, mix, ending, shared); views++;
+    for (const animation of ['drive', 'pose']) {
+      const row = stepAgainstTrack(text, animation, deltas); poses += row.poses; values += row.values;
+      if (row.first) problems.push(`${additive}/${mix}/${ending}/shared=${shared}/${animation}: ${row.first}`);
+    }
+  }
+  for (const ending of ['full', 'empty', 'late'] as const) {
+    const row = stepAgainstTrack(duplicateSliderProbe(true, 0.375, ending, false, false), 'pose', deltas);
+    poses += row.poses; values += row.values;
+    if (row.first) problems.push(`ordinary last-target track/${ending}: ${row.first}`);
+  }
+  for (const enabled of [false, true]) {
+    try {
+      const text = duplicateSliderProbe(true, 0.375, 'inherit', false, enabled);
+      compileRuntime(underNoSkin(readModel(text)));
+      if (enabled) problems.push('slider silently accepted inherit in an earlier duplicate target');
+      else { const row = stepAgainstTrack(text, 'pose', deltas); poses += row.poses; values += row.values; if (row.first) problems.push(`discarded inherit on ordinary track: ${row.first}`); }
+    } catch (e) {
+      if (!enabled || !(e instanceof RuntimeRefusal) || !e.missing.some(m => m.feature === 'inherit-timeline' && m.detail.includes('slider'))) problems.push(`inherit slider=${enabled}: ${String(e)}`);
+    }
+  }
+  return { problems, detail: `${views} slider views, 3 ordinary duplicate tracks and 2 inherit boundaries; ${poses} poses / ${values} bone cells against openTrack by Object.is; additive/absolute, zero/partial/one mix, nonadjacent targets, overlapping timelines, empty/late last entry, shared animation at opposite mapped times and loop wraps` };
+}
+
 export function runtimeStage3Cases(say: Say): void {
+  const duplicates = duplicateSliderCases();
+  say('RP29_SLIDER_DUPLICATE_BONE_TARGETS_COMPOSE_WHILE_TRACKS_KEEP_LAST', duplicates.problems, duplicates.detail);
   const normal: string[] = []; let poses = 0, values = 0;
   let seed = 1591;
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };

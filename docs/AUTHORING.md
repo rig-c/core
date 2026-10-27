@@ -12751,7 +12751,12 @@ property mapped as `to + (value - from) * scale`, clamped at zero or looped by
 its animation duration. A boneless slider uses its keyed `time`. The selected
 animation is applied at that value, never advanced as a track, and fires no
 events or physics reset keys. Mix zero does not re-pose bones; nonzero mix
-re-poses every keyed bone even before its first key. Absolute/additive bone and
+re-poses every keyed bone even before its first key. Its bone targets compose
+in authored order, including repeated names; each entry uses the same setup
+values and blends from the current pose. Ordinary tracks still read only the
+last target for each bone. An earlier unsupported inherit target is refused
+when a slider applies it, even if the track's last target would hide it.
+Absolute/additive bone and
 deform blends and slot switches follow the oracle, including direct scale and
 colour targets at mix one. Slider physics writes last one pass and affect only
 constraints later in update order. An unsupported timeline in a slider's

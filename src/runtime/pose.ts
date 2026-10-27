@@ -643,8 +643,8 @@ export class RuntimePose {
     this.sliderAt[k] = at;
     if (this.physicsPhase !== 'none') this.physicsTimelines(a.physics, at, alpha, r.additive, false);
     const L = this.locals, S = this.model.setup;
-    for (let q = 0; q < a.bones.length; q++) {
-      const tl = a.bones[q], i = keyAt(tl.curve, this.cursors, tl.cursor, at);
+    for (let q = 0; q < a.sliderBones.length; q++) {
+      const tl = a.sliderBones[q], i = keyAt(tl.curve, this.cursors, tl.cursor, at);
       if (i < 0) continue;
       const o = tl.bone * LOCALS;
       for (let f = 0; f < tl.fields.length; f++) {

@@ -346,6 +346,8 @@ export interface RuntimeAnimation {
   readonly name: string;
   readonly duration: number;
   readonly bones: readonly RuntimeBoneTimeline[];
+  /** Every authored target in order; sliders compose duplicates that tracks discard. */
+  readonly sliderBones: readonly RuntimeBoneTimeline[];
   readonly deforms: readonly RuntimeDeformTimeline[];
   readonly physics: readonly RuntimePhysicsTimeline[];
   readonly sliders: ReadonlyArray<RuntimeSliderTimeline | null>;
@@ -769,18 +771,32 @@ function compileAnimation(
 
   const lastBy = <T extends { name: string }>(targets: readonly T[]): Map<string, T> => new Map(targets.map((t) => [t.name, t]));
   const bones: RuntimeBoneTimeline[] = [];
-  for (const target of lastBy(tl.bones).values()) {
+  type BoneTarget = (typeof tl.bones)[number];
+  const byTarget = new Map<BoneTarget, RuntimeBoneTimeline[]>();
+  const compileBones = (target: BoneTarget, forSlider: boolean): RuntimeBoneTimeline[] => {
+    const cached = byTarget.get(target);
+    if (cached !== undefined) return cached;
+    const keyed: RuntimeBoneTimeline[] = [];
+    byTarget.set(target, keyed);
     const bone = boneIndex.get(target.name);
-    if (bone === undefined) continue;
+    if (bone === undefined) return keyed;
     for (const t of target.timelines) {
       if (t.kind === 'inherit') {
-        refusals.note('inherit-timeline', `bone "${target.name}" keys its inherit mode`, name);
+        if (!forSlider) refusals.note('inherit-timeline', `bone "${target.name}" keys its inherit mode`, name);
+        else for (const c of constraints) if (c.kind === 'slider' && c.setup.animation === name) {
+          refusals.note('inherit-timeline', `slider "${c.name}" applies animation "${name}" whose bone "${target.name}" keys its inherit mode`);
+        }
         continue;
       }
       const spec = BONE_KINDS[t.kind];
-      bones.push({ bone, curve: compileCurve(t.keys, spec.length), cursor: cursors++, fields: Int32Array.from(spec.map((s) => s[0])), multiply: Uint8Array.from(spec.map((s) => s[1])) });
+      keyed.push({ bone, curve: compileCurve(t.keys, spec.length), cursor: cursors++, fields: Int32Array.from(spec.map((s) => s[0])), multiply: Uint8Array.from(spec.map((s) => s[1])) });
     }
-  }
+    return keyed;
+  };
+  // Keep the track's last-target Map order and reuse those exact curves/cursors.
+  for (const target of lastBy(tl.bones).values()) bones.push(...compileBones(target, false));
+  const sliderBones = constraints.some(c => c.kind === 'slider' && c.setup.animation === name)
+    ? tl.bones.flatMap(target => compileBones(target, true)) : [];
   const slotTimelines: RuntimeSlotTimeline[] = [];
   const keyedSlots = [...lastBy(tl.slots).values()].flatMap((target) => {
     const si = slotIndex.get(target.name);
@@ -830,5 +846,5 @@ function compileAnimation(
     const arrays = keys.map(k => heldArray(g.vertices, k));
     return { identity: `${a.skin}/${a.slot}/${a.attachment}`, cursor: cursors++, curve: compileDeformCurve(keys), count: arrays[0].length, held: Float64Array.from(arrays.flat()) };
   });
-  return { name, duration: tl.duration, physics, sliders, deforms, bones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
+  return { name, duration: tl.duration, physics, sliders, deforms, bones, sliderBones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
 }

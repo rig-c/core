@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.75.0](https://github.com/rig-c/core/compare/v2.74.1...v2.75.0) (2026-10-27)
+
+
+### Features
+
+* **core:** physicsTranslate/physicsRotate take an optional scope of physics-constraint names ([#1612](https://github.com/rig-c/core/issues/1612)) ([007208e](https://github.com/rig-c/core/commit/007208ea0e2c94803af2b6836e658ba538d882b5))
+
 ## [2.74.1](https://github.com/rig-c/core/compare/v2.74.0...v2.74.1) (2026-10-27)
 
 

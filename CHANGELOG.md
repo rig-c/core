@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.76.0](https://github.com/rig-c/core/compare/v2.75.0...v2.76.0) (2026-10-27)
+
+
+### Features
+
+* **runtime:** stage 3 — physics constraints and sliders in the runtime poser, equal to the oracle at tolerance 0 ([#1613](https://github.com/rig-c/core/issues/1613)) ([b278a4a](https://github.com/rig-c/core/commit/b278a4a57ab0a3d19c1071b91595341b993821d0))
+
 ## [2.75.0](https://github.com/rig-c/core/compare/v2.74.1...v2.75.0) (2026-10-27)
 
 

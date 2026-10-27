@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.74.1](https://github.com/rig-c/core/compare/v2.74.0...v2.74.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **docs:** browser timing protocol with a real-browser preflight, and the measured cause tables ([#1610](https://github.com/rig-c/core/issues/1610)) ([14574bb](https://github.com/rig-c/core/commit/14574bbb3961218e5e081209a55bbf6fc2533b34)), closes [#1609](https://github.com/rig-c/core/issues/1609)
+
 ## [2.74.0](https://github.com/rig-c/core/compare/v2.73.0...v2.74.0) (2026-10-26)
 
 

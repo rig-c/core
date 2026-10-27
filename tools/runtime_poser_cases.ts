@@ -608,7 +608,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     if (plain.model === null) probes.push(`the base probe was refused: ${plain.message}`);
     // The model's own constructs: each refuses the whole model, naming itself.
     const modelProbes: Array<[RuntimeFeature, ProbeSpec]> = [
-      ['local-transform', { ...base, constraints: [{ kind: 'transform', name: 'x', bones: ['b'], source: 't', localSource: true, properties: { x: { to: { x: {} } } } }] }],
       ['additive-transform', { ...base, constraints: [{ kind: 'transform', name: 'x', bones: ['b'], source: 't', additive: true, properties: { x: { to: { x: {} } } } }] }],
       ['inactive-constrained-bone', { ...base, bones: base.bones.map((b) => (b.name === 'b' ? { ...b, skinRequired: true } : b)) }],
       ['noscale-world-target', { ...base, bones: base.bones.map((b) => (b.name === 'b' ? { ...b, inheritMode: 'noScale' } : b)), constraints: [{ kind: 'transform', name: 'x', bones: ['b'], source: 't', properties: { rotate: { to: { rotate: {} } } } }] }],

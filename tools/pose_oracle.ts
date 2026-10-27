@@ -1153,16 +1153,24 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
       const parent = runtime.parents[i];
       return [name, round(w[o + W_X]), round(w[o + W_Y]), round(w[o + W_A]), round(w[o + W_B]), round(w[o + W_C]), round(w[o + W_D]), runtime.active[i] === 1 ? 1 : 0, parent < 0 ? null : runtime.boneNames[parent]];
     });
-    const attachments: AttachmentRow[] = [];
     const slots = runtime.slots.map((slot, s): SlotRow => {
       const shown = pose.shown[s];
       const at = shown < 0 ? null : runtime.attachments[shown];
-      if (at !== null && at.draw !== DRAW_NONE) attachments.push([slot.name, at.name, at.draw === DRAW_REGION ? 'region' : 'mesh', [...pose.vertices.subarray(at.offset, at.offset + at.count)].map(round)]);
       const o = s * 4;
-      return [slot.name, at === null ? null : at.name, round(pose.light[o]), round(pose.light[o + 1]), round(pose.light[o + 2]), round(pose.light[o + 3]), slot.dark === null ? null : [round(slot.dark[0]), round(slot.dark[1]), round(slot.dark[2])], at === null ? null : at.path, slot.blend];
+      const d = s * 3;
+      return [slot.name, at === null ? null : at.name, round(pose.light[o]), round(pose.light[o + 1]), round(pose.light[o + 2]), round(pose.light[o + 3]), slot.dark === null ? null : [round(pose.dark[d]), round(pose.dark[d + 1]), round(pose.dark[d + 2])], at === null ? null : at.path, slot.blend];
     });
-    // No draw-order timeline and no clipping attachment is posed (both refused at load): the setup order, and nothing clipped.
-    return { bones, slots, drawOrder: runtime.slots.map((s) => s.name), attachments, clips: [], clipped: [], uvs: null };
+    const drawOrder: string[] = [];
+    const attachments: AttachmentRow[] = [];
+    for (let i = 0; i < pose.drawOrder.length; i++) {
+      const s = pose.drawOrder[i];
+      const slot = runtime.slots[s];
+      drawOrder.push(slot.name);
+      const shown = pose.shown[s];
+      const at = shown < 0 ? null : runtime.attachments[shown];
+      if (at !== null && at.draw !== DRAW_NONE) attachments.push([slot.name, at.name, at.draw === DRAW_REGION ? 'region' : 'mesh', [...pose.vertices.subarray(at.offset, at.offset + at.count)].map(round)]);
+    }
+    return { bones, slots, drawOrder, attachments, clips: [], clipped: [], uvs: null };
   };
   pose.setupPose(options.physics === 'step' ? 'reset' : 'none');
   const setup = read();

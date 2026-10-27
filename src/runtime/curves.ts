@@ -46,8 +46,13 @@ export interface RuntimeCurve {
   readonly polylines: Float64Array;
 }
 
-/** A timeline's keys compiled; `channels` is how many values each key carries (0 for an attachment timeline). */
-export function compileCurve(keys: readonly CoreKey[], channels: number): RuntimeCurve {
+/** A timeline's keys compiled; `channels` is how many values each key carries (0 for an attachment or draw-order timeline). */
+export function compileCurve(keys: readonly { readonly time: number }[], channels: 0): RuntimeCurve;
+export function compileCurve(keys: readonly CoreKey[], channels: number): RuntimeCurve;
+export function compileCurve(
+  keys: readonly { readonly time: number; readonly values?: readonly number[]; readonly stated?: CoreKey['stated']; readonly curve?: CoreKey['curve'] }[],
+  channels: number,
+): RuntimeCurve {
   const n = keys.length;
   const times = new Float64Array(n);
   const values = new Float64Array(n * channels);
@@ -56,20 +61,24 @@ export function compileCurve(keys: readonly CoreKey[], channels: number): Runtim
   for (let i = 0; i < n; i++) {
     const a = keys[i];
     times[i] = a.time;
-    for (let c = 0; c < channels; c++) values[i * channels + c] = a.values[c];
-    const curve = a.curve;
+    const av = a.values;
+    if (av !== undefined) for (let c = 0; c < channels; c++) values[i * channels + c] = av[c];
+    const curve = a.curve ?? 'stepped';
     kinds[i] = curve === 'linear' ? CURVE_LINEAR : curve === 'stepped' ? CURVE_STEPPED : CURVE_BEZIER;
     if (typeof curve === 'string' || i + 1 >= n) continue;
     const b = keys[i + 1];
+    const aStated = a.stated!;
+    const bStated = b.stated!;
+    const bValues = b.values!;
     for (let c = 0; c < channels; c++) {
       // The oracle's polyline (`channelAt`): the segment's float32 ends around the recurrence over the numbers as the document states them.
-      const inner = bezierPolyline(a.stated.time, a.stated.values[c], curve[c * 4], curve[c * 4 + 1], curve[c * 4 + 2], curve[c * 4 + 3], b.stated.time, b.stated.values[c]);
+      const inner = bezierPolyline(aStated.time, aStated.values[c], curve[c * 4], curve[c * 4 + 1], curve[c * 4 + 2], curve[c * 4 + 3], bStated.time, bStated.values[c]);
       const o = (i * channels + c) * POLYLINE;
       polylines[o] = a.time;
-      polylines[o + 1] = a.values[c];
+      polylines[o + 1] = av![c];
       for (let q = 0; q < inner.length; q++) polylines[o + 2 + q] = inner[q];
       polylines[o + POLYLINE - 2] = b.time;
-      polylines[o + POLYLINE - 1] = b.values[c];
+      polylines[o + POLYLINE - 1] = bValues[c];
     }
   }
   return { keys: n, channels, times, values, kinds, polylines };

@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readModel, underNoSkin } from '../src/core/index.ts';
 import { openTrack } from '../src/core/track.ts';
-import { compileRuntime, RUNTIME_FEATURES, RuntimeInputError, RuntimePose, RuntimeRefusal, L_ROTATION, WORLDS, type RuntimeFeature, type RuntimeModel, type RuntimePlant, type RuntimeAttachment } from '../src/runtime/index.ts';
+import { compileRuntime, DRAW_NONE, RUNTIME_FEATURES, RuntimeInputError, RuntimePose, RuntimeRefusal, L_ROTATION, WORLDS, type RuntimeFeature, type RuntimeModel, type RuntimePlant, type RuntimeAttachment } from '../src/runtime/index.ts';
 import { MODEL_DOCUMENT_FILE } from '../src/model.ts';
 import { galleryRecipe, runRecipe } from './emit_hashes.ts';
 import { runtimeLines, runtimeOfTexts, runtimeRow, type RuntimeRow } from './core_gate.ts';
@@ -373,8 +373,40 @@ export function stepAgainstTrack(text: string, animation: string, steps: readonl
         if (!same(mine[k], theirs[k])) return `${at}: bone "${b.name}" ${'abcdXY'[k]}: the track ${theirs[k]}, the runtime ${mine[k]}`;
       }
     }
-    for (const d of raw.drawn) {
-      const s = runtime.slots.findIndex((x) => x.name === d.slot);
+    for (let s = 0; s < raw.slots.length; s++) {
+      const row = raw.slots[s];
+      const o = s * 4;
+      for (let c = 0; c < 4; c++) {
+        values++;
+        const got = pose.light[o + c] === 0 ? 0 : pose.light[o + c];
+        if (!same(got, row[2 + c] as number)) return `${at}: slot "${row[0]}" light[${c}]: the track ${row[2 + c]}, the runtime ${got}`;
+      }
+      const dark = row[6];
+      if (dark !== null) {
+        const d = s * 3;
+        for (let c = 0; c < 3; c++) {
+          values++;
+          const got = pose.dark[d + c] === 0 ? 0 : pose.dark[d + c];
+          if (!same(got, dark[c] as number)) return `${at}: slot "${row[0]}" dark[${c}]: the track ${dark[c]}, the runtime ${got}`;
+        }
+      }
+    }
+    for (let i = 0; i < raw.drawOrder.length; i++) {
+      values++;
+      const got = runtime.slots[pose.drawOrder[i]]?.name;
+      if (got !== raw.drawOrder[i]) return `${at}: drawOrder[${i}]: the track "${raw.drawOrder[i]}", the runtime "${String(got)}"`;
+    }
+    const drawnOrder: number[] = [];
+    for (let i = 0; i < pose.drawOrder.length; i++) {
+      const s = pose.drawOrder[i];
+      const shown = pose.shown[s];
+      if (shown >= 0 && runtime.attachments[shown].draw !== DRAW_NONE) drawnOrder.push(s);
+    }
+    if (drawnOrder.length !== raw.drawn.length) return `${at}: drawn count ${raw.drawn.length} on the track, ${drawnOrder.length} in the runtime`;
+    for (let i = 0; i < raw.drawn.length; i++) {
+      const d = raw.drawn[i];
+      const s = drawnOrder[i];
+      if (runtime.slots[s].name !== d.slot) return `${at}: drawn[${i}] slot "${d.slot}" on the track, "${runtime.slots[s].name}" in the runtime`;
       const at2 = runtime.attachments[pose.shown[s]];
       if (at2 === undefined || at2.name !== d.attachment) return `${at}: slot "${d.slot}" draws "${d.attachment}" on the track and ${at2 === undefined ? 'nothing' : `"${at2.name}"`} in the runtime`;
       for (let k = 0; k < d.vertices.length; k++) {
@@ -596,8 +628,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     const animationProbes: Array<[RuntimeFeature, ProbeSpec, Obj]> = [
       ['inherit-timeline', base, { name: 'x', bones: [{ name: 'b', timelines: [{ name: 'inherit', keys: [{ time: 0, inherit: 'onlyTranslation' }] }] }] }],
       ['sequence-timeline', { ...base, attachments: { ...base.attachments, s: { p: seqRegion } } }, { name: 'x', attachments: [{ name: 'default', slots: [{ name: 's', attachments: [{ name: 'p', sequence: [{ time: 0, mode: 'loop', index: 0, delay: 0.1 }] }] }] }] }],
-      ['draw-order-timeline', base, { name: 'x', drawOrder: [{ time: 0.5, offsets: [{ slot: 's', offset: 1 }] }] }],
-      ['dark-colour-timeline', { ...base, slots: [{ name: 's', bone: 'b', setup: 'p', dark: '000000' }, base.slots?.[1] as Obj] }, { name: 'x', slots: [{ name: 's', timelines: [{ name: 'rgba2', keys: [{ time: 0, light: 'ffffffff', dark: '102030' }] }] }] }],
       ['clipping', { ...base, attachments: { ...base.attachments, s: { ...(base.attachments?.s ?? {}), c: { kind: 'clipping', vertexCount: 3, vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] } } } } }, { name: 'x', slots: [{ name: 's', timelines: [{ name: 'attachment', keys: [{ time: 0.5, name: 'c' }] }] }] }],
     ];
     for (const [feature, spec, animation] of animationProbes) {

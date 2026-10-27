@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 4): one
+ * The runtime poser's per-instance half (issue #1591, stage 5): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -9,14 +9,15 @@
  * The oracle's sample, as `src/core/animation.ts` poses it (`poseAnimations`):
  * every pose is posed from the setup pose — the bones' setup local values,
  * then the animation's bone timelines at `t` at full weight, then the world
- * transforms parents first, then each slot's colour, attachment and own deform
- * timelines, then the ik, transform, path, physics and slider constraints in the
- * document's order with their timelines' values at `t`, each followed by the
- * bones below what it moved posed again, then the sliders' slot and deform
- * timelines; then, when asked, every shown attachment's world vertices. Nothing
- * of one unstepped pose survives but key cursors. A stepped pose also keeps
- * its physics clock, offsets, velocities and lags; sliders select values
- * within this pose rather than advancing an independent track.
+ * transforms parents first, then the draw order and each slot's light and dark
+ * colour, attachment and own deform timelines, then the ik, transform, path,
+ * physics and slider constraints in the document's order with their timelines'
+ * values at `t`, each followed by the bones below what it moved posed again,
+ * then the sliders' draw-order, slot and deform timelines; then, when asked,
+ * every shown attachment's world vertices. Nothing of one unstepped pose
+ * survives but key cursors. A stepped pose also keeps its physics clock,
+ * offsets, velocities and lags; sliders select values within this pose rather
+ * than advancing an independent track.
  *
  * ## The arithmetic is the oracle's
  *
@@ -118,7 +119,7 @@ const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 export interface RuntimePoseOptions { readonly clock?: (dt: number) => number }
 export type RuntimePhysicsPhase = 'none' | 'reset' | 'update';
 
-/** One skeleton's pose, every value in place. Read `world`, `light`, `shown` and `vertices` after a pose. */
+/** One skeleton's pose, every value in place. Read `world`, `light`, `dark`, `shown`, `drawOrder` and `vertices` after a pose. */
 export class RuntimePose {
   readonly model: RuntimeModel;
   /** Every bone's local values, `LOCALS` per bone (`L_*`). */
@@ -127,8 +128,12 @@ export class RuntimePose {
   readonly world: Float64Array;
   /** Every slot's light colour, four per slot. */
   readonly light: Float64Array;
+  /** Every slot's dark colour, three per slot (`r2`, `g2`, `b2`), or zeros when `model.slots[s].dark === null`. */
+  readonly dark: Float64Array;
   /** What every slot shows: an index into `model.attachments`, or −1 for nothing. */
   readonly shown: Int32Array;
+  /** The slot indices in the live frame's draw order (`0 .. model.slots.length - 1`), updated in place. */
+  readonly drawOrder: Int32Array;
   /** Every attachment's world vertices at its `offset`, written by `computeVertices` for the attachments shown. */
   readonly vertices: Float64Array;
   /** Held/interpolated deform values, one pair per binding when weighted. */
@@ -199,7 +204,10 @@ export class RuntimePose {
     this.locals = new Float64Array(nb * LOCALS);
     this.world = new Float64Array(nb * WORLDS);
     this.light = new Float64Array(ns * 4);
+    this.dark = new Float64Array(ns * 3);
     this.shown = new Int32Array(ns);
+    this.drawOrder = new Int32Array(ns);
+    for (let s = 0; s < ns; s++) this.drawOrder[s] = s;
     this.vertices = new Float64Array(model.vertexCount);
     this.deform = new Float64Array(model.deformCount);
     this.deformed = new Uint8Array(model.attachments.length);
@@ -1179,6 +1187,13 @@ export class RuntimePose {
       const k = index, c = cs[k];
       if (c.kind !== 'slider' || !c.applied || this.sliderMix[k] === 0) return;
       const a = c.animation, t = this.sliderAt[k], alpha = this.sliderMix[k];
+      if (!this.model.omitDrawOrder && a.drawOrder !== null) {
+        const di = keyAt(a.drawOrder.curve, this.cursors, a.drawOrder.cursor, t);
+        if (di >= 0) {
+          const ns = this.drawOrder.length, orders = a.drawOrder.orders, base = di * ns;
+          for (let s = 0; s < ns; s++) this.drawOrder[s] = orders[base + s];
+        }
+      }
       for (let q = 0; q < a.slots.length; q++) {
         const tl = a.slots[q], i = keyAt(tl.curve, this.cursors, tl.cursor, t);
         if (i < 0) continue;
@@ -1189,9 +1204,17 @@ export class RuntimePose {
         }
         else {
           const channels = tl.channels!;
+          const slot = this.model.slots[tl.slot];
+          const o = tl.slot * 4, d = tl.slot * 3;
           for (let f = 0; f < channels.length; f++) {
-            const n = tl.slot * 4 + channels[f], v = channelValue(tl.curve, i, f, t);
-            this.light[n] = clamp01(alpha === 1 ? v : this.light[n] + (v - this.light[n]) * alpha);
+            const at = channels[f], v = channelValue(tl.curve, i, f, t);
+            if (at < 4) {
+              const n = o + at;
+              this.light[n] = clamp01(alpha === 1 ? v : this.light[n] + (v - this.light[n]) * alpha);
+            } else if (slot.dark !== null && !this.model.omitDarkColour) {
+              const n = d + (at - 4);
+              this.dark[n] = clamp01(alpha === 1 ? v : this.dark[n] + (v - this.dark[n]) * alpha);
+            }
           }
         }
       }
@@ -1715,16 +1738,32 @@ export class RuntimePose {
   private slotValues(anim: RuntimeAnimation | null, t: number): void {
     const slots = this.model.slots;
     const light = this.light;
+    const dark = this.dark;
     for (let s = 0; s < slots.length; s++) {
       const slot = slots[s];
       this.shown[s] = slot.setupAttachment;
+      this.drawOrder[s] = s;
       const o = s * 4;
       light[o] = slot.light[0];
       light[o + 1] = slot.light[1];
       light[o + 2] = slot.light[2];
       light[o + 3] = slot.light[3];
+      const setupDark = slot.dark;
+      if (setupDark !== null) {
+        const d = s * 3;
+        dark[d] = setupDark[0];
+        dark[d + 1] = setupDark[1];
+        dark[d + 2] = setupDark[2];
+      }
     }
     if (anim === null) return;
+    if (!this.model.omitDrawOrder && anim.drawOrder !== null) {
+      const di = keyAt(anim.drawOrder.curve, this.cursors, anim.drawOrder.cursor, t);
+      if (di >= 0) {
+        const ns = slots.length, orders = anim.drawOrder.orders, base = di * ns;
+        for (let s = 0; s < ns; s++) this.drawOrder[s] = orders[base + s];
+      }
+    }
     const timelines = anim.slots;
     for (let k = 0; k < timelines.length; k++) {
       const tl = timelines[k];
@@ -1735,11 +1774,18 @@ export class RuntimePose {
         continue;
       }
       const channels = tl.channels as Int32Array;
-      const setup = slots[tl.slot].light;
+      const slot = slots[tl.slot];
+      const setup = slot.light;
+      const setupDark = slot.dark;
       const o = tl.slot * 4;
+      const d = tl.slot * 3;
       for (let c = 0; c < channels.length; c++) {
         const at = channels[c];
-        light[o + at] = i < 0 ? setup[at] : clamp01(channelValue(tl.curve, i, c, t));
+        if (at < 4) {
+          light[o + at] = i < 0 ? setup[at] : clamp01(channelValue(tl.curve, i, c, t));
+        } else if (setupDark !== null && !this.model.omitDarkColour) {
+          dark[d + (at - 4)] = i < 0 ? setupDark[at - 4] : clamp01(channelValue(tl.curve, i, c, t));
+        }
       }
     }
   }

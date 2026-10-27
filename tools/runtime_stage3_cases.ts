@@ -161,11 +161,12 @@ export function runtimeStage3Cases(say: Say): void {
     const row = runtimeOfTexts(name, text, '', plant);
     if (row.verdict !== 'DIFF' || !row.why?.includes('bone')) defects.push(`${name}: ${row.verdict} ${row.why}`);
   }
-  const raw = JSON.parse(physicsProbe()); raw.constraints.push({ kind: 'slider', name: 's', animation: 'dark', declaredIn: 'rig' });
-  raw.slots = [{ name: 's', bone: 'a', setup: null, dark: '000000' }];
-  raw.animations.push({ name: 'dark', duration: 1, bones: [], slots: [{ name: 's', timelines: [{ name: 'rgba2', keys: [{ time: 0, light: 'ffffffff', dark: '102030' }] }] }], constraints: { ik: [], transform: [], path: [], physics: [], slider: [] }, attachments: [], drawOrder: [], events: [] });
-  try { compileRuntime(readModel(JSON.stringify(raw))); defects.push('slider smuggled dark colour'); } catch (e) { if (!(e instanceof RuntimeRefusal) || !e.missing.some(m => m.feature === 'dark-colour-timeline')) defects.push(String(e)); }
-  say('RP24_PHYSICS_AND_SLIDER_FAULTS_AND_TRANSITIVE_REFUSALS_ARE_NAMED', defects, 'omitted physics and slider-as-track caught by bone; slider-applied dark colour refuses whole model under existing feature name');
+  const raw = JSON.parse(physicsProbe()); raw.constraints.push({ kind: 'slider', name: 's', animation: 'seq', declaredIn: 'rig' });
+  raw.slots = [{ name: 's', bone: 'a', setup: 'p' }];
+  raw.skins = [{ name: 'default', bones: [], constraints: {}, attachments: { s: { p: { kind: 'region', width: 10, height: 10, sequence: { count: 2, start: 0, digits: 0, setup: 0, atlas: [{ width: 10, height: 10, originalWidth: 10, originalHeight: 10, offsetX: 0, offsetY: 0 }, { width: 8, height: 8, originalWidth: 8, originalHeight: 8, offsetX: 0, offsetY: 0 }] } } } } }];
+  raw.animations.push({ name: 'seq', duration: 1, bones: [], slots: [], constraints: { ik: [], transform: [], path: [], physics: [], slider: [] }, attachments: [{ name: 'default', slots: [{ name: 's', attachments: [{ name: 'p', sequence: [{ time: 0, mode: 'loop', index: 0, delay: 0.1 }] }] }] }], drawOrder: [], events: [] });
+  try { compileRuntime(readModel(JSON.stringify(raw))); defects.push('slider smuggled sequence'); } catch (e) { if (!(e instanceof RuntimeRefusal) || !e.missing.some(m => m.feature === 'sequence-timeline')) defects.push(String(e)); }
+  say('RP24_PHYSICS_AND_SLIDER_FAULTS_AND_TRANSITIVE_REFUSALS_ARE_NAMED', defects, 'omitted physics and slider-as-track caught by bone; slider-applied sequence timeline refuses whole model under existing feature name');
 
   const components: string[] = []; let stateCells = 0;
   const record = readModel(physicsProbe()).constraints[0].record as CorePhysicsRecord;
@@ -713,6 +714,390 @@ function runtimeStage4Cases(say: Say): void {
       rmSync(work, { recursive: true, force: true });
     }
     say('RP33_PATH_AND_SCOPED_PHYSICS_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
+  }
+  runtimeStage5Cases(say);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5 controls (issue #1591): draw-order timelines and dark-colour timelines
+// ---------------------------------------------------------------------------
+
+interface DrawOrderProbeOptions {
+  readonly sliderMix?: number;
+  readonly secondSliderMix?: number;
+  readonly sliderFirstKeyTime?: number;
+  readonly trackFirstKeyTime?: number;
+}
+
+function drawOrderProbe(opts: DrawOrderProbeOptions = {}): string {
+  const rect = { width: 16, height: 16, offsetX: 0, offsetY: 0, originalWidth: 16, originalHeight: 16 };
+  const sliderMix = opts.sliderMix;
+  const secondSliderMix = opts.secondSliderMix;
+  const sFirst = opts.sliderFirstKeyTime ?? 0.25;
+  const tFirst = opts.trackFirstKeyTime ?? 0.2;
+  const constraints: Array<Record<string, unknown>> = [];
+  if (sliderMix !== undefined) {
+    constraints.push({
+      kind: 'slider', name: 'sl1', animation: 'sliderOrder1', bone: 'dial1',
+      property: 'rotate', local: true, from: 0, to: 0, scale: 0.01, mix: sliderMix, loop: false,
+    });
+  }
+  if (secondSliderMix !== undefined) {
+    constraints.push({
+      kind: 'slider', name: 'sl2', animation: 'sliderOrder2', bone: 'dial2',
+      property: 'rotate', local: true, from: 0, to: 0, scale: 0.01, mix: secondSliderMix, loop: false,
+    });
+  }
+  return probeModel({
+    bones: [
+      { name: 'root' },
+      { name: 'a', parent: 'root', x: 10, y: 5, rotation: 15 },
+      { name: 'b', parent: 'a', x: 12, y: -4, rotation: -20 },
+      { name: 'dial1', parent: 'root', rotation: 35 },
+      { name: 'dial2', parent: 'root', rotation: 60 },
+      { name: 'hidden', parent: 'root', skinRequired: true },
+    ],
+    slots: [
+      { name: 's0', bone: 'a', setup: 'r0', color: 'ff8040ff', dark: '102030' },
+      { name: 's1', bone: 'b', setup: 'm1', color: '40ff80cc', dark: '304050' },
+      { name: 's2', bone: 'a', setup: 'w2', color: '8040ffff' },
+      { name: 's3', bone: 'root', setup: null },
+      { name: 's4', bone: 'b', setup: 'r4', dark: '051525' },
+    ],
+    attachments: {
+      s0: { r0: { kind: 'region', x: 2, y: -3, rotation: 10, width: 16, height: 16, atlas: rect }, r0b: { kind: 'region', x: -4, y: 5, width: 12, height: 12, atlas: rect } },
+      s1: { m1: { kind: 'mesh', uvs: [0, 0, 1, 0, 1, 1, 0, 1], triangles: [0, 1, 2, 2, 3, 0], vertices: { weighted: false, xy: [-6, -6, 6, -6, 6, 6, -6, 6] } } },
+      s2: {
+        w2: {
+          kind: 'mesh', uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2],
+          vertices: {
+            weighted: true,
+            bindings: [
+              [{ bone: 'a', x: -4, y: -2, weight: 0.6 }, { bone: 'b', x: 2, y: 3, weight: 0.4 }],
+              [{ bone: 'a', x: 5, y: -1, weight: 0.25 }, { bone: 'b', x: -3, y: 4, weight: 0.75 }],
+              [{ bone: 'b', x: 1, y: 6, weight: 1 }],
+            ],
+          },
+        },
+      },
+      s3: { r3: { kind: 'region', width: 8, height: 8, atlas: rect } },
+      s4: { r4: { kind: 'region', x: 1, y: 2, width: 10, height: 10, atlas: rect } },
+    },
+    constraints,
+    animations: [
+      {
+        name: 'shuffle',
+        duration: 1,
+        bones: [
+          { name: 'a', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.5, value: 45 }, { time: 1, value: -15 }] }] },
+          { name: 'dial1', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 10 }, { time: 0.5, value: 55 }, { time: 1, value: 90 }] }] },
+          { name: 'dial2', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 80 }, { time: 0.5, value: 15 }, { time: 1, value: 75 }] }] },
+        ],
+        slots: [
+          { name: 's0', timelines: [{ name: 'attachment', keys: [{ time: 0.15, name: 'r0b' }, { time: 0.65, name: 'r0' }] }] },
+          { name: 's3', timelines: [{ name: 'attachment', keys: [{ time: 0.3, name: 'r3' }, { time: 0.75, name: null }] }] },
+        ],
+        attachments: [
+          { name: 'default', slots: [{ name: 's1', attachments: [{ name: 'm1', deform: [{ time: 0, vertices: [1, -1, 2, 0, -1, 2, 0, -2] }, { time: 1, vertices: [-2, 1, 0, 3, 2, -1, 1, 1] }] }] }] },
+        ],
+        drawOrder: [
+          { time: tFirst, offsets: [{ slot: 's0', offset: 3 }, { slot: 's4', offset: -3 }] },
+          { time: 0.45, offsets: [{ slot: 's1', offset: 2 }, { slot: 's2', offset: -1 }] },
+          { time: 0.7, offsets: [] },
+          { time: 0.85, offsets: [{ slot: 's4', offset: -4 }, { slot: 's0', offset: 2 }] },
+        ],
+      },
+      {
+        name: 'sliderOrder1',
+        duration: 1,
+        drawOrder: [
+          { time: sFirst, offsets: [{ slot: 's2', offset: 2 }, { slot: 's4', offset: -2 }] },
+          { time: 0.6, offsets: [{ slot: 's0', offset: 4 }] },
+        ],
+      },
+      {
+        name: 'sliderOrder2',
+        duration: 1,
+        drawOrder: [
+          { time: 0.4, offsets: [{ slot: 's1', offset: 3 }, { slot: 's4', offset: -4 }] },
+          { time: 0.7, offsets: [] },
+        ],
+      },
+    ],
+  });
+}
+
+interface DarkColourProbeOptions {
+  readonly timelineKind: 'rgba2' | 'rgb2';
+  readonly curveKind: 'linear' | 'stepped' | 'bezier';
+  readonly firstKeyTime: number;
+  readonly sliderMix?: number;
+  readonly overlap?: boolean;
+}
+
+function darkColourProbe(opts: DarkColourProbeOptions): string {
+  const rect = { width: 14, height: 14, offsetX: 0, offsetY: 0, originalWidth: 14, originalHeight: 14 };
+  const channels = opts.timelineKind === 'rgba2' ? 7 : 6;
+  const curve0 = opts.curveKind === 'stepped'
+    ? 'stepped'
+    : opts.curveKind === 'bezier'
+      ? Array.from({ length: channels * 4 }, (_, i) => (i % 4 === 0 ? 0.25 : i % 4 === 2 ? 0.75 : i % 2 === 1 ? -0.35 : 1.35))
+      : undefined;
+  const keys = opts.timelineKind === 'rgba2'
+    ? [
+        { time: opts.firstKeyTime, light: '204080cc', dark: '103050', ...(curve0 !== undefined ? { curve: curve0 } : {}) },
+        { time: 0.65, light: 'e0a03066', dark: '90c0f0' },
+        { time: 0.95, light: '40c070ff', dark: 'f04020' },
+      ]
+    : [
+        { time: opts.firstKeyTime, light: '306090', dark: '153555', ...(curve0 !== undefined ? { curve: curve0 } : {}) },
+        { time: 0.65, light: 'd08040', dark: '85b5e5' },
+        { time: 0.95, light: '50b060', dark: 'e03010' },
+      ];
+  const slot0Timelines: Array<Record<string, unknown>> = [{ name: opts.timelineKind, keys }];
+  if (opts.overlap) {
+    slot0Timelines.push(
+      opts.timelineKind === 'rgb2'
+        ? { name: 'alpha', keys: [{ time: 0.1, value: 0.35 }, { time: 0.8, value: 0.9 }] }
+        : { name: 'rgb2', keys: [{ time: 0.5, light: 'ff2040', dark: '084888' }, { time: 0.9, light: '20ff80', dark: '884808' }] },
+    );
+  }
+  const constraints: Array<Record<string, unknown>> = opts.sliderMix === undefined
+    ? []
+    : [{
+        kind: 'slider', name: 'tintSlider', animation: 'sliderTint', bone: 'dial',
+        property: 'rotate', local: true, from: 0, to: 0, scale: 0.01, mix: opts.sliderMix, loop: false,
+      }];
+  return probeModel({
+    bones: [
+      { name: 'root' },
+      { name: 'a', parent: 'root', x: 8, y: -3, rotation: 12 },
+      { name: 'dial', parent: 'root', rotation: 45 },
+      { name: 'off', parent: 'root', skinRequired: true },
+    ],
+    slots: [
+      { name: 's0', bone: 'a', setup: 'r0', color: 'c08040d0', dark: '224466' },
+      { name: 's1', bone: 'a', setup: 'r1', color: '80c0ffaa', dark: '553311' },
+      { name: 's2', bone: 'root', setup: 'r2', color: 'ffffff80' },
+      { name: 'sOff', bone: 'off', setup: 'rOff', color: 'ff00ffFF', dark: '112233' },
+    ],
+    attachments: {
+      s0: { r0: { kind: 'region', width: 14, height: 14, atlas: rect } },
+      s1: { r1: { kind: 'region', width: 14, height: 14, atlas: rect } },
+      s2: { r2: { kind: 'region', width: 14, height: 14, atlas: rect } },
+      sOff: { rOff: { kind: 'region', width: 14, height: 14, atlas: rect } },
+    },
+    constraints,
+    animations: [
+      {
+        name: 'tint',
+        duration: 1,
+        bones: [
+          { name: 'a', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 1, value: 30 }] }] },
+          { name: 'dial', timelines: [{ name: 'rotate', keys: [{ time: 0, value: 10 }, { time: 0.5, value: 55 }, { time: 1, value: 95 }] }] },
+        ],
+        slots: [
+          { name: 's0', timelines: slot0Timelines },
+          { name: 's1', timelines: [{ name: opts.timelineKind === 'rgba2' ? 'rgb2' : 'rgba2', keys: opts.timelineKind === 'rgba2' ? [{ time: 0, light: '105090', dark: '604020' }, { time: 1, light: '905010', dark: '204060' }] : [{ time: 0, light: '105090aa', dark: '604020' }, { time: 1, light: '905010ff', dark: '204060' }] }] },
+          { name: 's2', timelines: [{ name: 'rgba', keys: [{ time: 0, color: '4080c0ff' }, { time: 1, color: 'c0804040' }] }] },
+          { name: 'sOff', timelines: [{ name: 'rgba2', keys: [{ time: 0, light: '00ff00ff', dark: 'ffffff' }] }] },
+        ],
+        drawOrder: [{ time: 0.35, offsets: [{ slot: 's0', offset: 2 }] }],
+      },
+      {
+        name: 'sliderTint',
+        duration: 1,
+        slots: [
+          {
+            name: 's0',
+            timelines: [
+              {
+                name: opts.timelineKind,
+                keys: opts.timelineKind === 'rgba2'
+                  ? [{ time: 0.25, light: 'ff102080', dark: '0585f5' }, { time: 0.85, light: '10ff40ff', dark: 'f58505' }]
+                  : [{ time: 0.25, light: 'ff1020', dark: '0585f5' }, { time: 0.85, light: '10ff40', dark: 'f58505' }],
+              },
+            ],
+          },
+          {
+            name: 's1',
+            timelines: [
+              { name: 'rgb2', keys: [{ time: 0.15, light: '8020f0', dark: '129abc' }, { time: 0.9, light: '20f080', dark: 'cba921' }] },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function runtimeStage5Cases(say: Say): void {
+  const drawFixtures: Array<[string, string]> = [];
+  for (const tFirst of [0, 0.2]) {
+    for (const sFirst of [0, 0.25]) {
+      for (const sliderMix of [undefined, 0, 0.5, 1, -0.3]) {
+        for (const secondSliderMix of [undefined, 0, 0.75]) {
+          if (sliderMix === undefined && secondSliderMix !== undefined) continue;
+          const label = `tFirst=${tFirst},sFirst=${sFirst},s1=${sliderMix ?? 'none'},s2=${secondSliderMix ?? 'none'}`;
+          drawFixtures.push([label, drawOrderProbe({ trackFirstKeyTime: tFirst, sliderFirstKeyTime: sFirst, sliderMix, secondSliderMix })]);
+        }
+      }
+    }
+  }
+
+  // --- RP34: draw-order timelines, slider draw-order, and looping wraps match the oracle at tolerance 0 ---
+  {
+    const problems: string[] = [];
+    let totalPoses = 0;
+    let totalValues = 0;
+    let wrapSteps = 0;
+    const loopDeltas = Array.from({ length: 120 }, (_, f) => 0.015 + ((f * 6151) % 73) / 1000);
+    for (const [label, text] of drawFixtures) {
+      const row = runtimeOfTexts(label, text, '');
+      totalPoses += row.poses;
+      totalValues += row.values;
+      if (row.verdict !== 'IDENTICAL' && problems.length < 5) problems.push(`${label}: ${row.verdict} — ${row.why}`);
+      const w = stepAgainstTrack(text, 'shuffle', loopDeltas);
+      totalPoses += w.poses;
+      totalValues += w.values;
+      wrapSteps += loopDeltas.length;
+      if (w.first !== null && problems.length < 5) problems.push(`${label} loop: ${w.first}`);
+    }
+    // Verify in-place mutation of pose.drawOrder and wrap restoration before a non-zero first key (time < 0.2 after wrap).
+    const wrapDoc = underNoSkin(readModel(drawOrderProbe({ trackFirstKeyTime: 0.2 })));
+    const wrapModel = compileRuntime(wrapDoc);
+    const wrapPose = new RuntimePose(wrapModel);
+    const refOrder = wrapPose.drawOrder;
+    wrapPose.setupPose();
+    if (wrapPose.drawOrder !== refOrder) problems.push('setupPose replaced pose.drawOrder typed array');
+    wrapPose.setAnimation('shuffle');
+    wrapPose.apply(0.3);
+    if (wrapPose.drawOrder !== refOrder || [...wrapPose.drawOrder].join(',') !== '1,4,2,0,3') {
+      problems.push(`at t=0.3 expected drawOrder 1,4,2,0,3, got ${[...wrapPose.drawOrder].join(',')}`);
+    }
+    // Step across duration=1.0 into t=0.05 (before first key 0.2): drawOrder must restore setup order 0,1,2,3,4 in place.
+    wrapPose.step(0.3);
+    wrapPose.step(0.75);
+    if (wrapPose.drawOrder !== refOrder || [...wrapPose.drawOrder].join(',') !== '0,1,2,3,4') {
+      problems.push(`after wrap to t=${wrapPose.time} (< 0.2) expected setup drawOrder 0,1,2,3,4, got ${[...wrapPose.drawOrder].join(',')}`);
+    }
+    wrapPose.step(0.25);
+    if (wrapPose.drawOrder !== refOrder || [...wrapPose.drawOrder].join(',') !== '1,4,2,0,3') {
+      problems.push(`after advancing past first key to t=${wrapPose.time} expected 1,4,2,0,3, got ${[...wrapPose.drawOrder].join(',')}`);
+    }
+    say(
+      'RP34_DRAW_ORDER_TIMELINES_SLIDER_DRAW_ORDER_AND_LOOP_WRAPS_MATCH_ORACLE_AT_ZERO',
+      problems,
+      `${drawFixtures.length} draw-order fixtures (${totalPoses} poses / ${totalValues} values at tolerance 0, sample grid + ${wrapSteps} looping steps across wraps): before-first-key setup restore, multiple positive/negative offsets, empty restore key, slider draw-order at setup and in animation (mix 0 / nonzero / two sliders), drawn attachments in draw order, and in-place pose.drawOrder buffer identity`,
+    );
+  }
+
+  const darkFixtures: Array<[string, string]> = [];
+  for (const timelineKind of ['rgba2', 'rgb2'] as const) {
+    for (const curveKind of ['linear', 'stepped', 'bezier'] as const) {
+      for (const firstKeyTime of [0, 0.25]) {
+        for (const sliderMix of [undefined, 0, 0.375, 1]) {
+          for (const overlap of [false, true]) {
+            const label = `${timelineKind}/${curveKind}/t0=${firstKeyTime}/s=${sliderMix ?? 'none'}/ov=${overlap}`;
+            darkFixtures.push([label, darkColourProbe({ timelineKind, curveKind, firstKeyTime, sliderMix, overlap })]);
+          }
+        }
+      }
+    }
+  }
+
+  // --- RP35: dark-colour timelines (rgba2, rgb2) and slider dark-colour match the oracle at tolerance 0 ---
+  {
+    const problems: string[] = [];
+    let totalPoses = 0;
+    let totalValues = 0;
+    const loopDeltas = Array.from({ length: 80 }, (_, f) => 0.018 + ((f * 4999) % 61) / 1000);
+    for (const [label, text] of darkFixtures) {
+      const row = runtimeOfTexts(label, text, '');
+      totalPoses += row.poses;
+      totalValues += row.values;
+      if (row.verdict !== 'IDENTICAL' && problems.length < 5) problems.push(`${label}: ${row.verdict} — ${row.why}`);
+      const w = stepAgainstTrack(text, 'tint', loopDeltas);
+      totalPoses += w.poses;
+      totalValues += w.values;
+      if (w.first !== null && problems.length < 5) problems.push(`${label} loop: ${w.first}`);
+    }
+    // Verify in-place pose.dark buffer identity and setup dark restoration across loop wrap before firstKeyTime=0.25.
+    const doc = underNoSkin(readModel(darkColourProbe({ timelineKind: 'rgba2', curveKind: 'linear', firstKeyTime: 0.25 })));
+    const pose = new RuntimePose(compileRuntime(doc));
+    const refDark = pose.dark;
+    pose.setupPose();
+    const setupDark0 = [pose.dark[0], pose.dark[1], pose.dark[2]];
+    pose.setAnimation('tint');
+    pose.step(0.5);
+    if (pose.dark !== refDark || pose.dark[0] === setupDark0[0]) problems.push('step(0.5) did not update pose.dark in place');
+    pose.step(0.6); // wraps to 0.1 (< 0.25), restoring setupDark0
+    if (pose.dark !== refDark || !Object.is(pose.dark[0], setupDark0[0]) || !Object.is(pose.dark[1], setupDark0[1]) || !Object.is(pose.dark[2], setupDark0[2])) {
+      problems.push(`after wrap to t=${pose.time} (< 0.25), pose.dark did not restore setup dark colour`);
+    }
+    say(
+      'RP35_DARK_COLOUR_RGBA2_AND_RGB2_TIMELINES_AND_SLIDERS_MATCH_ORACLE_AT_ZERO',
+      problems,
+      `${darkFixtures.length} dark-colour fixtures (${totalPoses} poses / ${totalValues} values at tolerance 0, sample grid + 80 looping steps each): rgba2 and rgb2, linear/stepped/overshooting-Bezier clamp01, before-first-key setup dark restore, overlapping slot timelines, inactive-bone slot gate, slider mix 0 / 0.375 / 1 exact, and in-place pose.dark buffer identity`,
+    );
+  }
+
+  // --- RP36: red-then-green controls for draw-order and dark-colour timelines (both counts reported) ---
+  {
+    const problems: string[] = [];
+    let drawRed = 0;
+    let drawGreen = 0;
+    for (const [label, text] of drawFixtures) {
+      const planted = runtimeOfTexts(`${label} (omitDrawOrder)`, text, '', { omitDrawOrder: true });
+      const clean = runtimeOfTexts(`${label} (clean)`, text, '');
+      if (planted.verdict === 'DIFF' && ((planted.why ?? '').includes('draw order') || (planted.why ?? '').includes('drawOrder') || (planted.why ?? '').includes('attachment'))) drawRed++;
+      else if (problems.length < 4) problems.push(`omitDrawOrder on ${label}: expected DIFF on drawOrder/attachments, got ${planted.verdict} — ${planted.why}`);
+      if (clean.verdict === 'IDENTICAL') drawGreen++;
+      else if (problems.length < 4) problems.push(`clean on ${label}: expected IDENTICAL, got ${clean.verdict} — ${clean.why}`);
+    }
+    let darkRed = 0;
+    let darkGreen = 0;
+    for (const [label, text] of darkFixtures) {
+      const planted = runtimeOfTexts(`${label} (omitDarkColour)`, text, '', { omitDarkColour: true });
+      const clean = runtimeOfTexts(`${label} (clean)`, text, '');
+      if (planted.verdict === 'DIFF' && (planted.why ?? '').includes('slot')) darkRed++;
+      else if (problems.length < 4) problems.push(`omitDarkColour on ${label}: expected DIFF on slot dark colour, got ${planted.verdict} — ${planted.why}`);
+      if (clean.verdict === 'IDENTICAL') darkGreen++;
+      else if (problems.length < 4) problems.push(`clean on ${label}: expected IDENTICAL, got ${clean.verdict} — ${clean.why}`);
+    }
+    say(
+      'RP36_DRAW_ORDER_AND_DARK_COLOUR_PLANTS_ARE_RED_WHEN_PLANTED_AND_GREEN_WHEN_UNPLANTED',
+      problems,
+      `omitDrawOrder plant: ${drawRed}/${drawFixtures.length} RED (DIFF on drawOrder/attachments) when planted, ${drawGreen}/${drawFixtures.length} GREEN (IDENTICAL, 0 RED) when unplanted; omitDarkColour plant: ${darkRed}/${darkFixtures.length} RED (DIFF on slot dark colour) when planted, ${darkGreen}/${darkFixtures.length} GREEN (IDENTICAL, 0 RED) when unplanted`,
+    );
+  }
+
+  // --- RP37: steady-state frame allocation on draw-order + dark-colour rigs is 0 B/frame ---
+  {
+    const problems: string[] = [];
+    const work = mkdtempSync(join(tmpdir(), 'runtime-stage5-'));
+    const root = resolve(import.meta.dir, '..');
+    const details: string[] = [];
+    try {
+      const drawFile = join(work, 'draw-order-slider.model.json');
+      writeFileSync(drawFile, drawOrderProbe({ trackFirstKeyTime: 0.2, sliderFirstKeyTime: 0.25, sliderMix: 0.5, secondSliderMix: 0.75 }));
+      const darkFile = join(work, 'dark-colour-slider.model.json');
+      writeFileSync(darkFile, darkColourProbe({ timelineKind: 'rgba2', curveKind: 'bezier', firstKeyTime: 0.25, sliderMix: 0.375, overlap: true }));
+      const targets: Array<[string, string, string]> = [
+        ['draw-order+slider+deform probe', drawFile, 'shuffle'],
+        ['dark-colour+slider+draw-order probe', darkFile, 'tint'],
+      ];
+      for (const [label, file, animation] of targets) {
+        const clean = allocationPerFrame(root, file, animation, 'none');
+        const planted = allocationPerFrame(root, file, animation, 'object');
+        details.push(`${label} "${animation}": ${clean.said}, plant ${planted.said}`);
+        if (clean.bytes !== 0) problems.push(`${label} clean: ${clean.said}`);
+        if (planted.bytes === null || planted.bytes < 16) problems.push(`${label} plant: ${planted.said}`);
+      }
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+    say('RP37_DRAW_ORDER_AND_DARK_COLOUR_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
   }
 }
 if (import.meta.main) {

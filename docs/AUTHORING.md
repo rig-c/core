@@ -12647,7 +12647,7 @@ verdict on those figures.
 | <a id="CE_COMPILE_ALPHA_CLIP_CONFLICT"></a>`CE_COMPILE_ALPHA_CLIP_CONFLICT` | Names authored fields or convex/inverse flags conflicting with generated inside-clipping geometry. Use one authored/generated form.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦: alphaClip conflicts with [⟧<br>⟦vertexCount⟧<br>⟦vertices⟧<br>⟦weights⟧<br>⟦boneIndexing⟧<br>⟦, ⟧<br>⟦], convex=⟧<br>⟦, inverse=⟧<br>⟦; required ordinary inside clipping with generated geometry only. Remove authored geometry/flags.⟧ |
 | <a id="CE_COMPILE_ALPHA_CLIP_DEFORM"></a>`CE_COMPILE_ALPHA_CLIP_DEFORM` | Names animation and source/clip key/frame counts that cannot share the existing projection contract. Give matching explicit supported transform keys in compatible actual frames, with constant world shares where needed, or author the corresponding clip geometry and motion; weighted binding does not copy source deform.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦ alphaClip from "⟧<br>⟦"⟧<br>⟦: animation "⟧<br>⟦" has ⟧<br>⟦ source and ⟧<br>⟦ clip keys; source frame=⟧<br>⟦no vertex geometry⟧<br>⟦clip frame=⟧<br>⟦, constant world influence shares=⟧<br>⟦Required matching explicit affine/depth-yaw/pitch transforms in compatible DeformGeometry frames, ⟧<br>⟦with constant shares for world-space transfer. Fix the named frame/keys or author corresponding clip motion.⟧ |
 
-## 15. Posing in place for a player — the runtime poser (stage 4)
+## 15. Posing in place for a player — the runtime poser (stage 5)
 
 rigc poses a model document twice over, on purpose (issue #1591). The **oracle**
 (`src/core/`) is the reference: each pose is a pure function of the document,
@@ -12673,8 +12673,8 @@ pose.setAnimation('walk');                                   // a refused animat
 pose.step(1 / 60);                                           // or pose.apply(t) at an animation time
 pose.computeVertices();
 // pose.world: 6 numbers per bone (a, b, c, d, worldX, worldY — W_A … W_Y), y up
-// pose.light: 4 per slot; pose.shown: per slot an index into model.attachments, or −1
-// pose.vertices: model.attachments[i].count numbers at model.attachments[i].offset
+// pose.light: 4 per slot; pose.dark: 3 per slot; pose.shown: per slot an index into model.attachments, or −1
+// pose.drawOrder: slot indices in the live frame's draw order; pose.vertices: model.attachments[i].count numbers at model.attachments[i].offset
 ```
 
 Each `model.attachments[i]` also carries readonly `skin` and `placeholder`: the
@@ -12682,11 +12682,11 @@ exact resolved table identity `(skin, model.slots[attachment.slot].name, placeho
 The display `name` may be shared by different placeholders; it is never a table
 key to guess the source from. These load-time strings do not change the pose path.
 
-| | what stage 4 poses |
+| | what stage 5 poses |
 | --- | --- |
 | bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |
-| timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, `rgba`, `rgb` and `alpha`; ik, transform and path timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
-| constraints | physics with its exact clock, reset and parameter timelines, and optional constraint-scoped external translate/rotate; value-mapped sliders with bone/slot/deform/physics composition; path constraints across all position, spacing and rotate modes on open or closed, constant-speed or arc-length, weighted or unweighted, deformed curves; one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
+| timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, light colour (`rgba`, `rgb`, `alpha`) and dark colour (`rgba2`, `rgb2`); `drawOrder`; ik, transform and path timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
+| constraints | physics with its exact clock, reset and parameter timelines, and optional constraint-scoped external translate/rotate; value-mapped sliders with bone/slot/draw-order/deform/physics composition; path constraints across all position, spacing and rotate modes on open or closed, constant-speed or arc-length, weighted or unweighted, deformed curves; one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
 | vertices | regions, meshes, weighted meshes and linked meshes, written into the pose's buffer |
 | deform | weighted and unweighted mesh and path timelines, linear/stepped/Bézier, per-pose key cursors and in-place buffers; linked meshes inherit their source's timelines only with `timelines: true` |
 | skins and events | named/no-skin views with their skin-required bones and constraints; event delivery in key order over `(last, time]`, tail then head across a wrap |
@@ -12761,15 +12761,15 @@ values and blends from the current pose. Ordinary tracks still read only the
 last target for each bone. An earlier unsupported inherit target is refused
 when a slider applies it, even if the track's last target would hide it.
 Absolute/additive bone and
-deform blends and slot switches follow the oracle, including direct scale and
-colour targets at mix one. Slider physics writes last one pass and affect only
+deform blends, draw-order keys and slot switches follow the oracle, including direct scale and
+light/dark colour targets at mix one. Slider physics writes last one pass and affect only
 constraints later in update order. An unsupported timeline in a slider's
 animation refuses the whole model under that timeline's existing feature name,
 so an unselected track cannot hide a construct the slider always applies.
 
 **Everything else is refused at load, by name.** `RuntimeRefusal.missing` lists
 every construct met, each `{ feature, detail, animation }`, and the message
-reads `not posed by the runtime poser (stage 4), N construct(s) missing:
+reads `not posed by the runtime poser (stage 5), N construct(s) missing:
 <feature>: <detail>; …`. A model-level feature refuses the whole model; an
 animation-level one refuses that animation alone (`model.refused`;
 `model.animation(name)` and `setAnimation(name)` throw its refusal) and every
@@ -12784,7 +12784,7 @@ refused: nothing is posed approximately.
 | `clipping`, `null-atlas-region` | the model when shown at setup, else the animation that keys it | a clipping attachment; a region whose atlas rectangle the model states as `null` |
 | `skin-conflict` | as above | a placeholder the skins fill differently |
 | `oracle-absent` | the model | a pose the oracle itself leaves out (`constraintsAbsentWhy`, `pathAnimationsWhy`, `steppedPreviousPassWhy`, `sliderDeformsWalkedPathWhy`) |
-| `inherit-timeline`, `sequence-timeline`, `draw-order-timeline`, `dark-colour-timeline` | the animation | a timeline of that kind (`dark-colour` is `rgba2` / `rgb2`) |
+| `inherit-timeline`, `sequence-timeline` | the animation | a timeline of that kind |
 
 A call it cannot answer throws `RuntimeInputError`, naming the call:
 `apply: no animation is set (setAnimation first)`, `animation "x" is not one of

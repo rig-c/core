@@ -182,8 +182,8 @@ export function populationProbe(rnd: () => number): string {
       if (targets.length === 0) continue;
       constraints.push({ kind: 'ik', name: `k${k}`, bones: [b], target: pick(targets), mix: pick([1, R(0, 1)]), compress: rnd() < 0.3, stretch: rnd() < 0.3, scaleY: pick(['none', 'uniform', 'volume']) });
     } else {
-      // A world-space target in a noScale mode is refused at load, so the population targets the other three.
-      const candidates = names.filter((n) => modeOf(n) !== 'noScale' && modeOf(n) !== 'noScaleOrReflection');
+      // Absolute world targets are covered in every inherit mode, including both no-scale modes.
+      const candidates = names;
       if (candidates.length === 0) continue;
       const b = pick(candidates);
       const sources = names.filter((n) => n !== b && !below(b, n));
@@ -610,7 +610,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     const modelProbes: Array<[RuntimeFeature, ProbeSpec]> = [
       ['additive-transform', { ...base, constraints: [{ kind: 'transform', name: 'x', bones: ['b'], source: 't', additive: true, properties: { x: { to: { x: {} } } } }] }],
       ['inactive-constrained-bone', { ...base, bones: base.bones.map((b) => (b.name === 'b' ? { ...b, skinRequired: true } : b)) }],
-      ['noscale-world-target', { ...base, bones: base.bones.map((b) => (b.name === 'b' ? { ...b, inheritMode: 'noScale' } : b)), constraints: [{ kind: 'transform', name: 'x', bones: ['b'], source: 't', properties: { rotate: { to: { rotate: {} } } } }] }],
       ['clipping', { ...base, attachments: { ...base.attachments, s: { p: { kind: 'clipping', vertexCount: 3, vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] } } } } }],
       ['null-atlas-region', { ...base, attachments: { ...base.attachments, s: { p: { kind: 'region', width: 10, height: 10, atlas: null } } } }],
       ['skin-conflict', { ...base, skins: [{ name: 'extra', bones: [], constraints: {}, attachments: { s: { p: { kind: 'region', name: 'other', width: 10, height: 10, atlas: rect(10, 10) } } } }] }],

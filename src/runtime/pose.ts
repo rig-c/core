@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 7): one
+ * The runtime poser's per-instance half (issue #1591, stage 8): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -1510,7 +1510,7 @@ export class RuntimePose {
     return true;
   }
 
-  /** Absolute transform, matching `solveTransform` in src/core/constraints.ts:
+  /** Absolute/additive transform, matching `solveTransform` in src/core/constraints.ts:
    * read the source per target/property, edit locals or the scratch world,
    * then repose the union in bone order (`repose` in that module). No read-back for a local target.
    */
@@ -1546,8 +1546,10 @@ export class RuntimePose {
           if (c.localTarget) {
             const at = bi * LOCALS + PROPERTY_LOCAL[property];
             const current = this.locals[at];
-            this.locals[at] = current + (v - current) * mix;
-          } else applyWorld(w, property, v, mix);
+            this.locals[at] = c.additive
+              ? property === P_SCALE_X || property === P_SCALE_Y ? current * (1 + (v - 1) * mix) : current + v * mix
+              : current + (v - current) * mix;
+          } else applyWorld(w, property, v, mix, c.additive);
         }
       }
       if (!applied) continue;
@@ -1904,11 +1906,11 @@ export class RuntimePose {
   }
 }
 
-/** A world-space, absolute transform of one property on a world transform (`applyWorld`). */
-function applyWorld(w: Float64Array, property: number, v: number, mix: number): void {
+/** A world-space absolute/additive property, in `applyWorld` order from src/core/constraints.ts. */
+function applyWorld(w: Float64Array, property: number, v: number, mix: number, additive: boolean): void {
   switch (property) {
     case P_ROTATE: {
-      let r = v * RAD - Math.atan2(w[W_C], w[W_A]);
+      let r = additive ? v * RAD : v * RAD - Math.atan2(w[W_C], w[W_A]);
       if (r > RUNTIME_PI) r -= TWO_PI;
       else if (r < -RUNTIME_PI) r += TWO_PI;
       r *= mix;
@@ -1923,10 +1925,10 @@ function applyWorld(w: Float64Array, property: number, v: number, mix: number): 
       return;
     }
     case P_X:
-      w[W_X] = w[W_X] + (v - w[W_X]) * mix;
+      w[W_X] = additive ? w[W_X] + v * mix : w[W_X] + (v - w[W_X]) * mix;
       return;
     case P_Y:
-      w[W_Y] = w[W_Y] + (v - w[W_Y]) * mix;
+      w[W_Y] = additive ? w[W_Y] + v * mix : w[W_Y] + (v - w[W_Y]) * mix;
       return;
     case P_SCALE_X:
     case P_SCALE_Y: {
@@ -1934,7 +1936,7 @@ function applyWorld(w: Float64Array, property: number, v: number, mix: number): 
       const q = property === P_SCALE_X ? W_C : W_D;
       const s = Math.sqrt(w[p] * w[p] + w[q] * w[q]);
       if (s === 0) return;
-      const k = 1 + ((v - s) * mix) / s;
+      const k = additive ? 1 + (v - 1) * mix : 1 + ((v - s) * mix) / s;
       w[p] *= k;
       w[q] *= k;
       return;
@@ -1942,8 +1944,9 @@ function applyWorld(w: Float64Array, property: number, v: number, mix: number): 
     default: {
       const yAngle = Math.atan2(w[W_D], w[W_B]);
       const xAngle = Math.atan2(w[W_C], w[W_A]);
-      let r = (v + 90) * RAD - (yAngle - xAngle);
-      r = r > RUNTIME_PI ? r - TWO_PI : r < -RUNTIME_PI ? r + TWO_PI : r;
+      // Keep the right-angle subtraction: simplifying it to v * RAD changes bits.
+      let r = (v + 90) * RAD - (additive ? 90 * RAD : yAngle - xAngle);
+      if (!additive) r = r > RUNTIME_PI ? r - TWO_PI : r < -RUNTIME_PI ? r + TWO_PI : r;
       const angle = yAngle + r * mix;
       const s = Math.sqrt(w[W_B] * w[W_B] + w[W_D] * w[W_D]);
       w[W_B] = Math.cos(angle) * s;

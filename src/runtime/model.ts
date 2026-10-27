@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 7): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 8): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -12,9 +12,8 @@
  * (`RuntimeMissing`), and:
  *
  * - **refuses the model** (`RuntimeRefusal`, every missing feature listed)
- *   when one is a property of the whole model — an additive transform constraint
- *   (`additive`), an ik, transform or path constraint over a bone the view leaves
- *   inactive, a clipping attachment or a region with no
+ *   when one is a property of the whole model — an ik, transform or path constraint
+ *   over a bone the view leaves inactive, a clipping attachment or a region with no
  *   atlas rectangle shown at setup, a placeholder the skins fill
  *   differently, or a block the oracle itself leaves out;
  * - **refuses an animation** (`RuntimeModel.refused`; `animation(name)`
@@ -23,7 +22,8 @@
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 7 admits
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 8 adds
+ * additive local/world transform constraints. Stage 7 admitted
  * world transform targets in both no-scale inherit modes, using the existing
  * localFromWorld read-back. Stage 6 added local-source and local-target transforms. Draw-order,
  * light/dark colour, mesh and path deforms, named/no-skin views, path constraints,
@@ -56,11 +56,10 @@ import type { CoreSliderRecord } from '../core/constraints_slider.ts';
 import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 7;
+export const RUNTIME_STAGE = 8;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
-  'additive-transform',
   'inactive-constrained-bone',
   'clipping',
   'null-atlas-region',
@@ -134,6 +133,8 @@ export interface RuntimePlant {
   readonly omitLocalTransform?: boolean;
   /** Omit world transforms with parented no-scale targets, to prove stage seven. */
   readonly omitNoScaleWorldTransform?: boolean;
+  /** Omit additive transforms at load, to prove stage eight. */
+  readonly omitAdditiveTransform?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -252,7 +253,7 @@ export interface RuntimeIk {
   readonly flags: number;
 }
 
-/** A world-space, absolute transform constraint as the plan runs it: each source property's offset and its targets'. */
+/** An absolute or additive transform constraint as the plan runs it: each source property's offset and its targets'. */
 export interface RuntimeTransform {
   readonly kind: 'transform';
   readonly name: string;
@@ -274,6 +275,7 @@ export interface RuntimeTransform {
   readonly clamp: boolean;
   readonly localSource: boolean;
   readonly localTarget: boolean;
+  readonly additive: boolean;
 }
 
 export interface RuntimePhysics {
@@ -591,9 +593,8 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     else if (r.kind === 'path') {
       constraints.push(compilePath(r, index, applied, bones, indexOf, slotIndexOf, pathPlan.get(index) ?? null));
     } else {
-      if (r.additive) refusals.note('additive-transform', `transform constraint "${r.name}" is additive`);
       const noScaleWorld = !r.localTarget && bones.some(b => parents[b] >= 0 && (modes[b] === MODE_NO_SCALE || modes[b] === MODE_NO_SCALE_OR_REFLECTION));
-      const t = compileTransform(r, index, applied && !(plant.omitLocalTransform && (r.localSource || r.localTarget)) && !(plant.omitNoScaleWorldTransform && noScaleWorld), bones, indexOf);
+      const t = compileTransform(r, index, applied && !(plant.omitLocalTransform && (r.localSource || r.localTarget)) && !(plant.omitNoScaleWorldTransform && noScaleWorld) && !(plant.omitAdditiveTransform && r.additive), bones, indexOf);
       constraints.push(t);
     }
   }
@@ -882,7 +883,7 @@ function compileTransform(r: CoreTransformRecord, index: number, applied: boolea
     toProperty: Int32Array.from(toProperty), toOffset: Float64Array.from(toOffset), toScale: Float64Array.from(toScale), toMax: Float64Array.from(toMax),
     offsets: Float64Array.from(TRANSFORM_PROPERTIES.map((p) => r.offsets[p])),
     mixes: Float64Array.from(TRANSFORM_PROPERTIES.map((p) => r.mixes[p])),
-    clamp: r.clamp, localSource: r.localSource, localTarget: r.localTarget,
+    clamp: r.clamp, localSource: r.localSource, localTarget: r.localTarget, additive: r.additive,
   };
 }
 

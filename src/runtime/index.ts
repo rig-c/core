@@ -21,11 +21,12 @@
  * corpus through both at the oracle's samples and compares full doubles at
  * tolerance 0 (*The runtime poser* there). The oracle is not changed for it.
  *
- * ## Stage 4: what it poses, and what it refuses
+ * ## Stage 5: what it poses, and what it refuses
  *
  * Bones and their five inherit modes; the rotate, translate, scale and shear
- * timelines; a slot's attachment and colour (`rgba`, `rgb`, `alpha`)
- * timelines; weighted/unweighted deform timelines; region, mesh, weighted mesh and linked mesh vertices; one- and
+ * timelines; a slot's attachment, light colour (`rgba`, `rgb`, `alpha`) and
+ * dark colour (`rgba2`, `rgb2`) timelines; draw-order timelines (including
+ * slider draw-order application); weighted/unweighted deform timelines; region, mesh, weighted mesh and linked mesh vertices; one- and
  * two-bone ik, world-space absolute transforms, path constraints, physics (with optional movement scope) and value-mapped sliders with their
  * timelines; skin-required bones and constraints under the view's skin. One
  * animation at full weight from the setup pose, at a time or stepped as a
@@ -43,7 +44,7 @@
  * const pose = new RuntimePose(model);
  * pose.setAnimation('walk');
  * pose.step(1 / 60);       // or pose.apply(t)
- * pose.computeVertices();  // pose.world, pose.light, pose.shown, pose.vertices
+ * pose.computeVertices();  // pose.world, pose.light, pose.dark, pose.shown, pose.drawOrder, pose.vertices
  * ```
  *
  * This module is the `rig-c/runtime` entry (`exports` in package.json), which

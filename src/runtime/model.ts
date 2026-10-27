@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 4): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 5): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -21,12 +21,11 @@
  *   differently, or a block the oracle itself leaves out;
  * - **refuses an animation** (`RuntimeModel.refused`; `animation(name)`
  *   throws the same `RuntimeRefusal`) when the construct is the animation's
- *   — an `inherit` timeline, a sequence timeline, a draw-order
- *   timeline, a dark-colour (`rgba2`, `rgb2`) timeline, or an
+ *   — an `inherit` timeline, a sequence timeline, or an
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 4 adds path constraints and scoped physics movement (`physicsTranslate`/`physicsRotate` with an optional constraint scope) on top of Stage 3's indexed physics and value-mapped sliders. Mesh and path deforms, named/no-skin views
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 5 adds draw-order timelines (including slider draw-order application) and dark-colour (`rgba2`, `rgb2`) timelines on top of Stage 4's path constraints and scoped physics movement. Mesh and path deforms, named/no-skin views
  * and immutable event deliveries remain covered. `ignore: ['events']` remains an explicit diagnostic opt-out; it is
  * never the default. A merged view with conflicting attachments still refuses
  * by name, as the oracle itself cannot resolve that view without file order.
@@ -55,7 +54,7 @@ import type { CoreSliderRecord } from '../core/constraints_slider.ts';
 import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 4;
+export const RUNTIME_STAGE = 5;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
@@ -69,8 +68,6 @@ export const RUNTIME_FEATURES = [
   'oracle-absent',
   'inherit-timeline',
   'sequence-timeline',
-  'draw-order-timeline',
-  'dark-colour-timeline',
 ] as const;
 export type RuntimeFeature = (typeof RUNTIME_FEATURES)[number];
 
@@ -131,6 +128,8 @@ export interface RuntimePlant {
   readonly deformAfterWeights?: boolean;
   readonly omitPath?: boolean;
   readonly ignorePhysicsScope?: boolean;
+  readonly omitDrawOrder?: boolean;
+  readonly omitDarkColour?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -354,7 +353,7 @@ export interface RuntimeBoneTimeline {
   readonly multiply: Uint8Array;
 }
 
-/** A slot timeline: an attachment timeline (each key's attachment index, −1 nothing) or a colour timeline (each channel's index into the light colour). */
+/** A slot timeline: an attachment timeline (each key's attachment index, −1 nothing) or a colour timeline (each channel's index into the light or dark colour). */
 export interface RuntimeSlotTimeline {
   readonly slot: number;
   readonly curve: RuntimeCurve;
@@ -391,6 +390,13 @@ export interface RuntimeDeformTimeline {
   readonly count: number;
 }
 
+/** An animation's draw-order timeline: each key's slot-index permutation of `slots.length` (`orderOf` in `src/core/draw_order.ts`), expanded once at load. */
+export interface RuntimeDrawOrderTimeline {
+  readonly curve: RuntimeCurve;
+  readonly cursor: number;
+  readonly orders: Int32Array;
+}
+
 /** One covered animation, compiled. */
 export interface RuntimeAnimation {
   readonly name: string;
@@ -403,6 +409,7 @@ export interface RuntimeAnimation {
   readonly sliders: ReadonlyArray<RuntimeSliderTimeline | null>;
   readonly paths: ReadonlyArray<RuntimePathTimeline | null>;
   readonly slots: readonly RuntimeSlotTimeline[];
+  readonly drawOrder: RuntimeDrawOrderTimeline | null;
   /** Per constraint of the plan, its timeline in this animation or `null`. */
   readonly constraints: ReadonlyArray<RuntimeConstraintTimeline | null>;
   /** How many key cursors a pose keeps for it. */
@@ -421,6 +428,8 @@ export interface RuntimeModel {
   readonly sliderAsTrack: boolean;
   readonly omitPath: boolean;
   readonly ignorePhysicsScope: boolean;
+  readonly omitDrawOrder: boolean;
+  readonly omitDarkColour: boolean;
   readonly hasPath: boolean;
   readonly maxPathSpaces: number;
   readonly maxPathVertices: number;
@@ -472,8 +481,8 @@ const BONE_KINDS: Record<string, ReadonlyArray<readonly [number, 0 | 1]>> = {
   sheary: [[L_SHEAR_Y, 0]],
 };
 
-/** The light colour's channels each colour timeline sets, in its curve's channel order. */
-const COLOUR_CHANNELS: Record<string, readonly number[]> = { rgba: [0, 1, 2, 3], rgb: [0, 1, 2], alpha: [3] };
+/** The light (`0 .. 3`) and dark (`4 .. 6`) colour channels each colour timeline sets, in its curve's channel order (`COLOUR_CHANNELS` in `src/core/animation.ts` and `src/core/constraints_slider.ts`). */
+const COLOUR_CHANNELS: Record<string, readonly number[]> = { rgba: [0, 1, 2, 3], rgb: [0, 1, 2], alpha: [3], rgba2: [0, 1, 2, 3, 4, 5, 6], rgb2: [0, 1, 2, 4, 5, 6] };
 
 /** Where refusals are gathered while a model compiles. */
 class Refusals {
@@ -721,6 +730,8 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     deformAfterWeights: plant.deformAfterWeights === true,
     omitPath: plant.omitPath === true,
     ignorePhysicsScope: plant.ignorePhysicsScope === true,
+    omitDrawOrder: plant.omitDrawOrder === true,
+    omitDarkColour: plant.omitDarkColour === true,
     hasPath,
     maxPathSpaces,
     maxPathVertices,
@@ -899,7 +910,28 @@ function compileAnimation(
   const sequence = tl.attachments.filter((a) => a.sequence !== null);
 
   if (sequence.length > 0) refusals.note('sequence-timeline', `${sequence.length} sequence timeline(s): ${sequence.slice(0, 3).map((a) => `${a.skin}/${a.slot}/${a.attachment}`).join(', ')}${sequence.length > 3 ? ', …' : ''}`, name);
-  if (tl.drawOrder.length > 0) refusals.note('draw-order-timeline', `${tl.drawOrder.length} draw-order key(s)`, name);
+
+  let drawOrder: RuntimeDrawOrderTimeline | null = null;
+  if (tl.drawOrder.length > 0) {
+    const ns = slots.length;
+    const orders = new Int32Array(tl.drawOrder.length * ns).fill(-1);
+    const moved = new Uint8Array(ns);
+    for (let i = 0; i < tl.drawOrder.length; i++) {
+      const base = i * ns;
+      moved.fill(0);
+      for (const m of tl.drawOrder[i].moves) {
+        orders[base + m.slot + m.offset] = m.slot;
+        moved[m.slot] = 1;
+      }
+      for (let s = 0, d = 0; s < ns; s++) {
+        if (moved[s] !== 0) continue;
+        while (orders[base + d] !== -1) d++;
+        orders[base + d] = s;
+        d++;
+      }
+    }
+    drawOrder = { curve: compileCurve(tl.drawOrder, 0), cursor: cursors++, orders };
+  }
 
   const lastBy = <T extends { name: string }>(targets: readonly T[]): Map<string, T> => new Map(targets.map((t) => [t.name, t]));
   const bones: RuntimeBoneTimeline[] = [];
@@ -941,8 +973,6 @@ function compileAnimation(
       if (t.kind === 'attachment') {
         const ids = Int32Array.from(t.keys.map((k) => resolve(si, k.name ?? null)));
         slotTimelines.push({ slot: si, curve: compileCurve(t.keys, 0), cursor: cursors++, attachments: ids, channels: null });
-      } else if (t.kind === 'rgba2' || t.kind === 'rgb2') {
-        refusals.note('dark-colour-timeline', `slot "${target.name}" keys an ${t.kind} timeline`, name);
       } else {
         const channels = COLOUR_CHANNELS[t.kind];
         slotTimelines.push({ slot: si, curve: compileCurve(t.keys, channels.length), cursor: cursors++, attachments: null, channels: Int32Array.from(channels) });
@@ -991,5 +1021,5 @@ function compileAnimation(
     const arrays = keys.map(k => heldArray(g.vertices, k));
     return { identity: `${a.skin}/${a.slot}/${a.attachment}`, cursor: cursors++, curve: compileDeformCurve(keys), count: arrays[0].length, held: Float64Array.from(arrays.flat()) };
   });
-  return { name, duration: tl.duration, physics, sliders, paths, deforms, bones, sliderBones, slots: slotTimelines, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
+  return { name, duration: tl.duration, physics, sliders, paths, deforms, bones, sliderBones, slots: slotTimelines, drawOrder, constraints: constraintTimelines, cursors, events: tl.events.length, eventKeys: Object.freeze(ignoreEvents ? [] : tl.events.map(key => Object.freeze({ name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, volume: key.volume ?? 0, balance: key.balance ?? 0 }))) };
 }

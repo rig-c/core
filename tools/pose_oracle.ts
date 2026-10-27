@@ -352,9 +352,8 @@
  * holds to the core's document at tolerance 0 (*The runtime poser* there). It
  * is a function, not a `dump` flag: what it is compared with is the core in
  * the same process. `dumper` is `"rigc-runtime (stage N)"`, `source` and
- * `options` as the core's; the rosters, `pathAttachments` included, are the
- * document's own, and `physics` and `paths` are empty because the runtime
- * refuses both constraint kinds at load. The view is the core's
+ * `options` as the core's; the rosters, `physics`, `paths` and
+ * `pathAttachments` included, are the document's own. The view is the core's
  * (`viewOf`); the setup pose and every sample are posed by ONE runtime pose,
  * every animation in turn, so a value one pose left behind would be a
  * difference in the next. `setup.drawOrder` and every sample's is the slot
@@ -366,7 +365,7 @@
  * refuses throws its `RuntimeRefusal`, every missing construct named; an
  * animation it refuses is left out of `animations` and listed beside the
  * document, so a comparison takes the core's document down to the same
- * animations. `--physics step` is refused by name.
+ * animations. `--physics none` and `--physics step` are both posed.
  *
  * ## `--raw` — full doubles (issue #966)
  *
@@ -1199,9 +1198,8 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
       slots: doc.slots.map((s): [string, string] => [s.name, s.bone]),
       skins: doc.skins.map((s) => s.name),
       constraints: doc.constraints.map((c): [string, string] => [c.kind, c.name]),
-      // Physics setup parameters are stated even under none; paths remain refused.
       physics: physicsRows(doc.constraints.flatMap(c => c.record?.kind === 'physics' ? [c.record as CorePhysicsRecord] : []), round) as unknown as OraclePhysicsRow[],
-      paths: [],
+      paths: pathRows(doc.constraints.flatMap(c => c.record?.kind === 'path' ? [c.record as CorePathRecord] : []), round),
       pathAttachments: pathAttachmentRows(doc.skins, round),
       setup,
       animations,

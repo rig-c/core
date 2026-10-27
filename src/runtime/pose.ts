@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 3): one
+ * The runtime poser's per-instance half (issue #1591, stage 4): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -9,10 +9,11 @@
  * The oracle's sample, as `src/core/animation.ts` poses it (`poseAnimations`):
  * every pose is posed from the setup pose — the bones' setup local values,
  * then the animation's bone timelines at `t` at full weight, then the world
- * transforms parents first, then the ik and transform constraints in the
+ * transforms parents first, then each slot's colour, attachment and own deform
+ * timelines, then the ik, transform, path, physics and slider constraints in the
  * document's order with their timelines' values at `t`, each followed by the
- * bones below what it moved posed again; then each slot's colour and what it
- * shows; then, when asked, every shown attachment's world vertices. Nothing
+ * bones below what it moved posed again, then the sliders' slot and deform
+ * timelines; then, when asked, every shown attachment's world vertices. Nothing
  * of one unstepped pose survives but key cursors. A stepped pose also keeps
  * its physics clock, offsets, velocities and lags; sliders select values
  * within this pose rather than advancing an independent track.
@@ -22,9 +23,9 @@
  * Every formula below is the one the named function of `src/core/` computes,
  * in its order of operations, on the same doubles: a bone's frame and its
  * five inherit modes (`world.ts`), the timelines (`animation.ts`), the one-
- * and two-bone ik, the world-space transform, the read-back of a moved bone's
- * local values and the update order (`constraints.ts`), a region's corners
- * and a mesh's vertices (`vertices.ts`). Each of those orders was fixed
+ * and two-bone ik, the world-space transform, the path constraint (`constraints_path.ts`),
+ * the read-back of a moved bone's local values and the update order (`constraints.ts`),
+ * a region's corners and a mesh's vertices (`vertices.ts`). Each of those orders was fixed
  * there by measurement against spine-core 4.3.13 to the last bit; the runtime
  * does not re-measure them, it is held to the oracle at tolerance 0
  * (`tools/core_gate.ts`, *The runtime poser*), so an order changed here is a
@@ -32,7 +33,7 @@
  *
  * ⚠️ The exactness hazards, each kept as the oracle has it: the setup value
  * plus 0 before a timeline's first key (which turns a `-0` setup into `0`);
- * a keyed ik or transform value reaching the pose through the setup blend
+ * a keyed ik, transform or path value reaching the pose through the setup blend
  * `setup + (value − setup)·1`; `Math.PI` for a folded uniform two-bone ik and
  * the runtime's 3.1415927 everywhere else; the `(−180, 180]` wrap; a mix of
  * exactly 0 touching nothing; an inactive bone posed as zeros by the
@@ -62,6 +63,13 @@ import {
   MODE_NO_SCALE_OR_REFLECTION,
   MODE_NORMAL,
   MODE_ONLY_TRANSLATION,
+  PATH_POSITION_PERCENT,
+  PATH_ROTATE_CHAIN,
+  PATH_ROTATE_CHAIN_SCALE,
+  PATH_ROTATE_TANGENT,
+  PATH_SPACING_LENGTH,
+  PATH_SPACING_PERCENT,
+  PATH_SPACING_PROPORTIONAL,
   RAD,
   RuntimeInputError,
   SCALE_Y_UNIFORM,
@@ -74,9 +82,11 @@ import {
   W_Y,
   WORLDS,
   type RuntimeAnimation,
+  type RuntimeConstraint,
   type RuntimeEvent,
   type RuntimeIk,
   type RuntimeModel,
+  type RuntimePath,
   type RuntimeTransform,
   type RuntimeSlider,
   type RuntimePhysicsTimeline,
@@ -84,6 +94,7 @@ import {
 
 const DEG = RUNTIME_DEG;
 const TWO_PI = 2 * RUNTIME_PI;
+const PATH_EPSILON = 0.00001;
 // The transform properties, by `TRANSFORM_PROPERTIES` index (src/core/constraints.ts).
 const P_ROTATE = 0;
 const P_X = 1;
@@ -134,11 +145,20 @@ export class RuntimePose {
 
   private current: RuntimeAnimation | null = null;
   private readonly cursors: Int32Array;
-  // The constraints' values as posed: an ik's mix, softness and flags, a transform's six mixes.
+  // The constraints' values as posed: an ik's mix, softness and flags, a transform's six mixes, a path's position, spacing and three mixes.
   private readonly ikMix: Float64Array;
   private readonly ikSoftness: Float64Array;
   private readonly ikFlags: Uint8Array;
   private readonly mixes: Float64Array;
+  private readonly pathValues: Float64Array;
+  private readonly pathSlotSign: Int8Array;
+  private readonly pathSpaces: Float64Array;
+  private readonly pathLengths: Float64Array;
+  private readonly pathPositions: Float64Array;
+  private readonly pathWorldPts: Float64Array;
+  private readonly pathChain: Float64Array;
+  private readonly pathCurveEnds: Float64Array;
+  private readonly pathSegmentEnds = new Float64Array(10);
   // The update order's scratch: the bones a constraint changed and moved in world space, in order (repeats kept, as the oracle keeps them), and per-bone marks.
   private readonly changed: Int32Array;
   private readonly inWorld: Int32Array;
@@ -156,6 +176,7 @@ export class RuntimePose {
   private readonly hasPhysics: boolean;
   private readonly physicsStates: PhysicsState[];
   private readonly physicsRecords: Array<CorePhysicsRecord | null>;
+  private readonly physicsScope: Uint8Array;
   private readonly environment = new Float64Array([1, 0, 0, 1]);
   private readonly sliderTime: Float64Array;
   private readonly sliderMix: Float64Array;
@@ -174,6 +195,7 @@ export class RuntimePose {
     const nb = model.boneNames.length;
     const ns = model.slots.length;
     const nc = model.constraints.length;
+    this.physicsScope = new Uint8Array(nc);
     this.locals = new Float64Array(nb * LOCALS);
     this.world = new Float64Array(nb * WORLDS);
     this.light = new Float64Array(ns * 4);
@@ -186,6 +208,16 @@ export class RuntimePose {
     this.ikSoftness = new Float64Array(nc);
     this.ikFlags = new Uint8Array(nc);
     this.mixes = new Float64Array(nc * 6);
+    this.pathValues = new Float64Array(nc * 5);
+    this.pathSlotSign = new Int8Array(nc);
+    const ms = model.maxPathSpaces;
+    const mv = model.maxPathVertices;
+    this.pathSpaces = new Float64Array(ms);
+    this.pathLengths = new Float64Array(ms);
+    this.pathPositions = new Float64Array(ms > 0 ? ms * 3 + 2 : 0);
+    this.pathWorldPts = new Float64Array(mv);
+    this.pathChain = new Float64Array(mv > 0 ? mv + 4 : 0);
+    this.pathCurveEnds = new Float64Array(mv > 0 ? Math.ceil(mv / 6) + 1 : 0);
     // Sized by the longest target list (`RuntimeModel.scratch`): a transform may name one bone several times, and every entry is applied and reposed.
     this.changed = new Int32Array(model.scratch);
     this.inWorld = new Int32Array(model.scratch);
@@ -233,9 +265,11 @@ export class RuntimePose {
     this.physicsValues(null, 0, false);
     this.locals.set(this.model.setup);
     this.hierarchy();
+    this.slotValues(null, 0);
+    this.deformValues(null, 0);
     this.constraintValues(null, 0);
     this.solveConstraints();
-    this.attachmentValues(null, 0);
+    this.sliderAttachments();
   }
 
   /** The animation posed at its time `t`, from the setup pose (the header). */
@@ -255,9 +289,11 @@ export class RuntimePose {
     this.time = t;
     this.boneTimelines(anim, t);
     this.hierarchy();
+    this.slotValues(anim, t);
+    this.deformValues(anim, t);
     this.constraintValues(anim, t);
     this.solveConstraints();
-    this.attachmentValues(anim, t);
+    this.sliderAttachments();
   }
 
   /** One step of a looping track: the track time moved by `dt`, the animation posed at it wrapped by the duration (`loopedTime` in src/core/raw.ts). */
@@ -496,6 +532,37 @@ export class RuntimePose {
         }
         this.sliderTime[k] = time;
         this.sliderMix[k] = mix;
+      } else if (c.kind === 'path') {
+        const keyed = anim === null ? null : anim.paths[k];
+        let position = c.position;
+        let spacing = c.spacing;
+        let mixRotate = c.mixRotate;
+        let mixX = c.mixX;
+        let mixY = c.mixY;
+        if (keyed !== null) {
+          if (keyed.position !== null) {
+            const q = keyAt(keyed.position, this.cursors, keyed.positionCursor, t);
+            if (q >= 0) position = c.position + (channelValue(keyed.position, q, 0, t) - c.position) * 1;
+          }
+          if (keyed.spacing !== null) {
+            const q = keyAt(keyed.spacing, this.cursors, keyed.spacingCursor, t);
+            if (q >= 0) spacing = c.spacing + (channelValue(keyed.spacing, q, 0, t) - c.spacing) * 1;
+          }
+          if (keyed.mix !== null) {
+            const q = keyAt(keyed.mix, this.cursors, keyed.mixCursor, t);
+            if (q >= 0) {
+              mixRotate = c.mixRotate + (channelValue(keyed.mix, q, 0, t) - c.mixRotate) * 1;
+              mixX = c.mixX + (channelValue(keyed.mix, q, 1, t) - c.mixX) * 1;
+              mixY = c.mixY + (channelValue(keyed.mix, q, 2, t) - c.mixY) * 1;
+            }
+          }
+        }
+        const o = k * 5;
+        this.pathValues[o] = position;
+        this.pathValues[o + 1] = spacing;
+        this.pathValues[o + 2] = mixRotate;
+        this.pathValues[o + 3] = mixX;
+        this.pathValues[o + 4] = mixY;
       }
     }
   }
@@ -503,12 +570,15 @@ export class RuntimePose {
   /** Every applied constraint in the document's order, each followed by the update order's repose (`applyConstraints`). */
   private solveConstraints(): void {
     const cs = this.model.constraints;
+    const hasPath = this.model.hasPath;
     for (let k = 0; k < cs.length; k++) {
+      if (hasPath) this.snapSlotBones(k, false);
       const c = cs[k];
       if (!c.applied) continue;
       if (c.kind === 'ik') this.solveIk(c, k);
       else if (c.kind === 'transform') this.solveTransform(c, k);
       else if (c.kind === 'slider') this.solveSlider(c, k);
+      else if (c.kind === 'path') this.solvePath(c, k);
       else if (this.physicsPhase !== 'none' && !this.model.omitPhysics) {
         const b = c.bones[0];
         if (stepRuntimePhysics(this.physicsRecords[k]!, this.physicsStates[k], this.world, b * WORLDS, this.model.lengths[b], this.physicsTime, this.physicsPhase === 'reset', this.environment)) {
@@ -516,6 +586,18 @@ export class RuntimePose {
           this.repose(1, 1);
         }
       }
+      if (hasPath) this.snapSlotBones(k, true);
+    }
+  }
+
+  private snapSlotBones(at: number, after: boolean): void {
+    const cs = this.model.constraints;
+    const W = this.world;
+    for (let k = 0; k < cs.length; k++) {
+      const c = cs[k];
+      if (c.kind !== 'path' || c.slotEventAt !== at || c.slotEventAfter !== after || (k === at && !after)) continue;
+      const sb = c.slotBone * WORLDS;
+      this.pathSlotSign[k] = W[sb + W_A] * W[sb + W_D] - W[sb + W_B] * W[sb + W_C] > 0 ? 1 : -1;
     }
   }
 
@@ -533,19 +615,54 @@ export class RuntimePose {
     this.physicsReady = true;
   }
 
+  private checkPhysicsScope(scope: readonly string[] | undefined): Uint8Array | null {
+    if (scope === undefined) return null;
+    if (!Array.isArray(scope)) throw new RuntimeInputError(`physics movement scope is ${String(scope)}, not an array of physics constraint names`);
+    const selected = this.physicsScope;
+    selected.fill(0);
+    const cs = this.model.constraints;
+    for (let i = 0; i < scope.length; i++) {
+      const name = scope[i];
+      if (typeof name !== 'string') throw new RuntimeInputError(`physics movement scope name ${String(name)} is not a string`);
+      let found: RuntimeConstraint | undefined;
+      for (let k = 0; k < cs.length; k++) {
+        if (cs[k].kind === 'physics' && cs[k].name === name) {
+          found = cs[k];
+          break;
+        }
+      }
+      if (found === undefined) {
+        for (let k = 0; k < cs.length; k++) {
+          if (cs[k].name === name) {
+            found = cs[k];
+            break;
+          }
+        }
+      }
+      if (found === undefined) throw new RuntimeInputError(`physics movement scope: no constraint "${name}"; this document declares [${cs.map((c) => c.name).join(', ')}]`);
+      if (found.kind !== 'physics') throw new RuntimeInputError(`physics movement scope: constraint "${name}" is ${found.kind}, not physics`);
+      selected[found.index] = 1;
+    }
+    return this.model.ignorePhysicsScope ? null : selected;
+  }
+
   /** External motion changes the previous origin, never the authored locals. */
-  physicsTranslate(x: number, y: number): void {
+  physicsTranslate(x: number, y: number, scope?: readonly string[]): void {
+    const selected = this.checkPhysicsScope(scope);
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new RuntimeInputError('physicsTranslate: x and y must be finite');
     for (let k = 0; k < this.physicsStates.length; k++) {
+      if (selected !== null && selected[k] === 0) continue;
       const s = this.physicsStates[k];
       s.ux -= x; s.uy -= y; s.cx -= x; s.cy -= y;
     }
   }
 
-  physicsRotate(x: number, y: number, degrees: number): void {
+  physicsRotate(x: number, y: number, degrees: number, scope?: readonly string[]): void {
+    const selected = this.checkPhysicsScope(scope);
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(degrees)) throw new RuntimeInputError('physicsRotate: x, y and degrees must be finite');
     const r = degrees * RAD, cos = Math.cos(r), sin = Math.sin(r);
     for (let k = 0; k < this.physicsStates.length; k++) {
+      if (selected !== null && selected[k] === 0) continue;
       const s = this.physicsStates[k];
       const dx = s.cx - x, dy = s.cy - y;
       const tx = dx * cos - dy * sin - dx, ty = dx * sin + dy * cos - dy;
@@ -662,9 +779,394 @@ export class RuntimePose {
     if (c.bones.length > 0) this.repose(c.bones.length, 0);
   }
 
-  private attachmentValues(anim: RuntimeAnimation | null, t: number): void {
-    this.slotValues(anim, t);
-    this.deformValues(anim, t);
+  /** A path constraint (`solvePath` in `src/core/constraints_path.ts`), every buffer overwritten in place. */
+  private solvePath(c: RuntimePath, k: number): void {
+    if (c.attachment < 0 || this.model.omitPath) return;
+    const o5 = k * 5;
+    const position = this.pathValues[o5];
+    const spacing = this.pathValues[o5 + 1];
+    const mixRotate = this.pathValues[o5 + 2];
+    const mixX = this.pathValues[o5 + 3];
+    const mixY = this.pathValues[o5 + 4];
+    if (mixRotate === 0 && mixX === 0 && mixY === 0) return;
+    const wantsTangent = c.rotateMode === PATH_ROTATE_TANGENT;
+    const scale = c.rotateMode === PATH_ROTATE_CHAIN_SCALE;
+    const bones = c.bones;
+    const boneCount = bones.length;
+    const spaceCount = wantsTangent ? boneCount : boneCount + 1;
+    const spaces = this.pathSpaces;
+    const lengths = this.pathLengths;
+    const W = this.world;
+    const modelLengths = this.model.lengths;
+    spaces[0] = 0;
+    if (c.spacingMode === PATH_SPACING_PERCENT) {
+      if (scale) {
+        for (let i = 0; i < spaceCount - 1; i++) {
+          const bi = bones[i];
+          const boneLength = modelLengths[bi];
+          const w = bi * WORLDS;
+          const x = boneLength * W[w + W_A];
+          const y = boneLength * W[w + W_C];
+          lengths[i] = Math.sqrt(x * x + y * y);
+        }
+      }
+      for (let i = 1; i < spaceCount; i++) spaces[i] = spacing;
+    } else if (c.spacingMode === PATH_SPACING_PROPORTIONAL) {
+      let sum = 0;
+      for (let i = 0, n = spaceCount - 1; i < n; ) {
+        const bi = bones[i];
+        const boneLength = modelLengths[bi];
+        if (boneLength < PATH_EPSILON) {
+          if (scale) lengths[i] = 0;
+          spaces[++i] = spacing;
+        } else {
+          const w = bi * WORLDS;
+          const x = boneLength * W[w + W_A];
+          const y = boneLength * W[w + W_C];
+          const length = Math.sqrt(x * x + y * y);
+          if (scale) lengths[i] = length;
+          spaces[++i] = length;
+          sum += length;
+        }
+      }
+      if (sum > 0) {
+        sum = (spaceCount / sum) * spacing;
+        for (let i = 1; i < spaceCount; i++) spaces[i] *= sum;
+      }
+    } else {
+      const addsLength = c.spacingMode === PATH_SPACING_LENGTH;
+      for (let i = 0, n = spaceCount - 1; i < n; ) {
+        const bi = bones[i];
+        const boneLength = modelLengths[bi];
+        if (boneLength < PATH_EPSILON) {
+          if (scale) lengths[i] = 0;
+          spaces[++i] = spacing;
+        } else {
+          const w = bi * WORLDS;
+          const x = boneLength * W[w + W_A];
+          const y = boneLength * W[w + W_C];
+          const length = Math.sqrt(x * x + y * y);
+          if (scale) lengths[i] = length;
+          spaces[++i] = ((addsLength ? Math.max(0, boneLength + spacing) : spacing) * length) / boneLength;
+        }
+      }
+    }
+    this.positionsOfPath(c, position, spaceCount, wantsTangent);
+    const positions = this.pathPositions;
+    let atX = positions[0];
+    let atY = positions[1];
+    let offsetRotation = c.offsetRotation;
+    let fromTip: boolean;
+    if (offsetRotation === 0) fromTip = c.rotateMode === PATH_ROTATE_CHAIN;
+    else {
+      fromTip = false;
+      let positive: boolean;
+      if (c.slotEventAt === k && !c.slotEventAfter) {
+        const sb = c.slotBone * WORLDS;
+        positive = W[sb + W_A] * W[sb + W_D] - W[sb + W_B] * W[sb + W_C] > 0;
+      } else {
+        positive = c.slotEventAt >= 0 && this.pathSlotSign[k] > 0;
+      }
+      offsetRotation *= positive ? RAD : -RAD;
+    }
+    for (let i = 0, p = 3; i < boneCount; i++, p += 3) {
+      const bi = bones[i];
+      const o = bi * WORLDS;
+      let wa = W[o + W_A];
+      let wb = W[o + W_B];
+      let wc = W[o + W_C];
+      let wd = W[o + W_D];
+      const wx = W[o + W_X] + (atX - W[o + W_X]) * mixX;
+      const wy = W[o + W_Y] + (atY - W[o + W_Y]) * mixY;
+      const x = positions[p];
+      const y = positions[p + 1];
+      const dx = x - atX;
+      const dy = y - atY;
+      if (scale) {
+        const length = lengths[i];
+        if (length >= PATH_EPSILON) {
+          const s = (Math.sqrt(dx * dx + dy * dy) / length - 1) * mixRotate + 1;
+          wa *= s;
+          wc *= s;
+        }
+      }
+      atX = x;
+      atY = y;
+      if (mixRotate > 0) {
+        const a = wa;
+        const bb = wb;
+        const cc = wc;
+        const d = wd;
+        let r: number;
+        if (wantsTangent) r = positions[p - 1];
+        else if (spaces[i + 1] === 0) r = positions[p + 2];
+        else r = Math.atan2(dy, dx);
+        r -= Math.atan2(cc, a);
+        if (fromTip) {
+          const cos = Math.cos(r);
+          const sin = Math.sin(r);
+          const length = modelLengths[bi];
+          atX += (length * (cos * a - sin * cc) - dx) * mixRotate;
+          atY += (length * (sin * a + cos * cc) - dy) * mixRotate;
+        } else r += offsetRotation;
+        if (r > RUNTIME_PI) r -= TWO_PI;
+        else if (r < -RUNTIME_PI) r += TWO_PI;
+        r *= mixRotate;
+        const cos = Math.cos(r);
+        const sin = Math.sin(r);
+        wa = cos * a - sin * cc;
+        wb = cos * bb - sin * d;
+        wc = sin * a + cos * cc;
+        wd = sin * bb + cos * d;
+      }
+      W[o + W_A] = wa;
+      W[o + W_B] = wb;
+      W[o + W_C] = wc;
+      W[o + W_D] = wd;
+      W[o + W_X] = wx;
+      W[o + W_Y] = wy;
+      this.changed[i] = bi;
+      this.inWorld[i] = bi;
+    }
+    if (boneCount > 0) this.repose(boneCount, boneCount);
+  }
+
+  private computePathWorld(c: RuntimePath): void {
+    const at = this.model.attachments[c.attachment];
+    const W = this.world;
+    const pts = this.pathWorldPts;
+    const deformed = this.deformed[c.attachment] !== 0;
+    if (at.bindingCounts.length === 0) {
+      const b = c.slotBone * WORLDS;
+      const a = W[b + W_A];
+      const bb = W[b + W_B];
+      const cc = W[b + W_C];
+      const d = W[b + W_D];
+      const wx = W[b + W_X];
+      const wy = W[b + W_Y];
+      const local = deformed ? this.deform : at.local;
+      const lo = deformed ? at.deformOffset : 0;
+      for (let q = 0; q < c.pathVertices; q += 2) {
+        const x = local[lo + q];
+        const y = local[lo + q + 1];
+        pts[q] = x * a + y * bb + wx;
+        pts[q + 1] = x * cc + y * d + wy;
+      }
+      return;
+    }
+    const counts = at.bindingCounts;
+    const bones = at.bindingBones;
+    const xs = at.bindingX;
+    const ys = at.bindingY;
+    const weights = at.bindingWeights;
+    let n = 0;
+    let o = 0;
+    for (let v = 0; v < counts.length; v++) {
+      let wx = 0;
+      let wy = 0;
+      const end = n + counts[v];
+      for (; n < end; n++) {
+        const b = bones[n] * WORLDS;
+        const weight = weights[n];
+        const x = deformed ? xs[n] + this.deform[at.deformOffset + n * 2] : xs[n];
+        const y = deformed ? ys[n] + this.deform[at.deformOffset + n * 2 + 1] : ys[n];
+        wx += (x * W[b + W_A] + y * W[b + W_B] + W[b + W_X]) * weight;
+        wy += (x * W[b + W_C] + y * W[b + W_D] + W[b + W_Y]) * weight;
+      }
+      pts[o++] = wx;
+      pts[o++] = wy;
+    }
+  }
+
+  private positionsOfPath(c: RuntimePath, position: number, spaceCount: number, wantsTangent: boolean): void {
+    this.computePathWorld(c);
+    const pts = this.pathWorldPts;
+    const vc = c.pathVertices;
+    const n = vc / 2;
+    const spaces = this.pathSpaces;
+    const out = this.pathPositions;
+    const outLen = spaceCount * 3 + 2;
+    for (let i = 0; i < outLen; i++) out[i] = 0;
+    const closed = c.closed;
+    if (!c.constantSpeed) {
+      const lengths = c.lengths;
+      const curveCount = n / 3 - (closed ? 1 : 2);
+      const total = lengths[curveCount];
+      if (c.positionMode === PATH_POSITION_PERCENT) position *= total;
+      const spaceScale = c.spacingMode === PATH_SPACING_PERCENT ? total : c.spacingMode === PATH_SPACING_PROPORTIONAL ? total / spaceCount : 1;
+      let curve = 0;
+      for (let i = 0, o = 0; i < spaceCount; i++, o += 3) {
+        const space = spaces[i] * spaceScale;
+        position += space;
+        let p = position;
+        if (closed) {
+          p %= total;
+          if (p < 0) p += total;
+          curve = 0;
+        } else if (p < 0) {
+          onLineBefore(p, pts[2], pts[3], pts[4], pts[5], out, o);
+          continue;
+        } else if (p > total) {
+          const m0 = 2 * (n - 3);
+          const m1 = 2 * (n - 2);
+          onLinePast(p - total, pts[m0], pts[m0 + 1], pts[m1], pts[m1 + 1], out, o);
+          continue;
+        }
+        for (;; curve++) {
+          const length = lengths[curve];
+          if (p > length) continue;
+          if (curve === 0) p /= length;
+          else {
+            const prev = lengths[curve - 1];
+            p = (p - prev) / (length - prev);
+          }
+          break;
+        }
+        const kk = 3 * curve + 1;
+        const i0 = (kk % n) * 2;
+        const i1 = ((kk + 1) % n) * 2;
+        const i2 = ((kk + 2) % n) * 2;
+        const i3 = ((kk + 3) % n) * 2;
+        onCurve(p, pts[i0], pts[i0 + 1], pts[i1], pts[i1 + 1], pts[i2], pts[i2 + 1], pts[i3], pts[i3 + 1], out, o, wantsTangent || (i > 0 && space === 0));
+      }
+      return;
+    }
+    const chain = this.pathChain;
+    let chainLen = 0;
+    if (closed) {
+      for (let q = 2; q < vc; q++) chain[chainLen++] = pts[q];
+      chain[chainLen++] = pts[0];
+      chain[chainLen++] = pts[1];
+      chain[chainLen++] = pts[2];
+      chain[chainLen++] = pts[3];
+    } else {
+      for (let q = 2; q < vc - 2; q++) chain[chainLen++] = pts[q];
+    }
+    const curveCount = closed ? n / 3 : n / 3 - 1;
+    const curveEnds = this.pathCurveEnds;
+    let total = 0;
+    let cx0 = chain[0];
+    let cy0 = chain[1];
+    for (let i = 0, w = 2; i < curveCount; i++, w += 6) {
+      const cx1 = chain[w];
+      const cy1 = chain[w + 1];
+      const cx2 = chain[w + 2];
+      const cy2 = chain[w + 3];
+      const x2 = chain[w + 4];
+      const y2 = chain[w + 5];
+      const h2x = (cx0 - cx1 * 2 + cx2) * 0.1875;
+      const h2y = (cy0 - cy1 * 2 + cy2) * 0.1875;
+      const d3x = ((cx1 - cx2) * 3 - cx0 + x2) * 0.09375;
+      const d3y = ((cy1 - cy2) * 3 - cy0 + y2) * 0.09375;
+      let d2x = h2x * 2 + d3x;
+      let d2y = h2y * 2 + d3y;
+      let d1x = (cx1 - cx0) * 0.75 + h2x + d3x * 0.16666667;
+      let d1y = (cy1 - cy0) * 0.75 + h2y + d3y * 0.16666667;
+      total += Math.sqrt(d1x * d1x + d1y * d1y);
+      d1x += d2x;
+      d1y += d2y;
+      d2x += d3x;
+      d2y += d3y;
+      total += Math.sqrt(d1x * d1x + d1y * d1y);
+      d1x += d2x;
+      d1y += d2y;
+      total += Math.sqrt(d1x * d1x + d1y * d1y);
+      d1x += d2x + d3x;
+      d1y += d2y + d3y;
+      total += Math.sqrt(d1x * d1x + d1y * d1y);
+      curveEnds[i] = total;
+      cx0 = x2;
+      cy0 = y2;
+    }
+    const pathTotal = curveCount > 0 ? curveEnds[curveCount - 1] : 0;
+    if (c.positionMode === PATH_POSITION_PERCENT) position *= pathTotal;
+    const spaceScale = c.spacingMode === PATH_SPACING_PERCENT ? pathTotal : c.spacingMode === PATH_SPACING_PROPORTIONAL ? pathTotal / spaceCount : 1;
+    const segmentEnds = this.pathSegmentEnds;
+    for (let s = 0; s < 10; s++) segmentEnds[s] = 0;
+    let curveTotal = 0;
+    let lastCurve = -1;
+    let x1 = 0, y1 = 0, cx1 = 0, cy1 = 0, cx2 = 0, cy2 = 0, x2 = 0, y2 = 0;
+    for (let i = 0, o = 0, curve = 0, segment = 0; i < spaceCount; i++, o += 3) {
+      const space = spaces[i] * spaceScale;
+      position += space;
+      let p = position;
+      if (closed) {
+        p %= pathTotal;
+        if (p < 0) p += pathTotal;
+        curve = 0;
+        segment = 0;
+      } else if (p < 0) {
+        onLineBefore(p, chain[0], chain[1], chain[2], chain[3], out, o);
+        continue;
+      } else if (p > pathTotal) {
+        onLinePast(p - pathTotal, chain[chainLen - 4], chain[chainLen - 3], chain[chainLen - 2], chain[chainLen - 1], out, o);
+        continue;
+      }
+      for (;; curve++) {
+        const length = curveEnds[curve];
+        if (p > length) continue;
+        if (curve === 0) p /= length;
+        else {
+          const prev = curveEnds[curve - 1];
+          p = (p - prev) / (length - prev);
+        }
+        break;
+      }
+      if (curve !== lastCurve) {
+        lastCurve = curve;
+        const ii = curve * 6;
+        x1 = chain[ii];
+        y1 = chain[ii + 1];
+        cx1 = chain[ii + 2];
+        cy1 = chain[ii + 3];
+        cx2 = chain[ii + 4];
+        cy2 = chain[ii + 5];
+        x2 = chain[ii + 6];
+        y2 = chain[ii + 7];
+        const h2x = (x1 - cx1 * 2 + cx2) * 0.03;
+        const h2y = (y1 - cy1 * 2 + cy2) * 0.03;
+        const d3x = ((cx1 - cx2) * 3 - x1 + x2) * 0.006;
+        const d3y = ((cy1 - cy2) * 3 - y1 + y2) * 0.006;
+        let d2x = h2x * 2 + d3x;
+        let d2y = h2y * 2 + d3y;
+        let d1x = (cx1 - x1) * 0.3 + h2x + d3x * 0.16666667;
+        let d1y = (cy1 - y1) * 0.3 + h2y + d3y * 0.16666667;
+        curveTotal = Math.sqrt(d1x * d1x + d1y * d1y);
+        segmentEnds[0] = curveTotal;
+        for (let s = 1; s < 8; s++) {
+          d1x += d2x;
+          d1y += d2y;
+          d2x += d3x;
+          d2y += d3y;
+          curveTotal += Math.sqrt(d1x * d1x + d1y * d1y);
+          segmentEnds[s] = curveTotal;
+        }
+        d1x += d2x;
+        d1y += d2y;
+        curveTotal += Math.sqrt(d1x * d1x + d1y * d1y);
+        segmentEnds[8] = curveTotal;
+        d1x += d2x + d3x;
+        d1y += d2y + d3y;
+        curveTotal += Math.sqrt(d1x * d1x + d1y * d1y);
+        segmentEnds[9] = curveTotal;
+        segment = 0;
+      }
+      p *= curveTotal;
+      for (;; segment++) {
+        const length = segmentEnds[segment];
+        if (p > length) continue;
+        if (segment === 0) p /= length;
+        else {
+          const prev = segmentEnds[segment - 1];
+          p = segment + (p - prev) / (length - prev);
+        }
+        break;
+      }
+      onCurve(p * 0.1, x1, y1, cx1, cy1, cx2, cy2, x2, y2, out, o, wantsTangent || (i > 0 && space === 0));
+    }
+  }
+
+  private sliderAttachments(): void {
     for (let k = 0; k < this.model.constraints.length; k++) {
       this.sliderSlots(k);
       this.sliderDeforms(k);
@@ -1386,5 +1888,45 @@ function applyWorld(w: Float64Array, property: number, v: number, mix: number): 
       w[W_B] = Math.cos(angle) * s;
       w[W_D] = Math.sin(angle) * s;
     }
+  }
+}
+
+function onLineBefore(p: number, x1: number, y1: number, x2: number, y2: number, out: Float64Array, o: number): void {
+  const r = Math.atan2(y2 - y1, x2 - x1);
+  out[o] = x1 + p * Math.cos(r);
+  out[o + 1] = y1 + p * Math.sin(r);
+  out[o + 2] = r;
+}
+
+function onLinePast(p: number, x0: number, y0: number, x1: number, y1: number, out: Float64Array, o: number): void {
+  const r = Math.atan2(y1 - y0, x1 - x0);
+  out[o] = x1 + p * Math.cos(r);
+  out[o + 1] = y1 + p * Math.sin(r);
+  out[o + 2] = r;
+}
+
+function onCurve(p: number, x1: number, y1: number, cx1: number, cy1: number, cx2: number, cy2: number, x2: number, y2: number, out: Float64Array, o: number, wantsTangent: boolean): void {
+  if (Number.isNaN(p)) {
+    out[o] = x1;
+    out[o + 1] = y1;
+    out[o + 2] = Math.atan2(cy1 - y1, cx1 - x1);
+    return;
+  }
+  const t2 = p * p;
+  const t3 = t2 * p;
+  const u = 1 - p;
+  const u2 = u * u;
+  const u3 = u2 * u;
+  const ut = u * p;
+  const ut3x = ut * 3;
+  const w1 = u * ut3x;
+  const w2 = ut3x * p;
+  const x = x1 * u3 + cx1 * w1 + cx2 * w2 + x2 * t3;
+  const y = y1 * u3 + cy1 * w1 + cy2 * w2 + y2 * t3;
+  out[o] = x;
+  out[o + 1] = y;
+  if (wantsTangent) {
+    if (p < 0.001) out[o + 2] = Math.atan2(cy1 - y1, cx1 - x1);
+    else out[o + 2] = Math.atan2(y - (y1 * u2 + cy1 * ut * 2 + cy2 * t2), x - (x1 * u2 + cx1 * ut * 2 + cx2 * t2));
   }
 }

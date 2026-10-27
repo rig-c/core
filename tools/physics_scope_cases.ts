@@ -113,6 +113,34 @@ export function physicsScopeCases(omitScope = false): { ok: boolean; problems: s
     catch (e) { check(e instanceof CoreInputError && e.message.includes('missing'), `${label}: cold refusal not named`); }
     check(bits([...stateOf(fresh).states]) === freshBefore, `${label}: cold refusal changed state`);
   }
+  // Constraint names are namespaced by kind. A transform sharing a physics
+  // name is legal, in either order, and must not shadow movement selection.
+  for (const first of [true, false]) for (const kind of ['single', 'composed'] as const) for (const reset of ['animation', 'setup'] as const) {
+    const shared = JSON.parse(JSON.stringify(model)) as { constraints: Array<Record<string, unknown>> };
+    const transform = { kind: 'transform', name: 'spring', declaredIn: 'rig', bones: ['tip2'], source: 'block', properties: {} };
+    if (first) shared.constraints.unshift(transform); else shared.constraints.push(transform);
+    const sharedDoc = readModel(JSON.stringify(shared));
+    for (const operation of ['translate', 'rotate'] as const) {
+      const live = opened(sharedDoc, kind, reset), expected = opened(doc, kind, reset);
+      live.step(1 / 60); expected.step(1 / 60);
+      const ctx = stateOf(live), outside = bits(ctx.states.get('defaults'));
+      const beforeClock = bits([ctx.time, ctx.last, live.trackTime]);
+      let error: unknown;
+      try {
+        if (operation === 'translate') live.physicsTranslate(3, -2, Object.freeze(['spring']));
+        else live.physicsRotate(11, -7, 9, Object.freeze(['spring']));
+      } catch (e) { error = e; }
+      if (operation === 'translate') expected.physicsTranslate(3, -2, ['spring']);
+      else expected.physicsRotate(11, -7, 9, ['spring']);
+      const label = `shared-name/${first ? 'transform-first' : 'physics-first'}/${kind}/${reset}/${operation}`;
+      check(error === undefined, `${label}: legal physics name refused: ${String(error)}`);
+      check(stateBits(ctx) === stateBits(stateOf(expected)), `${label}: did not select the physics state`);
+      check(bits(ctx.states.get('defaults')) === outside, `${label}: outsider changed`);
+      check(ctx.states.has('spring'), `${label}: missing positive physics state`);
+      check(bits([ctx.time, ctx.last, live.trackTime]) === beforeClock, `${label}: clock changed`);
+      check(sharedDoc.constraints.filter((c) => c.name === 'spring').length === 2, `${label}: fixture did not retain both kinds`);
+    }
+  }
   const raw = JSON.parse(physics1541Fixture().model) as { constraints: unknown[]; animations: Array<{ name: string }> };
   raw.constraints = [];
   raw.animations = raw.animations.filter((a) => a.name === 'move');

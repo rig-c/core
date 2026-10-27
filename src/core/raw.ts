@@ -735,7 +735,8 @@ export function checkedPhysicsScope(doc: CompiledDocument, scope: readonly strin
   const selected = new Set<string>();
   for (const name of scope) {
     if (typeof name !== 'string') throw new CoreInputError(`${who} physics movement scope name ${String(name)} is not a string`);
-    const constraint = doc.constraints.find((c) => c.name === name);
+    const constraint = doc.constraints.find((c) => c.kind === 'physics' && c.name === name)
+      ?? doc.constraints.find((c) => c.name === name);
     if (constraint === undefined) throw new CoreInputError(`${who} physics movement scope: no constraint "${name}"; this document declares [${doc.constraints.map((c) => c.name).join(', ')}]`);
     if (constraint.kind !== 'physics') throw new CoreInputError(`${who} physics movement scope: constraint "${name}" is ${constraint.kind}, not physics`);
     selected.add(name);

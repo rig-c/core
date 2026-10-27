@@ -95479,7 +95479,7 @@ function noSkinSeedSkeleton(rnd: () => number, mode: 'none' | 'plain' | 'members
  */
 const CORE_UNITS = [
   'CO08', 'CO14', 'CO18', 'CL04', 'CA06', 'CA08', 'CO19', 'CC09', 'CC10', 'CQ10', 'CK07', 'CK09', 'CP10',
-  'CK15', 'CD06', 'CD11', 'CU04', 'CC13', 'CR06', 'CR12', 'CY01', 'CO27', 'CO25+CO26', 'CO53+CO54+CO55', 'CO56+CO57', 'CO29+CO30', 'CO31+CO32',
+  'CK15', 'CD06', 'CD11', 'CU04', 'CC13', 'CR06', 'CR12', 'CY01', 'CO27', 'CO25+CO26', 'CO53+CO54+CO55', 'CO56+CO57', 'CO29+CO30', 'CO31+CO32', 'CO64',
 ] as const;
 type CoreUnitName = (typeof CORE_UNITS)[number];
 
@@ -95492,7 +95492,7 @@ type CoreUnitName = (typeof CORE_UNITS)[number];
  */
 const CORE_UNITS_HEAVIEST_FIRST: CoreUnitName[] = [
   'CO31+CO32', 'CO25+CO26', 'CO27', 'CD11', 'CO08', 'CO29+CO30', 'CA08', 'CU04', 'CR06', 'CD06', 'CK09', 'CO14',
-  'CO18', 'CL04', 'CA06', 'CP10', 'CY01', 'CC10', 'CK15', 'CO19', 'CC13', 'CR12', 'CC09', 'CK07', 'CQ10', 'CO53+CO54+CO55', 'CO56+CO57',
+  'CO18', 'CL04', 'CA06', 'CP10', 'CY01', 'CC10', 'CK15', 'CO19', 'CC13', 'CR12', 'CC09', 'CK07', 'CQ10', 'CO53+CO54+CO55', 'CO56+CO57', 'CO64',
 ];
 
 /**
@@ -108834,7 +108834,7 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
     );
   }
 
-  if (parent) {
+  unit('CO64', () => {
     const result = physicsScopeCases();
     say(
       'CO64_SCOPED_PHYSICS_MOVEMENT_IS_NAMED_ATOMIC_AND_LEAVES_INDEPENDENT_STATES_IDENTICAL',
@@ -108842,7 +108842,7 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
       probeDetail(result.ok, result.problems, `${result.checks} checks on single/composed tracks under both resets: selected origins match native translate/rotate; independent states stay identical; absent/all/empty/duplicate scopes and named atomic refusals; whole-context movement plant detected`),
       'play #197: explicit constraint scope changes only the selected remembered origins before evaluation; no scope keeps whole-rig movement, and selection is not a solver dependency barrier',
     );
-  }
+  });
 
   unit('CO29+CO30', () => {
     // ===========================================================================

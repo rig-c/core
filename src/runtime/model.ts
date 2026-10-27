@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 5): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 6): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -12,9 +12,8 @@
  * (`RuntimeMissing`), and:
  *
  * - **refuses the model** (`RuntimeRefusal`, every missing feature listed)
- *   when one is a property of the whole model — a transform constraint reading or
- *   writing local values or adding (`localSource`, `localTarget`,
- *   `additive`), an ik, transform or path constraint over a bone the view leaves
+ *   when one is a property of the whole model — an additive transform constraint
+ *   (`additive`), an ik, transform or path constraint over a bone the view leaves
  *   inactive, a world-space transform onto a `noScale` or
  *   `noScaleOrReflection` bone, a clipping attachment or a region with no
  *   atlas rectangle shown at setup, a placeholder the skins fill
@@ -25,8 +24,11 @@
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 5 adds draw-order timelines (including slider draw-order application) and dark-colour (`rgba2`, `rgb2`) timelines on top of Stage 4's path constraints and scoped physics movement. Mesh and path deforms, named/no-skin views
- * and immutable event deliveries remain covered. `ignore: ['events']` remains an explicit diagnostic opt-out; it is
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 6 adds
+ * absolute local-source and local-target transform constraints. Draw-order,
+ * light/dark colour, mesh and path deforms, named/no-skin views, path constraints,
+ * scoped physics and immutable event deliveries remain covered.
+ * `ignore: ['events']` remains an explicit diagnostic opt-out; it is
  * never the default. A merged view with conflicting attachments still refuses
  * by name, as the oracle itself cannot resolve that view without file order.
  *
@@ -54,11 +56,10 @@ import type { CoreSliderRecord } from '../core/constraints_slider.ts';
 import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 5;
+export const RUNTIME_STAGE = 6;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
-  'local-transform',
   'additive-transform',
   'inactive-constrained-bone',
   'noscale-world-target',
@@ -130,6 +131,8 @@ export interface RuntimePlant {
   readonly ignorePhysicsScope?: boolean;
   readonly omitDrawOrder?: boolean;
   readonly omitDarkColour?: boolean;
+  /** Omit local-source/target transforms at load, to prove the stage-six gate. */
+  readonly omitLocalTransform?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -268,6 +271,8 @@ export interface RuntimeTransform {
   readonly offsets: Float64Array;
   readonly mixes: Float64Array;
   readonly clamp: boolean;
+  readonly localSource: boolean;
+  readonly localTarget: boolean;
 }
 
 export interface RuntimePhysics {
@@ -585,10 +590,9 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     else if (r.kind === 'path') {
       constraints.push(compilePath(r, index, applied, bones, indexOf, slotIndexOf, pathPlan.get(index) ?? null));
     } else {
-      if (r.localSource || r.localTarget) refusals.note('local-transform', `transform constraint "${r.name}" ${[r.localSource ? 'reads local values (localSource)' : '', r.localTarget ? 'writes local values (localTarget)' : ''].filter((x) => x !== '').join(' and ')}`);
       if (r.additive) refusals.note('additive-transform', `transform constraint "${r.name}" is additive`);
-      const t = compileTransform(r, index, applied, bones, indexOf);
-      if (applied) {
+      const t = compileTransform(r, index, applied && !(plant.omitLocalTransform && (r.localSource || r.localTarget)), bones, indexOf);
+      if (applied && !r.localTarget) {
         for (let k = 0; k < bones.length; k++) {
           const m = modes[bones[k]];
           if (parents[bones[k]] >= 0 && (m === MODE_NO_SCALE || m === MODE_NO_SCALE_OR_REFLECTION)) refusals.note('noscale-world-target', `transform constraint "${r.name}" moves bone "${r.bones[k]}" in world space, and its local values are read back in a noScale mode`);
@@ -882,7 +886,7 @@ function compileTransform(r: CoreTransformRecord, index: number, applied: boolea
     toProperty: Int32Array.from(toProperty), toOffset: Float64Array.from(toOffset), toScale: Float64Array.from(toScale), toMax: Float64Array.from(toMax),
     offsets: Float64Array.from(TRANSFORM_PROPERTIES.map((p) => r.offsets[p])),
     mixes: Float64Array.from(TRANSFORM_PROPERTIES.map((p) => r.mixes[p])),
-    clamp: r.clamp,
+    clamp: r.clamp, localSource: r.localSource, localTarget: r.localTarget,
   };
 }
 

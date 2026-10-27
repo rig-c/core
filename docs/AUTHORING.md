@@ -12647,7 +12647,7 @@ verdict on those figures.
 | <a id="CE_COMPILE_ALPHA_CLIP_CONFLICT"></a>`CE_COMPILE_ALPHA_CLIP_CONFLICT` | Names authored fields or convex/inverse flags conflicting with generated inside-clipping geometry. Use one authored/generated form.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦: alphaClip conflicts with [⟧<br>⟦vertexCount⟧<br>⟦vertices⟧<br>⟦weights⟧<br>⟦boneIndexing⟧<br>⟦, ⟧<br>⟦], convex=⟧<br>⟦, inverse=⟧<br>⟦; required ordinary inside clipping with generated geometry only. Remove authored geometry/flags.⟧ |
 | <a id="CE_COMPILE_ALPHA_CLIP_DEFORM"></a>`CE_COMPILE_ALPHA_CLIP_DEFORM` | Names animation and source/clip key/frame counts that cannot share the existing projection contract. Give matching explicit supported transform keys in compatible actual frames, with constant world shares where needed, or author the corresponding clip geometry and motion; weighted binding does not copy source deform.<br>Exact fixed diagnostic chunks (named values between chunks vary): ⟦ alphaClip from "⟧<br>⟦"⟧<br>⟦: animation "⟧<br>⟦" has ⟧<br>⟦ source and ⟧<br>⟦ clip keys; source frame=⟧<br>⟦no vertex geometry⟧<br>⟦clip frame=⟧<br>⟦, constant world influence shares=⟧<br>⟦Required matching explicit affine/depth-yaw/pitch transforms in compatible DeformGeometry frames, ⟧<br>⟦with constant shares for world-space transfer. Fix the named frame/keys or author corresponding clip motion.⟧ |
 
-## 15. Posing in place for a player — the runtime poser (stage 5)
+## 15. Posing in place for a player — the runtime poser (stage 6)
 
 rigc poses a model document twice over, on purpose (issue #1591). The **oracle**
 (`src/core/`) is the reference: each pose is a pure function of the document,
@@ -12682,11 +12682,11 @@ exact resolved table identity `(skin, model.slots[attachment.slot].name, placeho
 The display `name` may be shared by different placeholders; it is never a table
 key to guess the source from. These load-time strings do not change the pose path.
 
-| | what stage 5 poses |
+| | what stage 6 poses |
 | --- | --- |
 | bones | local and world transforms, all five inherit modes, skin-required bones under the view's skin (an inactive bone is zeros, as the oracle poses it) |
 | timelines | `rotate`, `translate(x/y)`, `scale(x/y)`, `shear(x/y)`; a slot's `attachment`, light colour (`rgba`, `rgb`, `alpha`) and dark colour (`rgba2`, `rgb2`); `drawOrder`; ik, transform and path timelines; linear, stepped and Bézier keys, each read from a per-pose key cursor |
-| constraints | physics with its exact clock, reset and parameter timelines, and optional constraint-scoped external translate/rotate; value-mapped sliders with bone/slot/draw-order/deform/physics composition; path constraints across all position, spacing and rotate modes on open or closed, constant-speed or arc-length, weighted or unweighted, deformed curves; one- and two-bone ik; world-space, absolute transform constraints; the document's order, each followed by the bones below what it moved posed again |
+| constraints | physics with its exact clock, reset and parameter timelines, and optional constraint-scoped external translate/rotate; value-mapped sliders with bone/slot/draw-order/deform/physics composition; path constraints across all position, spacing and rotate modes on open or closed, constant-speed or arc-length, weighted or unweighted, deformed curves; one- and two-bone ik; absolute transform constraints with local or world sources and targets; the document's order, each followed by the bones below what it moved posed again |
 | vertices | regions, meshes, weighted meshes and linked meshes, written into the pose's buffer |
 | deform | weighted and unweighted mesh and path timelines, linear/stepped/Bézier, per-pose key cursors and in-place buffers; linked meshes inherit their source's timelines only with `timelines: true` |
 | skins and events | named/no-skin views with their skin-required bones and constraints; event delivery in key order over `(last, time]`, tail then head across a wrap |
@@ -12767,9 +12767,20 @@ constraints later in update order. An unsupported timeline in a slider's
 animation refuses the whole model under that timeline's existing feature name,
 so an unselected track cannot hide a construct the slider always applies.
 
+Absolute transform constraints read each source property from the current local
+values (`localSource: true`) or world matrix, including earlier constraints'
+read-back, apply offsets and cross-mappings in declaration order, then clamp and
+blend by the keyed property mix. `localTarget: true` writes local values and
+re-poses the changed bones and their descendants in bone order without a world
+read-back; world targets keep their edited world matrices and read back locals.
+A zero mix leaves that property untouched. Local targets accept all five inherit
+modes; world targets retain the named no-scale refusal below. Additive transforms
+remain refused. Stage-six controls `RP38`–`RP42` hold local-source, local-target
+and both forms to the oracle with omission and allocation plants.
+
 **Everything else is refused at load, by name.** `RuntimeRefusal.missing` lists
 every construct met, each `{ feature, detail, animation }`, and the message
-reads `not posed by the runtime poser (stage 5), N construct(s) missing:
+reads `not posed by the runtime poser (stage 6), N construct(s) missing:
 <feature>: <detail>; …`. A model-level feature refuses the whole model; an
 animation-level one refuses that animation alone (`model.refused`;
 `model.animation(name)` and `setAnimation(name)` throw its refusal) and every
@@ -12778,7 +12789,7 @@ refused: nothing is posed approximately.
 
 | feature | refuses | what it is |
 | --- | --- | --- |
-| `local-transform`, `additive-transform` | the model | a transform constraint with `localSource` or `localTarget`, or `additive` |
+| `additive-transform` | the model | a transform constraint with `additive: true` |
 | `inactive-constrained-bone` | the model | an applied ik, transform or path constraint naming a bone the view leaves inactive (what the oracle writes there depends on the pass before) |
 | `noscale-world-target` | the model | a world-space transform onto a `noScale` or `noScaleOrReflection` bone, whose local values would be read back in that mode |
 | `clipping`, `null-atlas-region` | the model when shown at setup, else the animation that keys it | a clipping attachment; a region whose atlas rectangle the model states as `null` |

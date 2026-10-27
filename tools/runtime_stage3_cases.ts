@@ -1099,7 +1099,85 @@ function runtimeStage5Cases(say: Say): void {
     }
     say('RP37_DRAW_ORDER_AND_DARK_COLOUR_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
   }
+  runtimeStage6Cases(say);
 }
+
+/** Local source/target constraints, read in document order, never through a track surrogate. */
+export function localTransformProbe(localSource: boolean, localTarget: boolean, from = 'rotate', to = 'rotate', mode = 'normal', mix = 0.375, clamp = false, order = 'ordinary'): string {
+  const properties: Record<string, unknown> = from === 'all' ? Object.fromEntries(['rotate', 'x', 'y', 'scaleX', 'scaleY', 'shearY'].map(p => [p, { offset: 0.125, to: { [p]: { offset: -0.75, scale: 0.7, max: 0.25 } } }])) : { [from]: { offset: 0.125, to: { [to]: { offset: -0.75, scale: 0.7, max: 0.25 } } } };
+  const local = { kind: 'transform', name: 'local', source: order === 'self' ? 'a' : 'source', bones: order === 'duplicates' ? [...Array.from({ length: 20 }, () => 'a'), 'b'] : order === 'reverse' ? ['b', 'a'] : ['a', 'b'], localSource, localTarget, clamp,
+    rotation: 13, x: -2, y: 3, scaleX: -0.2, scaleY: 0.3, shearY: -11,
+    mixRotate: mix, mixX: mix, mixY: mix, mixScaleX: mix, mixScaleY: mix, mixShearY: mix, properties, ...(order.startsWith('zero-') ? { [order.slice(5)]: 0 } : {}) };
+  // A world writer before the local reader forces source locals to be read back;
+  // a world reader after it observes the changed target and its descendants.
+  const writer = { kind: 'transform', name: 'writer', source: 'driver', bones: ['source'], properties: { rotate: { to: { rotate: {} } }, x: { to: { x: {} } } }, mixRotate: 0.3, mixX: 0.6 };
+  const reader = { kind: 'transform', name: 'reader', source: 'tip', bones: ['reader'], properties: { x: { to: { x: {} } }, rotate: { to: { rotate: {} } } }, mixX: 0.6, mixRotate: 0.7 };
+  return probeModel({ bones: [
+    { name: 'root', x: -4, y: 3, rotation: 19, scaleX: -1.2, scaleY: 0.8, shearY: 7 },
+    { name: 'driver', parent: 'root', x: 17, y: -9, rotation: 43 },
+    { name: 'source', parent: 'root', x: 3, y: 7, rotation: -37, scaleX: -0.8, scaleY: 1.3, shearX: 4, shearY: -13 },
+    { name: 'a', parent: 'root', x: -11, y: 5, rotation: 23, scaleX: -1.1, scaleY: 0.9, shearX: 3, shearY: 17, inheritMode: mode },
+    { name: 'b', parent: 'a', x: 23, y: -7, rotation: -41, scaleX: 0.6, scaleY: -1.4, shearY: 9, inheritMode: mode },
+    { name: 'tip', parent: 'b', x: 1234, y: -987 },
+    { name: 'reader', parent: 'root', x: 29, y: 11, rotation: -7 },
+  ], slots: [{ name: 's', bone: 'tip', setup: 'p' }], attachments: { s: { p: { kind: 'region', width: 13, height: 9, atlas: { width: 13, height: 9, offsetX: 0, offsetY: 0, originalWidth: 13, originalHeight: 9 } } } },
+    constraints: order === 'swapped' ? [local, writer, reader] : [writer, local, reader],
+    animations: [{ name: 'a', duration: 1, ...(order.startsWith('timeline-') ? { constraints: { ik: [], path: [], physics: [], slider: [], transform: [{ name: 'local', keys: [0.25, 0.6, 1].map((time, i) => ({ time, ...Object.fromEntries(['mixRotate', 'mixX', 'mixY', 'mixScaleX', 'mixScaleY', 'mixShearY'].map(p => [p, [0, 0.375, 1][i]])), ...(order === 'timeline-stepped' && i < 2 ? { curve: 'stepped' } : {}) })) }] } } : {}), bones: [{ name: 'driver', timelines: [{ name: 'rotate', keys: key(-17, 83) }, { name: 'translate', keys: [{ time: 0, x: 3, y: -4 }, { time: 1, x: -5, y: 8 }] }] }, { name: 'a', timelines: [{ name: 'shear', keys: [{ time: 0, x: -3, y: 7 }, { time: 1, x: 9, y: -11 }] }] }] }],
+  });
+}
+
+export function runtimeStage6Cases(say: Say): void {
+  const groups: Array<[string, boolean, boolean]> = [['local-source', true, false], ['local-target', false, true], ['local-both', true, true]];
+  const props = ['rotate', 'x', 'y', 'scaleX', 'scaleY', 'shearY'];
+  const all: Array<[string, string]> = [];
+  for (const [label, source, target] of groups) {
+    const problems: string[] = [];
+    let fixtures = 0, identical = 0, poses = 0, values = 0, walked = 0;
+    const check = (name: string, text: string): void => {
+      fixtures++; all.push([name, text]);
+      const row = runtimeOfTexts(name, text, ''); poses += row.poses; values += row.values;
+      if (row.verdict !== 'IDENTICAL' && problems.length < 5) problems.push(`${name}: ${row.verdict}: ${row.why}`);
+      // Irregular looping steps are held directly to the live oracle, including signed zero.
+      if (row.verdict === 'IDENTICAL') {
+        identical++;
+        const live = stepAgainstTrack(text, 'a', steps); walked += live.poses; values += live.values;
+        if (live.first !== null && problems.length < 5) problems.push(`${name}: ${live.first}`);
+      }
+    };
+    for (const from of props) for (const to of props) check(`${label}/${from}->${to}`, localTransformProbe(source, target, from, to));
+    for (const mode of target ? ['normal', 'onlyTranslation', 'noRotationOrReflection', 'noScale', 'noScaleOrReflection'] : ['normal', 'onlyTranslation', 'noRotationOrReflection']) {
+      for (const mix of [0.375, 1, -0.25, 1.25]) for (const clamp of [false, true]) check(`${label}/${mode}/${mix}/clamp=${clamp}`, localTransformProbe(source, target, 'all', 'all', mode, mix, clamp));
+    }
+    for (const order of ['self', 'reverse', 'swapped', 'duplicates', 'timeline-linear', 'timeline-stepped', ...['mixRotate', 'mixX', 'mixY', 'mixScaleX', 'mixScaleY', 'mixShearY'].map(p => `zero-${p}`)]) check(`${label}/${order}`, localTransformProbe(source, target, 'all', 'all', 'normal', 0.6, false, order));
+    say(`RP${38 + groups.findIndex(g => g[0] === label)}_${label.toUpperCase().replaceAll('-', '_')}_MATCHES_ORACLE_AT_ZERO`, problems, `${identical}/${fixtures} fixtures IDENTICAL; ${poses} none/step sampled poses, ${walked} looping live poses (setup included), ${values} Object.is cells; six properties and cross-mappings, offsets, clamp, reflected/sheared frames, inherit modes and ordered readers/writers`);
+  }
+  {
+    const problems: string[] = []; let red = 0;
+    for (const [name, text] of all) {
+      const row = runtimeOfTexts(name, text, '', { omitLocalTransform: true });
+      if (row.verdict === 'DIFF') red++;
+      else if (problems.length < 5) problems.push(`${name}: omission read ${row.verdict}: ${row.why}`);
+    }
+    say('RP41_OMITTED_LOCAL_TRANSFORM_MAKES_EVERY_FIXTURE_RED', problems, `${red}/${all.length} fixtures DIFF with local-transform omitted; unplanted counterparts measured above`);
+  }
+  {
+    const problems: string[] = [], details: string[] = [];
+    const work = mkdtempSync(join(tmpdir(), 'runtime-stage6-'));
+    try {
+      for (const [label, source, target] of groups) {
+        const file = join(work, `${label}.model.json`);
+        writeFileSync(file, localTransformProbe(source, target, 'all', 'all'));
+        const clean = allocationPerFrame(resolve(import.meta.dir, '..'), file, 'a', 'none');
+        const planted = allocationPerFrame(resolve(import.meta.dir, '..'), file, 'a', 'object');
+        details.push(`${label}: ${clean.said}; object plant ${planted.said}`);
+        if (clean.bytes !== 0) problems.push(`${label}: ${clean.said}`);
+        if (planted.bytes === null || planted.bytes < 16) problems.push(`${label} plant: ${planted.said}`);
+      }
+    } finally { rmSync(work, { recursive: true, force: true }); }
+    say('RP42_LOCAL_TRANSFORMS_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
+  }
+}
+
 if (import.meta.main) {
   let bad = 0;
   runtimeStage3Cases((name, problems, detail) => { console.log(JSON.stringify({ name, problems, detail })); bad += problems.length; });

@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 5): one
+ * The runtime poser's per-instance half (issue #1591, stage 6): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -102,6 +102,8 @@ const P_X = 1;
 const P_Y = 2;
 const P_SCALE_X = 3;
 const P_SCALE_Y = 4;
+// `applyLocal` in src/core/constraints.ts: the six transform properties' local fields.
+const PROPERTY_LOCAL = new Int32Array([L_ROTATION, L_X, L_Y, L_SCALE_X, L_SCALE_Y, L_SHEAR_Y]);
 
 /** A change brought once into (−180, 180] — −180 goes to 180 (src/core/constraints.ts). */
 function wrap180(r: number): number {
@@ -1508,7 +1510,10 @@ export class RuntimePose {
     return true;
   }
 
-  /** A world-space, absolute transform (`solveTransform`): each bone's world edited in turn and written back, then the repose. */
+  /** Absolute transform, matching `solveTransform` in src/core/constraints.ts:
+   * read the source per target/property, edit locals or the scratch world,
+   * then repose the union in bone order (`repose` in that module). No read-back for a local target.
+   */
   private solveTransform(c: RuntimeTransform, k: number): void {
     const W = this.world;
     const w = this.w;
@@ -1538,25 +1543,32 @@ export class RuntimePose {
             v = v < lo ? lo : v > hi ? hi : v;
           }
           applied = true;
-          applyWorld(w, property, v, mix);
+          if (c.localTarget) {
+            const at = bi * LOCALS + PROPERTY_LOCAL[property];
+            const current = this.locals[at];
+            this.locals[at] = current + (v - current) * mix;
+          } else applyWorld(w, property, v, mix);
         }
       }
       if (!applied) continue;
-      W[o + W_A] = w[W_A];
-      W[o + W_B] = w[W_B];
-      W[o + W_C] = w[W_C];
-      W[o + W_D] = w[W_D];
-      W[o + W_X] = w[W_X];
-      W[o + W_Y] = w[W_Y];
+      if (!c.localTarget) {
+        W[o + W_A] = w[W_A];
+        W[o + W_B] = w[W_B];
+        W[o + W_C] = w[W_C];
+        W[o + W_D] = w[W_D];
+        W[o + W_X] = w[W_X];
+        W[o + W_Y] = w[W_Y];
+      }
       this.changed[n] = bi;
       this.inWorld[n] = bi;
       n++;
     }
-    if (n > 0) this.repose(n, n);
+    if (n > 0) this.repose(n, c.localTarget ? 0 : n);
   }
 
-  /** The source's world value of a property (`sourceValue`, world source). */
+  /** The source's current local or world value (`sourceValue` in src/core/constraints.ts). */
   private sourceValue(c: RuntimeTransform, property: number): number {
+    if (c.localSource) return this.locals[c.source * LOCALS + PROPERTY_LOCAL[property]] + c.offsets[property];
     const W = this.world;
     const s = c.source * WORLDS;
     const o = c.offsets;

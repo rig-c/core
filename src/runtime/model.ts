@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 6): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 7): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -14,8 +14,7 @@
  * - **refuses the model** (`RuntimeRefusal`, every missing feature listed)
  *   when one is a property of the whole model — an additive transform constraint
  *   (`additive`), an ik, transform or path constraint over a bone the view leaves
- *   inactive, a world-space transform onto a `noScale` or
- *   `noScaleOrReflection` bone, a clipping attachment or a region with no
+ *   inactive, a clipping attachment or a region with no
  *   atlas rectangle shown at setup, a placeholder the skins fill
  *   differently, or a block the oracle itself leaves out;
  * - **refuses an animation** (`RuntimeModel.refused`; `animation(name)`
@@ -24,8 +23,9 @@
  *   attachment key showing a clipping attachment or a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 6 adds
- * absolute local-source and local-target transform constraints. Draw-order,
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 7 admits
+ * world transform targets in both no-scale inherit modes, using the existing
+ * localFromWorld read-back. Stage 6 added local-source and local-target transforms. Draw-order,
  * light/dark colour, mesh and path deforms, named/no-skin views, path constraints,
  * scoped physics and immutable event deliveries remain covered.
  * `ignore: ['events']` remains an explicit diagnostic opt-out; it is
@@ -56,13 +56,12 @@ import type { CoreSliderRecord } from '../core/constraints_slider.ts';
 import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 6;
+export const RUNTIME_STAGE = 7;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
   'additive-transform',
   'inactive-constrained-bone',
-  'noscale-world-target',
   'clipping',
   'null-atlas-region',
   'skin-conflict',
@@ -133,6 +132,8 @@ export interface RuntimePlant {
   readonly omitDarkColour?: boolean;
   /** Omit local-source/target transforms at load, to prove the stage-six gate. */
   readonly omitLocalTransform?: boolean;
+  /** Omit world transforms with parented no-scale targets, to prove stage seven. */
+  readonly omitNoScaleWorldTransform?: boolean;
 }
 
 // A bone's local values, seven per bone.
@@ -591,13 +592,8 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
       constraints.push(compilePath(r, index, applied, bones, indexOf, slotIndexOf, pathPlan.get(index) ?? null));
     } else {
       if (r.additive) refusals.note('additive-transform', `transform constraint "${r.name}" is additive`);
-      const t = compileTransform(r, index, applied && !(plant.omitLocalTransform && (r.localSource || r.localTarget)), bones, indexOf);
-      if (applied && !r.localTarget) {
-        for (let k = 0; k < bones.length; k++) {
-          const m = modes[bones[k]];
-          if (parents[bones[k]] >= 0 && (m === MODE_NO_SCALE || m === MODE_NO_SCALE_OR_REFLECTION)) refusals.note('noscale-world-target', `transform constraint "${r.name}" moves bone "${r.bones[k]}" in world space, and its local values are read back in a noScale mode`);
-        }
-      }
+      const noScaleWorld = !r.localTarget && bones.some(b => parents[b] >= 0 && (modes[b] === MODE_NO_SCALE || modes[b] === MODE_NO_SCALE_OR_REFLECTION));
+      const t = compileTransform(r, index, applied && !(plant.omitLocalTransform && (r.localSource || r.localTarget)) && !(plant.omitNoScaleWorldTransform && noScaleWorld), bones, indexOf);
       constraints.push(t);
     }
   }

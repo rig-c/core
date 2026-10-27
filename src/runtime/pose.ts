@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 6): one
+ * The runtime poser's per-instance half (issue #1591, stage 7): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -1652,7 +1652,10 @@ export class RuntimePose {
     if (below[b] === 1 && this.inWorldMark[b] === 0) this.poseBone(b, false);
   }
 
-  /** A bone's local values read back from its world transform (`localFromWorld`) — `normal`, `onlyTranslation` and `noRotationOrReflection`; a world target in a `noScale` mode is refused at load. */
+  /** A bone's locals read back from its world transform (`localFromWorld` in src/core/constraints.ts).
+   * All five inherit modes: the no-scale forms read rotation first, rebuild
+   * `noScaleDirection`, and retain the x-angle residual as shearX in `decompose`.
+   */
   private localFromWorld(bi: number): void {
     const m = this.model;
     const W = this.world;

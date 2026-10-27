@@ -1176,6 +1176,77 @@ export function runtimeStage6Cases(say: Say): void {
     } finally { rmSync(work, { recursive: true, force: true }); }
     say('RP42_LOCAL_TRANSFORMS_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
   }
+  runtimeStage7Cases(say);
+}
+
+/** World targets in both no-scale modes, observed through locals and a later parent edit. */
+export function noScaleWorldProbe(mode: string, from = 'all', to = 'all', localSource = false, mix = 0.375, shape = 'ordinary', profile = 'reflected-x'): string {
+  const raw = JSON.parse(localTransformProbe(localSource, false, from, to, mode, mix, shape === 'clamp', shape)) as {
+    bones: Array<Record<string, unknown>>; constraints: Array<Record<string, unknown>>;
+  };
+  const root = raw.bones[0];
+  const frames: Record<string, number[]> = {
+    'reflected-x': [-1.2, 0.8, 7], 'reflected-y': [1.2, -0.8, -19],
+    anisotropic: [1.7, 0.6, 23], tiny: [0.00001, 2, 11], rigid: [1, 1, 0],
+  };
+  const frame = frames[profile]; root.scaleX = frame[0]; root.scaleY = frame[1]; root.shearY = frame[2];
+  if (shape === 'collapsed' || shape === 'near-collapsed') {
+    for (const bone of raw.bones) if (bone.name === 'b') bone.scaleX = shape === 'collapsed' ? 0 : 0.00001;
+  }
+  for (const target of ['a', 'b']) {
+    raw.bones.push({ name: `read_${target}`, parent: 'root', x: 13, y: -17 });
+    // Read back every local field before a later world writer reposes the target.
+    raw.constraints.push({ kind: 'transform', name: `read_${target}`, declaredIn: 'rig', source: target, bones: [`read_${target}`], localSource: true, localTarget: true,
+      properties: Object.fromEntries(['rotate', 'x', 'y', 'scaleX', 'scaleY', 'shearY'].map(p => [p, { to: { [p]: { scale: 0.7, offset: -0.2 } } }])),
+    });
+  }
+  raw.constraints.push({ kind: 'transform', name: 'parent_writer', declaredIn: 'rig', source: 'driver', bones: ['root'], mixX: 0.3, properties: { x: { to: { x: { offset: 1.25 } } } } });
+  return JSON.stringify(raw);
+}
+
+export function runtimeStage7Cases(say: Say): void {
+  const all: Array<[string, string]> = [];
+  const props = ['rotate', 'x', 'y', 'scaleX', 'scaleY', 'shearY'];
+  for (const [index, mode] of ['noScale', 'noScaleOrReflection'].entries()) {
+    const problems: string[] = []; let fixtures = 0, identical = 0, refused = 0, poses = 0, values = 0, livePoses = 0;
+    const check = (name: string, text: string): void => {
+      fixtures++; all.push([name, text]);
+      const row = runtimeOfTexts(name, text, ''); poses += row.poses; values += row.values;
+      if (row.refusedAtLoad?.some(m => String(m.feature) === 'noscale-world-target')) refused++;
+      if (row.verdict !== 'IDENTICAL') { if (problems.length < 5) problems.push(`${name}: ${row.verdict}: ${row.why}`); return; }
+      identical++;
+      const live = stepAgainstTrack(text, 'a', steps); livePoses += live.poses; values += live.values;
+      if (live.first !== null && problems.length < 5) problems.push(`${name}: ${live.first}`);
+    };
+    for (const source of [false, true]) for (const from of props) for (const to of props) check(`${mode}/localSource=${source}/${from}->${to}`, noScaleWorldProbe(mode, from, to, source));
+    for (const profile of ['reflected-x', 'reflected-y', 'anisotropic', 'tiny', 'rigid']) for (const mix of [0.375, 1, -0.25, 1.25]) check(`${mode}/${profile}/mix=${mix}`, noScaleWorldProbe(mode, 'all', 'all', false, mix, 'ordinary', profile));
+    for (const shape of ['collapsed', 'near-collapsed']) check(`${mode}/${shape}`, noScaleWorldProbe(mode, 'all', 'all', false, 0.375, shape));
+    for (const source of [false, true]) check(`${mode}/clamp/localSource=${source}`, noScaleWorldProbe(mode, 'all', 'all', source, 0.6, 'clamp'));
+    for (const shape of ['self', 'reverse', 'swapped', 'duplicates', 'timeline-linear', 'timeline-stepped', ...['mixRotate', 'mixX', 'mixY', 'mixScaleX', 'mixScaleY', 'mixShearY'].map(p => `zero-${p}`)]) check(`${mode}/${shape}`, noScaleWorldProbe(mode, 'all', 'all', false, 0.6, shape));
+    say(`RP${43 + index}_${mode.toUpperCase()}_WORLD_TARGET_MATCHES_ORACLE_AT_ZERO`, problems, `${identical}/${fixtures} fixtures IDENTICAL, ${refused} refused as noscale-world-target; ${poses} none/step sampled poses, ${livePoses} looping live poses (setup included), ${values} Object.is cells; all cross-mappings, local/world sources, reflected/anisotropic/tiny parent frames, collapsed target axes, clamp, keyed and zero mixes, repeated targets, local readers and later parent repose`);
+  }
+  {
+    const problems: string[] = []; let red = 0;
+    for (const [name, text] of all) {
+      const row = runtimeOfTexts(name, text, '', { omitNoScaleWorldTransform: true });
+      if (row.verdict === 'DIFF') red++; else if (problems.length < 5) problems.push(`${name}: omission read ${row.verdict}: ${row.why}`);
+    }
+    say('RP45_OMITTED_NOSCALE_WORLD_TRANSFORM_MAKES_EVERY_FIXTURE_RED', problems, `${red}/${all.length} fixtures DIFF under omission; unplanted fixtures measured above`);
+  }
+  {
+    const problems: string[] = [], details: string[] = [], work = mkdtempSync(join(tmpdir(), 'runtime-stage7-'));
+    try {
+      for (const mode of ['noScale', 'noScaleOrReflection']) {
+        const file = join(work, `${mode}.model.json`); writeFileSync(file, noScaleWorldProbe(mode));
+        const clean = allocationPerFrame(resolve(import.meta.dir, '..'), file, 'a', 'none');
+        const plant = allocationPerFrame(resolve(import.meta.dir, '..'), file, 'a', 'object');
+        details.push(`${mode}: ${clean.said}; object plant ${plant.said}`);
+        if (clean.bytes !== 0) problems.push(`${mode}: ${clean.said}`);
+        if (plant.bytes === null || plant.bytes < 16) problems.push(`${mode} plant: ${plant.said}`);
+      }
+    } finally { rmSync(work, { recursive: true, force: true }); }
+    say('RP46_NOSCALE_WORLD_TARGET_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
+  }
 }
 
 if (import.meta.main) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.78.0](https://github.com/rig-c/core/compare/v2.77.0...v2.78.0) (2026-10-27)
+
+
+### Features
+
+* **runtime:** stage 5 — draw-order and dark-colour timelines in the runtime poser, equal to the oracle at tolerance 0 ([#1618](https://github.com/rig-c/core/issues/1618)) ([5c484ff](https://github.com/rig-c/core/commit/5c484ff917bc45c4f85573cbb8c56c11231f4396))
+
 ## [2.77.0](https://github.com/rig-c/core/compare/v2.76.0...v2.77.0) (2026-10-27)
 
 

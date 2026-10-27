@@ -222,7 +222,7 @@
  * history, so a seek is "open, then step to the time".
  */
 import { CoreInputError, type CompiledDocument } from './index.ts';
-import { checkedClock, environmentOf, openRawTrack, rotateOn, setEnvironmentOn, stepRawTrack, translateOn, type RawPose, type RawReset, type TrackState, type WalkMode } from './raw.ts';
+import { checkedClock, checkedPhysicsScope, environmentOf, openRawTrack, rotateOn, setEnvironmentOn, stepRawTrack, translateOn, type RawPose, type RawReset, type TrackState, type WalkMode } from './raw.ts';
 import type { LocalAdjust, TimelinePlant } from './animation.ts';
 import type { PhysicsEnvironment } from './constraints_physics.ts';
 import { LivePhysicsParameters, type PhysicsParameterPatch, type PhysicsParameterRead } from './physics_parameters.ts';
@@ -261,10 +261,12 @@ export interface LiveTrack {
   readPhysicsParameters(name: string): PhysicsParameterRead;
   /** Removes the patch for the next pose without resetting velocities, offsets or the clock. */
   clearPhysicsParameters(name: string): void;
-  /** spine-core's `Skeleton.physicsTranslate`: the consumer moved the whole rig by `(x, y)` in the skeleton's world (y up) since the last pose, and every physics constraint's next update sees it. */
-  physicsTranslate(x: number, y: number): void;
-  /** spine-core's `Skeleton.physicsRotate`: the consumer turned the whole rig by `degrees` (counter-clockwise) about `(x, y)` in the skeleton's world since the last pose. */
-  physicsRotate(x: number, y: number, degrees: number): void;
+  /** Scope omitted: all physics; otherwise exact physics names, validated atomically. Empty selects none, duplicates select once.
+   * Movement changes remembered world origins synchronously, before the next evaluation.
+   * spine-core's `Skeleton.physicsTranslate`: the consumer moved the whole rig by `(x, y)` in the skeleton's world (y up) since the last pose, and every physics constraint's next update sees it. */
+  physicsTranslate(x: number, y: number, scope?: readonly string[]): void;
+  /** Same scope contract as physicsTranslate. The consumer turned by `degrees` (counter-clockwise) about explicit `(x, y)` in the skeleton's world; changes remembered origins, not tip direction or angular velocity. */
+  physicsRotate(x: number, y: number, degrees: number, scope?: readonly string[]): void;
 }
 
 /** The two modes: a track that holds at its duration is the raw entry's walk; a looping one fires its events across the wrap and cuts its clipped rows (`live`). Neither keeps a non-finite value. */
@@ -336,14 +338,14 @@ class Track implements LiveTrack {
     this.parameters.clear(name);
   }
 
-  physicsTranslate(x: number, y: number): void {
+  physicsTranslate(x: number, y: number, scope?: readonly string[]): void {
     this.live('physicsTranslate');
-    translateOn(this.track.ctx, x, y, 'the live track\'s');
+    translateOn(this.track.ctx, x, y, 'the live track\'s', checkedPhysicsScope(this.track.doc, scope, 'the live track\'s'));
   }
 
-  physicsRotate(x: number, y: number, degrees: number): void {
+  physicsRotate(x: number, y: number, degrees: number, scope?: readonly string[]): void {
     this.live('physicsRotate');
-    rotateOn(this.track.ctx, x, y, degrees, 'the live track\'s');
+    rotateOn(this.track.ctx, x, y, degrees, 'the live track\'s', checkedPhysicsScope(this.track.doc, scope, 'the live track\'s'));
   }
 
   /** A refused track refuses every call that would move it, naming the step it was refused at. */

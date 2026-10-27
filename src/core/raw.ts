@@ -728,20 +728,36 @@ export function environmentOf(ctx: PhysicsStepContext): PhysicsEnvironment {
   return ctx.env ?? DEFAULT_PHYSICS_ENVIRONMENT;
 }
 
+/** Validate the complete explicit selection before any remembered state changes. */
+export function checkedPhysicsScope(doc: CompiledDocument, scope: readonly string[] | undefined, who: string): ReadonlySet<string> | undefined {
+  if (scope === undefined) return undefined;
+  if (!Array.isArray(scope)) throw new CoreInputError(`${who} physics movement scope is ${String(scope)}, not an array of physics constraint names`);
+  const selected = new Set<string>();
+  for (const name of scope) {
+    if (typeof name !== 'string') throw new CoreInputError(`${who} physics movement scope name ${String(name)} is not a string`);
+    const constraint = doc.constraints.find((c) => c.kind === 'physics' && c.name === name)
+      ?? doc.constraints.find((c) => c.name === name);
+    if (constraint === undefined) throw new CoreInputError(`${who} physics movement scope: no constraint "${name}"; this document declares [${doc.constraints.map((c) => c.name).join(', ')}]`);
+    if (constraint.kind !== 'physics') throw new CoreInputError(`${who} physics movement scope: constraint "${name}" is ${constraint.kind}, not physics`);
+    selected.add(name);
+  }
+  return selected;
+}
+
 /** A live track's `physicsTranslate` (issue #1416): `x` and `y` finite, or refused by name before anything moves; then `translatePhysics`. */
-export function translateOn(ctx: PhysicsStepContext, x: number, y: number, who: string): void {
+export function translateOn(ctx: PhysicsStepContext, x: number, y: number, who: string, scope?: ReadonlySet<string>): void {
   for (const [k, v] of [['x', x], ['y', y]] as const) {
     if (typeof v !== 'number' || !Number.isFinite(v)) throw new CoreInputError(`${who} physicsTranslate's ${k} is ${String(v)}, not a finite distance in the skeleton's world`);
   }
-  translatePhysics(ctx, x, y);
+  translatePhysics(ctx, x, y, scope);
 }
 
 /** A live track's `physicsRotate` (issue #1416): `x`, `y` and `degrees` finite, or refused by name before anything moves; then `rotatePhysics`. */
-export function rotateOn(ctx: PhysicsStepContext, x: number, y: number, degrees: number, who: string): void {
+export function rotateOn(ctx: PhysicsStepContext, x: number, y: number, degrees: number, who: string, scope?: ReadonlySet<string>): void {
   for (const [k, v] of [['x', x], ['y', y], ['degrees', degrees]] as const) {
     if (typeof v !== 'number' || !Number.isFinite(v)) throw new CoreInputError(`${who} physicsRotate's ${k} is ${String(v)}, not a finite number`);
   }
-  rotatePhysics(ctx, x, y, degrees);
+  rotatePhysics(ctx, x, y, degrees, scope);
 }
 
 /**

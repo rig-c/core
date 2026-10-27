@@ -164,7 +164,7 @@ import { activeBones, CoreInputError, rawNumber, shownAttachment, viewColours, W
 import { channelAt, keyIndexAt, SLOT_COLOUR_TIMELINES, slotRowsFrom, steppedLocalsWorld, type BoneTimelineKind, type CoreKey, type LocalAdjust, type SlotBase, type SlotColourKind, type TimelinePlant } from './animation.ts';
 import { deformAt, setupArray, type CoreAttachmentTimeline } from './deform.ts';
 import { eventsFired, type CoreEventKey, type CoreEventRow } from './events.ts';
-import { checkedClock, environmentOf, openRawTracksPath, rotateOn, setEnvironmentOn, translateOn, type RawPose, type RawReset, type RawTracksPath } from './raw.ts';
+import { checkedClock, checkedPhysicsScope, environmentOf, openRawTracksPath, rotateOn, setEnvironmentOn, translateOn, type RawPose, type RawReset, type RawTracksPath } from './raw.ts';
 import type { PhysicsEnvironment } from './constraints_physics.ts';
 import { LivePhysicsParameters, type PhysicsParameterPatch, type PhysicsParameterRead } from './physics_parameters.ts';
 import { slotTimelinesApply } from './skins.ts';
@@ -240,10 +240,12 @@ export interface LiveTracks {
   readPhysicsParameters(name: string): PhysicsParameterRead;
   /** Removes the patch without resetting the physics history, as LiveTrack.clearPhysicsParameters. */
   clearPhysicsParameters(name: string): void;
-  /** spine-core's `Skeleton.physicsTranslate`, as `LiveTrack.physicsTranslate`. */
-  physicsTranslate(x: number, y: number): void;
-  /** spine-core's `Skeleton.physicsRotate`, as `LiveTrack.physicsRotate`. */
-  physicsRotate(x: number, y: number, degrees: number): void;
+  /** Scope omitted: all physics; otherwise exact physics names, validated atomically. Empty selects none, duplicates select once.
+   * Movement changes remembered world origins synchronously, before the next evaluation.
+   * spine-core's `Skeleton.physicsTranslate`, as `LiveTrack.physicsTranslate`. */
+  physicsTranslate(x: number, y: number, scope?: readonly string[]): void;
+  /** Same exact-name scope and explicit world pivot as `LiveTrack.physicsRotate`. */
+  physicsRotate(x: number, y: number, degrees: number, scope?: readonly string[]): void;
 }
 
 /**
@@ -1384,14 +1386,14 @@ class Tracks implements LiveTracks {
     this.parameters.clear(name);
   }
 
-  physicsTranslate(x: number, y: number): void {
+  physicsTranslate(x: number, y: number, scope?: readonly string[]): void {
     this.live('physicsTranslate');
-    translateOn(this.path.ctx, x, y, 'the live tracks\'');
+    translateOn(this.path.ctx, x, y, 'the live tracks\'', checkedPhysicsScope(this.doc, scope, 'the live tracks\''));
   }
 
-  physicsRotate(x: number, y: number, degrees: number): void {
+  physicsRotate(x: number, y: number, degrees: number, scope?: readonly string[]): void {
     this.live('physicsRotate');
-    rotateOn(this.path.ctx, x, y, degrees, 'the live tracks\'');
+    rotateOn(this.path.ctx, x, y, degrees, 'the live tracks\'', checkedPhysicsScope(this.doc, scope, 'the live tracks\''));
   }
 
   private live(call: string): void {

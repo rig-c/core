@@ -645,8 +645,9 @@ export const DEFAULT_PHYSICS_ENVIRONMENT: PhysicsEnvironment = Object.freeze({ w
  * pose. A constraint with no state yet has not been updated, and its first
  * update is pending, so the runtime's translation of it is read by nothing.
  */
-export function translatePhysics(ctx: PhysicsStepContext, x: number, y: number): void {
-  for (const s of ctx.states.values()) {
+export function translatePhysics(ctx: PhysicsStepContext, x: number, y: number, scope?: ReadonlySet<string>): void {
+  for (const [name, s] of ctx.states) {
+    if (scope !== undefined && !scope.has(name)) continue;
     s.ux -= x;
     s.uy -= y;
     s.cx -= x;
@@ -661,11 +662,12 @@ export function translatePhysics(ctx: PhysicsStepContext, x: number, y: number):
  * a translation of each constraint by how far that turn carries the origin it
  * last saw, as `PhysicsConstraint.rotate` computes it.
  */
-export function rotatePhysics(ctx: PhysicsStepContext, x: number, y: number, degrees: number): void {
+export function rotatePhysics(ctx: PhysicsStepContext, x: number, y: number, degrees: number, scope?: ReadonlySet<string>): void {
   const r = degrees * RUNTIME_RAD;
   const cos = Math.cos(r);
   const sin = Math.sin(r);
-  for (const s of ctx.states.values()) {
+  for (const [name, s] of ctx.states) {
+    if (scope !== undefined && !scope.has(name)) continue;
     const dx = s.cx - x;
     const dy = s.cy - y;
     const tx = dx * cos - dy * sin - dx;

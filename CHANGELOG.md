@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.77.0](https://github.com/rig-c/core/compare/v2.76.0...v2.77.0) (2026-10-27)
+
+
+### Features
+
+* **runtime:** stage 4 — path constraints and a scoped physics input in the runtime poser, equal to the oracle at tolerance 0 ([#1616](https://github.com/rig-c/core/issues/1616)) ([fe2fe66](https://github.com/rig-c/core/commit/fe2fe6648a278809ed699250e0265711ebff41f5))
+
 ## [2.76.0](https://github.com/rig-c/core/compare/v2.75.0...v2.76.0) (2026-10-27)
 
 

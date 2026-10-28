@@ -180,7 +180,7 @@ verification tooling, not an installed `rigc` command or a change to CI's matrix
 **The canonical npm package is `@rig-c/core`; the command it installs is `rigc`.**
 `rig-c` remains a convenience install name. npm
 refuses the name `rigc` as too similar to packages that already exist, so the
-project and the executable keep their name and the registry entry carries one
+project and the executable keep their name; the convenience name `rig-c` carries one
 hyphen; the repository is [`rig-c/core`](https://github.com/rig-c/core). **`spine-rigc` is the legacy install name for the same package**: it is the name
 every version up to 2.20.4 shipped under, and it stays published as an alias —
 every version from 2.20.4 on is on both names, with the same files — so a

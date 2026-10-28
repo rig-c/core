@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.80.0](https://github.com/rig-c/core/compare/v2.79.0...v2.80.0) (2026-10-28)
+
+
+### Features
+
+* **editor-roundtrip:** name the editor's added convex flag on a concave clip instead of leaving it as unexplained drift ([#1631](https://github.com/rig-c/core/issues/1631)) ([48c735c](https://github.com/rig-c/core/commit/48c735cd11311c1dd170d6b42abeef51c0dbd2d7)), closes [#1630](https://github.com/rig-c/core/issues/1630)
+
+
+### Bug Fixes
+
+* **docs:** name @rig-c/core as the canonical package in the README, the rigc skill and the pilot guide ([#1626](https://github.com/rig-c/core/issues/1626)) ([1ffcc98](https://github.com/rig-c/core/commit/1ffcc98c745c6b48818faae0d33264d7feec064b))
+
 ## [2.79.0](https://github.com/rig-c/core/compare/v2.78.0...v2.79.0) (2026-10-28)
 
 

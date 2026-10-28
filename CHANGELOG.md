@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.79.0](https://github.com/rig-c/core/compare/v2.78.0...v2.79.0) (2026-10-28)
+
+
+### Features
+
+* **runtime:** stage 6 — local transform constraints in the runtime poser, equal to the oracle at tolerance 0 ([#1620](https://github.com/rig-c/core/issues/1620)) ([c55f49d](https://github.com/rig-c/core/commit/c55f49dcd13a332a406d25e25613f9da5a687a65))
+* **runtime:** stage 7 — world transform constraints on no-scale targets, equal to the oracle at tolerance 0 ([#1621](https://github.com/rig-c/core/issues/1621)) ([48b9d97](https://github.com/rig-c/core/commit/48b9d97ebede97c3e535d7696c53608067801ed4))
+* **runtime:** stage 8 — additive transform constraints in the runtime poser, equal to the oracle at tolerance 0 ([#1622](https://github.com/rig-c/core/issues/1622)) ([74425c3](https://github.com/rig-c/core/commit/74425c35dd560af0d3f08a7a365eb476b9b8e560))
+* **runtime:** stage 9 — clipping in the runtime poser, equal to the oracle at tolerance 0 ([#1624](https://github.com/rig-c/core/issues/1624)) ([75f10a9](https://github.com/rig-c/core/commit/75f10a906bef37336039d202faf4ec6047a99453)), closes [#1591](https://github.com/rig-c/core/issues/1591)
+
 ## [2.78.0](https://github.com/rig-c/core/compare/v2.77.0...v2.78.0) (2026-10-27)
 
 

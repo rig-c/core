@@ -917,6 +917,75 @@ export function skinRoster(
   };
 }
 
+/** An attachment's declaration key, kept separate from its skin and slot. */
+interface ClipFlagSkin {
+  name: string;
+  attachments?: Record<string, Record<string, { type?: string; convex?: boolean; end?: string }>>;
+}
+
+/** Reflex turns of the world's own doubles, winding independent; straight turns are not reflex. */
+function reflexVertices(polygon: readonly number[]): number {
+  const n = polygon.length / 2;
+  let area2 = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    area2 += polygon[2 * i] * polygon[2 * j + 1] - polygon[2 * j] * polygon[2 * i + 1];
+  }
+  const winding = Math.sign(area2);
+  if (winding === 0) return 0; // Degenerate geometry is the validator's refusal.
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const k = (i + 2) % n;
+    const turn =
+      (polygon[2 * j] - polygon[2 * i]) * (polygon[2 * k + 1] - polygon[2 * j + 1]) -
+      (polygon[2 * j + 1] - polygon[2 * i + 1]) * (polygon[2 * k] - polygon[2 * j]);
+    if (turn !== 0 && Math.sign(turn) !== winding) count++;
+  }
+  return count;
+}
+
+/**
+ * An editor-added convex flag changes a concave clip's meaning (issue #1630).
+ * Compare the same skin/slot/attachment, then read the BUILD's posed authored
+ * setup polygon. Weighted runs are not points; an animation deform is not the
+ * authored setup shape. Empty deform follows the renderer's `restOf` convention.
+ * Imports are lazy so the existing no-editor/trial/read refusals need no runtime.
+ */
+async function addedConvexClipFailures(build: string, exported: string, buildDir: string): Promise<string[]> {
+  const before = (JSON.parse(readFileSync(build, 'utf8')) as { skins?: ClipFlagSkin[] }).skins;
+  const after = (JSON.parse(readFileSync(exported, 'utf8')) as { skins?: ClipFlagSkin[] }).skins;
+  const candidates: Array<{ skin: string; slot: string; attachment: string; end: string | null }> = [];
+  for (const skin of Array.isArray(after) ? after : []) {
+    const originalSkin = (Array.isArray(before) ? before : []).find((s) => s.name === skin.name);
+    for (const [slot, attachments] of Object.entries(skin.attachments ?? {})) {
+      for (const [attachment, clip] of Object.entries(attachments)) {
+        const original = originalSkin?.attachments?.[slot]?.[attachment];
+        if (clip.type === 'clipping' && clip.convex === true && original?.type === 'clipping' && original.convex !== true) {
+          candidates.push({ skin: skin.name, slot, attachment, end: original.end ?? null });
+        }
+      }
+    }
+  }
+  if (candidates.length === 0) return [];
+  const { posableFromText, setupClipPolygon } = await import('../src/render.ts');
+  const atlas = readdirSync(buildDir).find((name) => name.endsWith('.atlas'))!;
+  const { data } = posableFromText(readFileSync(build, 'utf8'), readFileSync(join(buildDir, atlas), 'utf8'), buildDir);
+  const lines: string[] = [];
+  for (const candidate of candidates) {
+    const polygon = setupClipPolygon(data, candidate.skin, candidate.slot, candidate.attachment);
+    const reflex = reflexVertices(polygon);
+    if (reflex > 0) {
+      lines.push(
+        `  FAIL  EDITOR_ADDED_CONVEX_ON_CONCAVE_CLIP skin ${JSON.stringify(candidate.skin)} slot ${JSON.stringify(candidate.slot)} ` +
+          `attachment ${JSON.stringify(candidate.attachment)} end ${JSON.stringify(candidate.end)}: export convex=true, build convex is not true; ` +
+          `setup reflex vertices=${reflex}; the editor's export clips with the convex hull of the authored concave polygon`,
+      );
+    }
+  }
+  return lines;
+}
+
 /**
  * One measure of a `diff --json` report as `matched/total (ratio)`, or `null`
  * when the report or the measure is not there — read off the report for the
@@ -1185,7 +1254,7 @@ function imagesProbeFault(skeleton: Record<string, unknown>): string | null {
   return null;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   const rigc = rigcCommand();
 
@@ -1489,6 +1558,21 @@ function main(): void {
   // console layout for them would break the first time that layout is tidied.
   for (const line of diffSummaryLines(diffJson)) emit(`  ${line}`);
 
+  // Report the changed meaning without skipping any later per-skin figures.
+  let clipFailures: string[];
+  try {
+    // An unreadable export has no semantic comparison. Leave its established
+    // gate/read failure intact (including the late-read planted controls).
+    clipFailures = gate.status === 0 ? await addedConvexClipFailures(source, join(cand, 'skeleton.json'), opts.build) : [];
+  } catch (error) {
+    return fail(`could not measure clipping setup geometry: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (clipFailures.length > 0) {
+    emit('');
+    emit('## 4.1 clipping semantics');
+    for (const line of clipFailures) emit(line);
+  }
+
   // 🔒 The skins come off BOTH files, compared before anything is rendered
   // (issue #801). A skin the export dropped is named here as LOST BY THE EXPORT
   // and fails the run; enumerating the export's skins alone would quietly stop
@@ -1627,7 +1711,7 @@ function main(): void {
   // is the half a single un-skinned check could not say.
   // A version line that disagrees with the export is red too (issue #1199): the
   // report would otherwise name an editor the trip did not run on, green.
-  process.exit(gate.status === 0 && checksClean && rosterClean && !versionDisagrees ? 0 : 1);
+  process.exit(gate.status === 0 && checksClean && rosterClean && !versionDisagrees && clipFailures.length === 0 ? 0 : 1);
 }
 
 // ⭐ Guarded so `shapeOf`, `shapeDiff`, `skinsDeclaredBy` and `skinBlocks` can be
@@ -1638,4 +1722,4 @@ function main(): void {
 // reach either would be paying for a round trip to test arithmetic. Run as a
 // program this is unchanged: `bun tools/editor_roundtrip.ts …` makes this module
 // the entry, so `import.meta.main` is true.
-if (import.meta.main) main();
+if (import.meta.main) await main();

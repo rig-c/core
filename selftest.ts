@@ -74166,6 +74166,89 @@ function runEditorRoundtripSuite(): number {
     }
   }
 
+  // --- ERT90-96: the editor's added convex flag — issue #1630 ---------------
+  // Stub exports exercise the actual measuring tool, with no editor. A clip
+  // and a bounding box draw nothing, so step 5 must still report its ordinary
+  // per-skin SKIP rather than letting the new semantic failure short-circuit it.
+  {
+    const at = join(root, 'added-convex');
+    mkdirSync(at, { recursive: true });
+    const CONCAVE = [0, 0, 40, 0, 40, 40, 24, 40, 24, 16, 16, 16, 16, 40, 0, 40];
+    const CONVEX = [0, 0, 40, 0, 40, 40, 0, 40];
+    const reversed = (vertices: number[]): number[] => {
+      const points: number[][] = [];
+      for (let i = 0; i < vertices.length; i += 2) points.push(vertices.slice(i, i + 2));
+      return points.reverse().flat();
+    };
+    interface ClipStub { type: 'clipping'; end: string; vertexCount: number; vertices: number[]; convex?: boolean }
+    const clip = (vertices: number[], weighted = false, stated?: boolean): ClipStub => ({
+      type: 'clipping', end: 'pupil', vertexCount: vertices.length / 2,
+      vertices: weighted ? vertices.flatMap((_, i) => i % 2 === 0 ? [1, 1, vertices[i], vertices[i + 1], 1] : []) : [...vertices],
+      ...(stated === undefined ? {} : { convex: stated }),
+    });
+    const skeleton = (skins: Array<{ name: string; clip: ClipStub }>) => ({
+      skeleton: { spine: '4.3.13', x: 0, y: 0, width: 64, height: 64, images: './' },
+      bones: [{ name: 'root' }, { name: 'weighted', parent: 'root', x: 5, y: 7, rotation: 23, scaleX: -1 }],
+      slots: [{ name: 'clip', bone: 'root', attachment: 'clip' }, { name: 'pupil', bone: 'root', attachment: 'pupil' }],
+      skins: skins.map((skin) => ({ name: skin.name, attachments: {
+        clip: { clip: skin.clip },
+        pupil: { pupil: { type: 'boundingbox', vertexCount: 4, vertices: [...CONVEX] } },
+      } })),
+      animations: {},
+    });
+    let sequence = 0;
+    const trip = (before: unknown, after: unknown) => {
+      const dir = join(at, String(sequence++));
+      const buildDir = join(dir, 'build');
+      mkdirSync(buildDir, { recursive: true });
+      writeFileSync(join(buildDir, 'skeleton.json'), `${JSON.stringify(before)}\n`);
+      writeFileSync(join(buildDir, 'skeleton.atlas'), 'skeleton.png\nsize: 64, 64\nfilter: Linear, Linear\npma: false\nunused\nbounds: 0, 0, 64, 64\noffsets: 0, 0, 64, 64\nrotate: 0\n');
+      const page = new Plate(64, 64); page.data.fill(255); page.writePng(join(buildDir, 'skeleton.png'));
+      const exported = join(dir, 'export.json');
+      writeFileSync(exported, `${JSON.stringify(after)}\n`);
+      const ran = runRoundtrip(['--build', buildDir, '--out', join(dir, 'out'), '--exported', exported, '--fps', '1']);
+      return { ...ran, lines: ran.stdout.split('\n').filter((line) => line.includes('FAIL  EDITOR_ADDED_CONVEX_ON_CONCAVE_CLIP')) };
+    };
+    const one = (vertices: number[], weighted = false, stated?: boolean) => skeleton([{ name: 'default', clip: clip(vertices, weighted, stated) }]);
+    const added = (before: ReturnType<typeof skeleton>) => {
+      const after = structuredClone(before);
+      for (const skin of after.skins) skin.attachments.clip.clip.convex = true;
+      return after;
+    };
+    const named = (ran: ReturnType<typeof trip>, skin: string): boolean =>
+      ran.status === 1 && ran.lines.length === 1 && ran.lines[0].includes(`skin ${JSON.stringify(skin)}`) &&
+      ran.lines[0].includes('slot "clip" attachment "clip"') && ran.lines[0].includes('reflex vertices=2') &&
+      ran.lines[0].includes("the editor's export clips with the convex hull of the authored concave polygon") &&
+      ran.stdout.includes('## 5.') && ran.stdout.includes('## 6 what the editor rewrote');
+    const quiet = (ran: ReturnType<typeof trip>): boolean => ran.status === 0 && ran.lines.length === 0 && ran.stdout.includes('## 6 what the editor rewrote');
+    const detail = (runs: Array<ReturnType<typeof trip>>): string => runs.map((r) => `exit=${String(r.status)}, named lines=${r.lines.length}, ${r.lines[0] ?? r.stderr.trim().slice(-160)}, child failures=${JSON.stringify(r.stdout.split('\n').filter((line) => /^\s*FAIL/.test(line)))}`).join(' | ');
+    const concave = [CONCAVE, reversed(CONCAVE)].map((v) => { const b = one(v); return trip(b, added(b)); });
+    say('ERT90_ADDED_CONVEX_ON_CONCAVE_CLIP_IS_NAMED_ON_BOTH_WINDINGS_WITH_REFLEX_COUNT', concave.every((r) => named(r, 'default')), detail(concave),
+      'the actual tool must name the new hull semantics, keep later skin/check reporting, and exit red; a source-only helper test would not show the line reaches the report');
+    const convex = [CONVEX, [0, 0, 20, 0, 40, 0, 40, 40, 0, 40]].map((v) => { const b = one(v); return trip(b, added(b)); });
+    say('ERT91_ADDED_CONVEX_ON_CONVEX_OR_COLLINEAR_CONVEX_CLIP_ADDS_NO_FAILURE', convex.every(quiet), detail(convex),
+      'a convex contour, including a straight boundary vertex, has no reflex vertex; reporting every added flag would falsely fail both positive controls');
+    const stated = one(CONCAVE, false, true); const own = trip(stated, added(stated));
+    say('ERT92_A_BUILD_ALREADY_STATING_CONVEX_TRUE_IS_NOT_REPORTED_AS_AN_EDITOR_ADDITION', quiet(own), detail([own]),
+      'the warning concerns an editor-added flag, not an authored choice already in the build');
+    const wc = one(CONCAVE, true); const weightedConcave = trip(wc, added(wc));
+    say('ERT93_WEIGHTED_CONCAVE_CLIP_IS_READ_IN_POSED_SETUP_WORLD_GEOMETRY', named(weightedConcave, 'default'), detail([weightedConcave]),
+      'the polygon is weighted to a rotated and reflected bone other than the clipping slot bone; raw weight runs are not polygon coordinates');
+    const wv = one(CONVEX, true); const weightedConvex = trip(wv, added(wv));
+    say('ERT94_WEIGHTED_CONVEX_CLIP_IS_NOT_MISREAD_AS_A_CONCAVE_WEIGHT_RUN', quiet(weightedConvex), detail([weightedConvex]),
+      'the same weighted encoding carries a convex positive control; treating encoded weights as points must not create a warning');
+    const skins = skeleton([{ name: 'concave', clip: clip(CONCAVE) }, { name: 'convex', clip: clip(CONVEX) }]);
+    const changedConvex = structuredClone(skins); changedConvex.skins[1].attachments.clip.clip.convex = true;
+    const differentSkin = trip(skins, changedConvex); const matchingSkin = trip(skins, added(skins));
+    say('ERT95_CLIP_FLAG_COMPARISON_MATCHES_SKIN_SLOT_AND_ATTACHMENT_IDENTITY', quiet(differentSkin) && named(matchingSkin, 'concave'), detail([differentSkin, matchingSkin]),
+      'the same slot and attachment key occur in two skins: an added flag on the convex skin must not borrow concavity from the other one');
+    const animated = { ...one(CONVEX), animations: { deform: { attachments: { default: { clip: { clip: { deform: [{ vertices: [0, 0, 0, 0, -24, -24, 0, 0] }] } } } } } } };
+    const animatedAfter = structuredClone(animated); animatedAfter.skins[0].attachments.clip.clip.convex = true;
+    const deform = trip(animated, animatedAfter);
+    say('ERT96_ANIMATION_DEFORM_IS_NOT_SUBSTITUTED_FOR_THE_AUTHORED_SETUP_POLYGON', quiet(deform), detail([deform]),
+      'the card concerns authored setup geometry: an animation-time deform making a convex setup concave is not an editor-added flag on a concave setup');
+  }
+
   rmSync(root, { recursive: true, force: true });
   return bad;
 }

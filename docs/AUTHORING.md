@@ -11267,6 +11267,27 @@ Everything above is what the editor **does**. This is what it **returns** — wh
 matters to you for one reason: a construct nobody has carried through the editor
 is a construct that might vanish there, and an agent cannot see that it did.
 
+`tools/editor_roundtrip.ts` also names a clipping semantic change after export
+(issue #1630), including under `--exported`. If the export adds `convex: true`
+where the same skin/slot/attachment in the build did not state true, and the
+build's authored setup polygon has a reflex vertex, it prints:
+
+```text
+FAIL  EDITOR_ADDED_CONVEX_ON_CONCAVE_CLIP skin "S" slot "C" attachment "A" end "E": export convex=true, build convex is not true; setup reflex vertices=N; the editor's export clips with the convex hull of the authored concave polygon
+```
+
+The setup polygon is read through the runtime with that skin applied, setup
+bones and constraints posed, and the slot's deform empty, as for the renderer's
+authored rest geometry. Weighted vertex runs are therefore read as posed points,
+not mistaken for coordinate pairs; animation-time deformation is not substituted
+for the authored setup shape. Reflex turns are counted in either winding and
+straight boundary vertices do not make a convex polygon concave. A convex setup
+polygon or a build already stating `convex: true` adds no line. The named failure
+makes the trip exit nonzero **after** the existing per-skin render/check figures
+are printed; it does not replace those measurements. It changes neither compiler
+emission nor coordinates, and does not imply that removing the export's flag
+undoes the editor's other changes.
+
 🔬 The source is one run: eight discriminator rigs, each built to isolate a group
 of fields, compiled by rigc **0.21.0** (emitting 4.3.13), imported into a licensed
 Spine **4.3.26** through the documented CLI and exported back, with the

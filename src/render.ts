@@ -581,6 +581,28 @@ function setupPosed(data: SkeletonData, skin: string | undefined): Skeleton {
   return skeleton;
 }
 
+/** A named clip's authored setup polygon under its own skin, with no deform. */
+export function setupClipPolygon(
+  data: SkeletonData,
+  skin: string,
+  slotName: string,
+  attachmentName: string,
+): number[] {
+  const skeleton = setupPosed(data, skin);
+  const index = data.findSlot(slotName)?.index ?? -1;
+  const slot = skeleton.slots[index];
+  const attachment = data.findSkin(skin)?.getAttachment(index, attachmentName);
+  if (slot === undefined || !(attachment instanceof ClippingAttachment)) {
+    throw new Error(
+      `setup clip skin ${JSON.stringify(skin)} slot ${JSON.stringify(slotName)} attachment ${JSON.stringify(attachmentName)} did not resolve`,
+    );
+  }
+  slot.appliedPose.deform.length = 0;
+  const polygon = new Array<number>(attachment.worldVerticesLength).fill(0);
+  attachment.computeWorldVertices(skeleton, slot, 0, attachment.worldVerticesLength, polygon, 0, 2);
+  return polygon;
+}
+
 /**
  * Both posers for the skeleton at `skeletonPath` drawn through the atlas at
  * `atlasPath`, with spine-core's parse of it already in hand (`data`) — the

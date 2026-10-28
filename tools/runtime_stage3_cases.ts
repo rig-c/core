@@ -14,6 +14,7 @@ import { MODEL_DOCUMENT_FILE, modelDocument } from '../src/model.ts';
 import { skirtFixture, passThroughFixture, legStopFixture } from '../fixtures/public.ts';
 import { stepRuntimePhysics, freshPhysicsState } from '../src/runtime/physics.ts';
 import { stepPhysics, freshStepContext, type CorePhysicsRecord } from '../src/core/constraints_physics.ts';
+import { runtimeStage9Cases } from './runtime_stage9_cases.ts';
 import { deformProbe } from './runtime_stage2_cases.ts';
 
 type Say = (name: string, problems: string[], detail: string) => void;
@@ -1320,6 +1321,7 @@ export function runtimeStage8Cases(say: Say): void {
     } finally { rmSync(work, { recursive: true, force: true }); }
     say('RP52_ADDITIVE_TRANSFORMS_STEADY_STATE_ZERO_ALLOCATION', problems, details.join('; '));
   }
+  runtimeStage9Cases(say);
 }
 
 if (import.meta.main) {

@@ -1,5 +1,5 @@
 /**
- * The runtime poser's per-instance half (issue #1591, stage 8): one
+ * The runtime poser's per-instance half (issue #1591, stage 9): one
  * `RuntimePose` per skeleton on screen, every buffer allocated when it is
  * made and overwritten in place on every pose, so that posing a frame
  * allocates nothing.
@@ -40,6 +40,7 @@
  * exactly 0 touching nothing; an inactive bone posed as zeros by the
  * hierarchy and never posed again by a constraint, nor the bones below it.
  */
+import { RuntimeDrawClipper } from './clip_draw.ts';
 import type { CorePhysicsRecord } from '../core/constraints_physics.ts';
 import { freshPhysicsState, resetPhysicsState, stepRuntimePhysics, type PhysicsState } from './physics.ts';
 import { COLLAPSED_X_AXIS_SQ, RUNTIME_DEG, RUNTIME_PI } from '../core/world.ts';
@@ -138,6 +139,8 @@ export class RuntimePose {
   readonly drawOrder: Int32Array;
   /** Every attachment's world vertices at its `offset`, written by `computeVertices` for the attachments shown. */
   readonly vertices: Float64Array;
+  /** Buffered clipping output; null when the compiled model has no clipping attachments. */
+  readonly clipping: RuntimeDrawClipper | null;
   /** Held/interpolated deform values, one pair per binding when weighted. */
   readonly deform: Float64Array;
   private readonly deformed: Uint8Array;
@@ -192,6 +195,7 @@ export class RuntimePose {
 
   constructor(model: RuntimeModel, options: RuntimePoseOptions = {}) {
     this.model = model;
+    this.clipping = model.attachments.some(at => at.clip !== undefined) ? new RuntimeDrawClipper(model) : null;
     this.clock = options.clock;
     this.hasPhysics = model.constraints.some(c => c.kind === 'physics');
     this.physicsStates = model.constraints.map(() => freshPhysicsState());
@@ -1831,6 +1835,14 @@ export class RuntimePose {
         }
       }
     }
+  }
+
+  /** Recompute vertices and overwrite clipping output, without per-frame allocation.
+   * Concave/inverse rows describe the core's drawn coverage, not Spine's native triangle list.
+   */
+  computeClipped(): void {
+    this.computeVertices();
+    this.clipping?.frame(this);
   }
 
   /** Every shown attachment's world vertices into `vertices` at its offset (`regionCorners`, `worldVertices`). */

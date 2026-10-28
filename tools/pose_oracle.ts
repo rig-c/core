@@ -473,7 +473,7 @@ import { poseLoopingWalk, poseWalkSetup, walkHistory, type WalkPlant, type WalkP
 import { noSkinView } from '../src/render_core.ts';
 import { STEP_FRAMES } from '../src/assertions/bodies/a10.ts';
 import { fileAnimationOrder } from '../src/compile.ts';
-import { compileRuntime, DRAW_NONE, DRAW_REGION, RUNTIME_STAGE, RuntimePose, W_A, W_B, W_C, W_D, W_X, W_Y, WORLDS, type RuntimeAnimation, type RuntimeMissing, type RuntimePlant } from '../src/runtime/index.ts';
+import { compileRuntime, DRAW_NONE, DRAW_REGION, RUNTIME_STAGE, RuntimePose, RuntimeRefusal, W_A, W_B, W_C, W_D, W_X, W_Y, WORLDS, type RuntimeAnimation, type RuntimeMissing, type RuntimePlant } from '../src/runtime/index.ts';
 
 export const ORACLE_SPEC = 'pose-oracle/4';
 // --- #966 raw: begin ---
@@ -1146,7 +1146,9 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
   const runtime = compileRuntime(doc, {}, plant);
   const pose = new RuntimePose(runtime);
   const read = (): OracleDocumentPose => {
-    pose.computeVertices();
+    pose.computeClipped();
+    const clipping = pose.clipping;
+    if (clipping !== null && !clipping.nativeRows) throw new RuntimeRefusal([{ feature: 'oracle-absent', detail: 'the oracle has no native clipped rows for a concave, inverse or repeated-vertex polygon; core coverage is available through RuntimePose.computeClipped', animation: null }]);
     const bones = runtime.boneNames.map((name, i): BoneRow => {
       const o = i * WORLDS;
       const w = pose.world;
@@ -1168,9 +1170,20 @@ export function runtimeDump(model: CompiledDocument, options: OracleOptions, pla
       drawOrder.push(slot.name);
       const shown = pose.shown[s];
       const at = shown < 0 ? null : runtime.attachments[shown];
-      if (at !== null && at.draw !== DRAW_NONE) attachments.push([slot.name, at.name, at.draw === DRAW_REGION ? 'region' : 'mesh', [...pose.vertices.subarray(at.offset, at.offset + at.count)].map(round)]);
+      if (at !== null && at.clip === undefined && at.draw !== DRAW_NONE) attachments.push([slot.name, at.name, at.draw === DRAW_REGION ? 'region' : 'mesh', [...pose.vertices.subarray(at.offset, at.offset + at.count)].map(round)]);
     }
-    return { bones, slots, drawOrder, attachments, clips: [], clipped: [], uvs: null };
+    const clips: ClipRow[] = [], clipped: ClippedRow[] = [];
+    if (clipping !== null) {
+      for (let i = 0; i < clipping.clipCount; i++) {
+        const s = clipping.clipSlots[i], at = runtime.attachments[pose.shown[s]];
+        clips.push([runtime.slots[s].name, at.name, at.clip!.end, Array.from(pose.vertices.subarray(at.offset, at.offset + at.count), round)]);
+      }
+      for (let i = 0; i < clipping.drawCount; i++) {
+        const s = clipping.drawSlots[i], at = runtime.attachments[pose.shown[s]], out = clipping.outputs[s];
+        clipped.push([runtime.slots[s].name, at.name, out.clipped ? 1 : 0, Array.from(out.vertices.subarray(0, out.vertexCount * 2), round), Array.from(out.uvs.subarray(0, out.vertexCount * 2), round), Array.from(out.triangles.subarray(0, out.triangleCount * 3))]);
+      }
+    }
+    return { bones, slots, drawOrder, attachments, clips, clipped, uvs: null };
   };
   pose.setupPose(options.physics === 'step' ? 'reset' : 'none');
   const setup = read();

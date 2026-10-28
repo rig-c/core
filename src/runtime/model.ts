@@ -1,5 +1,5 @@
 /**
- * The runtime poser's load-time half (issue #1591, stage 8): a skin view of
+ * The runtime poser's load-time half (issue #1591, stage 9): a skin view of
  * the compiled model (`readModel`, then `underSkin` / `underNoSkin` — the
  * oracle's reader and its views, read and never written) compiled once into
  * index-resolved bones and slots, a constraint plan, compiled timelines and
@@ -13,16 +13,16 @@
  *
  * - **refuses the model** (`RuntimeRefusal`, every missing feature listed)
  *   when one is a property of the whole model — an ik, transform or path constraint
- *   over a bone the view leaves inactive, a clipping attachment or a region with no
+ *   over a bone the view leaves inactive, a region with no
  *   atlas rectangle shown at setup, a placeholder the skins fill
  *   differently, or a block the oracle itself leaves out;
  * - **refuses an animation** (`RuntimeModel.refused`; `animation(name)`
  *   throws the same `RuntimeRefusal`) when the construct is the animation's
  *   — an `inherit` timeline, a sequence timeline, or an
- *   attachment key showing a clipping attachment or a region with no atlas
+ *   attachment key showing a region with no atlas
  *   rectangle. Every other animation of the model is posed.
  *
- * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 8 adds
+ * `RUNTIME_FEATURES` is the closed list of what can be named. Stage 9 adds buffered clipping draw output; stage 8 added
  * additive local/world transform constraints. Stage 7 admitted
  * world transform targets in both no-scale inherit modes, using the existing
  * localFromWorld read-back. Stage 6 added local-source and local-target transforms. Draw-order,
@@ -56,12 +56,11 @@ import type { CoreSliderRecord } from '../core/constraints_slider.ts';
 import { compileCurve, compileDeformCurve, type RuntimeCurve } from './curves.ts';
 
 /** The stage of issue #1591 this poser implements. */
-export const RUNTIME_STAGE = 8;
+export const RUNTIME_STAGE = 9;
 
 /** Every construct the runtime poser can refuse, by the name its refusals carry. */
 export const RUNTIME_FEATURES = [
   'inactive-constrained-bone',
-  'clipping',
   'null-atlas-region',
   'skin-conflict',
   'oracle-absent',
@@ -205,6 +204,10 @@ export const RAD = RUNTIME_PI / 180;
  * bindings (bone index, float32 coordinates, float32 weight) in their order.
  */
 export interface RuntimeAttachment {
+  /** Source topology resolved at load for models containing clipping. */
+  readonly clipTopology?: { readonly triangles: Int32Array; readonly uvs: Float64Array };
+  /** Clip polygon metadata, resolved once with the attachment. */
+  readonly clip?: { readonly end: string | null; readonly inverse: boolean; readonly convex: boolean };
   /** Source timeline identity, including linked-mesh inheritance, resolved once. */
   readonly timeline: string | null;
   readonly deformOffset: number;
@@ -600,6 +603,7 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
   }
 
   // --- slots and the records they show ---
+  const hasClipping = doc.skins.some(s => Object.values(s.attachments).some(table => Object.values(table).some(at => at.geometry?.kind === 'clipping')));
   const attachments: RuntimeAttachment[] = [];
   let vertexCount = 0;
   let deformCount = 0;
@@ -627,7 +631,9 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     const at = { timeline: timelineIdentity(slot.name, shown), deformOffset: deformCount, slot: si, name: row.name, skin: shown.skin, placeholder: shown.placeholder, path: CORE_REGION_KINDS.has(shown.record.kind) ? row.path : null, bone: indexOf(slot.bone), offset: vertexCount };
     let made: RuntimeAttachment | null = null;
     let missing: readonly [RuntimeFeature, string] | null = null;
-    if (g?.kind === 'clipping') missing = ['clipping', `slot "${slot.name}" shows clipping attachment "${row.name}"`];
+    if (g?.kind === 'clipping') {
+      made = { ...meshAttachment(at, g.vertices, indexOf, plant.bindingIndex, nb), clip: { end: g.end, inverse: g.inverse, convex: g.convex } };
+    }
     else if (g?.kind === 'region') {
       const r = g.region;
       if (r.atlas === null) missing = ['null-atlas-region', `slot "${slot.name}" shows region "${row.name}", whose atlas rectangle the model states as null`];
@@ -668,6 +674,14 @@ export function compileRuntime(doc: CompiledDocument, options: RuntimeOptions = 
     }
     // A bounding box, a refused record admitted by a plant: the row's name and path, and nothing drawn.
     if (made === null) made = vertexAttachment(at, DRAW_NONE, new Float64Array(0), 0);
+    if (hasClipping) {
+      if (g?.kind === 'region') made = { ...made, clipTopology: { triangles: new Int32Array([0, 1, 2, 2, 3, 0]), uvs: new Float64Array([0, 1, 0, 0, 1, 0, 1, 1]) } };
+      else if (g?.kind === 'mesh' || g?.kind === 'linkedmesh') {
+        const mesh = g.kind === 'mesh' ? g : doc.skins.find(s => s.name === g.skin)?.attachments[g.slot]?.[g.source]?.geometry;
+        if (mesh?.kind !== 'mesh') throw new RuntimeInputError('clipping topology: linked source is not a mesh (readModel refuses it first)');
+        made = { ...made, clipTopology: { triangles: Int32Array.from(mesh.triangles), uvs: Float64Array.from(mesh.uvs) } };
+      }
+    }
     attachments.push(made);
     vertexCount += made.count;
     deformCount += made.deformCount;

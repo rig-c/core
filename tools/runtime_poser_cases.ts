@@ -609,7 +609,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     // The model's own constructs: each refuses the whole model, naming itself.
     const modelProbes: Array<[RuntimeFeature, ProbeSpec]> = [
       ['inactive-constrained-bone', { ...base, bones: base.bones.map((b) => (b.name === 'b' ? { ...b, skinRequired: true } : b)) }],
-      ['clipping', { ...base, attachments: { ...base.attachments, s: { p: { kind: 'clipping', vertexCount: 3, vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] } } } } }],
       ['null-atlas-region', { ...base, attachments: { ...base.attachments, s: { p: { kind: 'region', width: 10, height: 10, atlas: null } } } }],
       ['skin-conflict', { ...base, skins: [{ name: 'extra', bones: [], constraints: {}, attachments: { s: { p: { kind: 'region', name: 'other', width: 10, height: 10, atlas: rect(10, 10) } } } }] }],
       // A transform writing into an inactive bone, and a second reading the active bone below it while it moves a posed one: the oracle refuses the pose (`unposedLeakWhy`).
@@ -625,7 +624,6 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     const animationProbes: Array<[RuntimeFeature, ProbeSpec, Obj]> = [
       ['inherit-timeline', base, { name: 'x', bones: [{ name: 'b', timelines: [{ name: 'inherit', keys: [{ time: 0, inherit: 'onlyTranslation' }] }] }] }],
       ['sequence-timeline', { ...base, attachments: { ...base.attachments, s: { p: seqRegion } } }, { name: 'x', attachments: [{ name: 'default', slots: [{ name: 's', attachments: [{ name: 'p', sequence: [{ time: 0, mode: 'loop', index: 0, delay: 0.1 }] }] }] }] }],
-      ['clipping', { ...base, attachments: { ...base.attachments, s: { ...(base.attachments?.s ?? {}), c: { kind: 'clipping', vertexCount: 3, vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] } } } } }, { name: 'x', slots: [{ name: 's', timelines: [{ name: 'attachment', keys: [{ time: 0.5, name: 'c' }] }] }] }],
     ];
     for (const [feature, spec, animation] of animationProbes) {
       const text = probeModel({ ...spec, animations: [...(spec.animations ?? []), animation] });
@@ -671,7 +669,7 @@ export function runtimePoserCases(say: Say, input: RuntimeCasesInput): void {
     const probes: string[] = [];
     const galleryRefused = gallery.filter((r) => r.refusedAtLoad !== null);
     if (galleryRefused.length > 0) probes.push(`gallery rig(s) still refused at load: ${galleryRefused.map((r) => r.name).join(', ')}`);
-    const refusedOnly = [runtimeOfTexts('refused probe', probeModel({ bones: [{ name: 'root' }], slots: [{ name: 's', bone: 'root', setup: 'c' }], attachments: { s: { c: { kind: 'clipping', vertexCount: 3, vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] } } } } }), '')];
+    const refusedOnly = [runtimeOfTexts('refused probe', probeModel({ bones: [{ name: 'root' }], slots: [{ name: 's', bone: 'root', setup: 'r' }], attachments: { s: { r: { kind: 'region', width: 8, height: 8, atlas: null } } } }), '')];
     const hole = runtimeLines(refusedOnly);
     if (!hole.lines.some((l) => l.startsWith('  HOLE  runtime: the runtime poser posed nothing'))) probes.push(`a corpus of refused rows printed no HOLE: ${hole.lines.join(' | ')}`);
     if (!hole.lines[hole.lines.length - 1].includes(' 0 covered whole')) probes.push(`a corpus of refused rows counted a covered row: ${hole.lines[hole.lines.length - 1]}`);

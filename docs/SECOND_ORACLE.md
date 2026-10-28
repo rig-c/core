@@ -86,20 +86,17 @@ rule stays the brief's.
 The mathematics of a 2D bone hierarchy, a Bézier curve, an IK solver or a path follower
 belongs to nobody; what the rule protects is that the *text* is ours.
 
-One place in the tree already sits on this line, and the owner reads it before the rule
-is applied to new code: `src/transform.ts`'s world-transform function says of itself
-that *"the five `inherit` cases are the runtime's, transcribed"* (`inheritedMatrix`, 63
-lines, measured 2026-09-29). It is the compiler's own reading of a bone's inherit mode,
-written before this page; whether it stays as it is, is rewritten from the format's
-documentation and measurement under this page's rule, or is what this page's rule
-should say is fine, is the owner's call and is recorded on #380 when made.
+One place in the tree already sits on this line: the routines that described
+themselves as transcriptions now call the core's measured form (#1023, every emitted
+byte unchanged), including `src/transform.ts` calling `worldTransforms` in
+`src/core/world.ts`. No transcribed text remains on this line.
 
 Since 2026-09-29 (#929): the part of this question the core depended on was closed by
 measurement — posed with `transform.ts`'s evaluator, the core read 1 of the 12
 unconstrained recipes identical to spine-core, so `src/core/` poses with an evaluator of
 its own, written from measurement, and imports nothing from `transform.ts` (`CO04`
-refuses it). #929 left `transform.ts` untouched, its comment included; whether that
-comment and the transcription it describes stay is still the owner's call.
+refuses it). #929 left `transform.ts` untouched, its comment included. #1023 later
+replaced the transcription with the core's measured form, every emitted byte unchanged.
 
 ## 4. The oracle — the equivalence gate
 

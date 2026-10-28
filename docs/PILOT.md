@@ -47,7 +47,7 @@ observable outcome — a report that says "reached T1, failed T2" is a result.
 **The agent installs rigc and gets the README quickstart to build green from a
 scratch directory.**
 
-- Install: `bun add -g rig-c`, or `bunx rig-c` with no install.
+- Install: `bun add -g @rig-c/core`, or `bunx @rig-c/core` with no install.
 - Follow [README.md](../README.md)'s *First rig in ten minutes* exactly: three
   plates, the two inline specs, `rigc build`, then `rigc validate spine`.
 - **Pass** = `build` prints `rigc: wrote …skeleton.json` / `…skeleton.atlas`, and

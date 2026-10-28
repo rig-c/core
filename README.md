@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/rig-c"><img src="https://img.shields.io/npm/v/rig-c.svg?style=flat-square&color=FF6B4A" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@rig-c/core"><img src="https://img.shields.io/npm/v/@rig-c/core.svg?style=flat-square&color=FF6B4A" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/rig-c"><img src="https://img.shields.io/npm/dm/rig-c.svg?style=flat-square&color=A855F7" alt="npm downloads" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="license" /></a>
 </p>
@@ -14,9 +14,9 @@ format, with rigc's own compiled model beside it —
 gated by a list of named assertions before a byte is written — rigc's own validator in
 the published package, held to a `spine-core` round trip's verdicts in this
 repository's CI. Built so AI agents can author rigs and check their own work; it ships
-as an agent skill. On npm it is `rig-c` — the same package as `spine-rigc`, the name it
-first shipped under, and as `@rig-c/core`, its name under the toolchain's scope, both
-published beside it with the same files at every version.
+as an agent skill. Its canonical npm package is `@rig-c/core`, under the toolchain's
+scope. `rig-c` is the convenience install name; `spine-rigc` is the legacy install
+name. Both remain published alongside it with the same product files.
 
 ## What you get
 
@@ -177,22 +177,23 @@ name with exit 2 before upload. Use a published exact `X.Y.Z` (no `v` prefix,
 alias, range or prerelease), or retry a failed network fetch. This is repository
 verification tooling, not an installed `rigc` command or a change to CI's matrix.
 
-**The npm package is `rig-c`; the command it installs is `rigc`.** npm
+**The canonical npm package is `@rig-c/core`; the command it installs is `rigc`.**
+`rig-c` remains a convenience install name. npm
 refuses the name `rigc` as too similar to packages that already exist, so the
 project and the executable keep their name and the registry entry carries one
-hyphen; the repository is [`rig-c/core`](https://github.com/rig-c/core). **`spine-rigc` is the same package**: it is the name
+hyphen; the repository is [`rig-c/core`](https://github.com/rig-c/core). **`spine-rigc` is the legacy install name for the same package**: it is the name
 every version up to 2.20.4 shipped under, and it stays published as an alias —
 every version from 2.20.4 on is on both names, with the same files — so a
 project that depends on `spine-rigc` keeps receiving every release. A new
-project installs `rig-c`; `@rig-c/core` is the same package under the scope.
+project installs `@rig-c/core`, the canonical package under the toolchain's scope.
 
 ```bash
-bunx rig-c --help    # run it without installing
-bun add -g rig-c     # or install the command
-bun add -d rig-c     # or pin it in a project
+bunx @rig-c/core --help    # run it without installing
+bun add -g @rig-c/core     # or install the command
+bun add -d @rig-c/core     # or pin it in a project
 ```
 
-`npx rig-c` works too, as long as Bun is on `PATH` — the executable is a
+`npx @rig-c/core` works too, as long as Bun is on `PATH` — the executable is a
 Bun script, and npm only writes the shim that calls it.
 
 Installed, the command is `rigc`. The examples below spell it `bun cli.ts`
@@ -242,7 +243,7 @@ plugin marketplace:
 /plugin install rigc@rigc
 ```
 
-With the package already installed, `claude --plugin-dir node_modules/rig-c`
+With the package already installed, `claude --plugin-dir node_modules/@rig-c/core`
 loads the same skills without a marketplace. The plugin carries no version of its
 own — `/plugin update` follows `main` commit by commit, and the only version on
 disk stays the one in `package.json`.
@@ -254,8 +255,8 @@ Codex, Gemini CLI and Antigravity read skills from one directory in the workspac
 `node_modules`. With the package installed, one command puts every skill there:
 
 ```shell
-bun add -d rig-c
-bun rigc skills install          # relative links: .agents/skills/rigc -> ../../node_modules/rig-c/skills/rigc
+bun add -d @rig-c/core
+bun rigc skills install          # relative links: .agents/skills/rigc -> ../../node_modules/@rig-c/core/skills/rigc
 bun rigc skills install --copy   # the folders themselves, for a host that does not follow a link
 ```
 
@@ -290,11 +291,11 @@ reference export, so nothing you read in a quickstart is an answer to anything
 **1. Install the command.**
 
 ```bash
-bun add -g rig-c     # installs `rigc`
+bun add -g @rig-c/core     # installs `rigc`
 ```
 
 Or skip the install and prefix every command below with `bunx `, e.g.
-`bunx rig-c build …`.
+`bunx @rig-c/core build …`.
 
 **2. Make a directory and three plates.** rigc measures PNGs rather than trusting
 a number you typed (R5), so the art has to exist. These three are solid colours a

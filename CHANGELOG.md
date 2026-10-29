@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.81.0](https://github.com/rig-c/core/compare/v2.80.0...v2.81.0) (2026-10-29)
+
+
+### Features
+
+* **render:** --extremes writes each animation's two farthest poses and their diffs ([#1633](https://github.com/rig-c/core/issues/1633)) ([e54602f](https://github.com/rig-c/core/commit/e54602fe3e47bf79ee33e967d191405b2748aaf4)), closes [#1632](https://github.com/rig-c/core/issues/1632)
+
 ## [2.80.0](https://github.com/rig-c/core/compare/v2.79.0...v2.80.0) (2026-10-28)
 
 

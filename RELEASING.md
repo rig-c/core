@@ -750,6 +750,13 @@ an install of an alias carries the same map, so `spine-rigc/plate` and
 | `rig-c/cli` | [#859](https://github.com/rig-c/core/issues/859) | resolved and spawned rather than imported; which entry it runs is the table in *What an install has* above |
 | `rig-c/package.json` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
 
+The CLI observation surface is promised by agreement for parts#839 before its
+adoption (#1642):
+
+| CLI surface | promised outputs | runtime requirement |
+| --- | --- | --- |
+| `rigc render --extremes-only` | Same `extremes.json` and readable `extremes.png` bytes as `--extremes`, per selected set; no ordinary frames, contact sheet or `frames.json`. Existing posing, subset and viewport options apply; other diagnostic/sheet output flags are refused by name. | rigc builds use the core entry; Spine exports require the runtime as for `render` |
+
 ⚠️ **Three things are spelled `rig-c/core`, and they are different things.**
 The **import** `rig-c/core` is the row above: one entry of this package, the
 posing core, the `./core` key of `exports`. The **package** `@rig-c/core` is

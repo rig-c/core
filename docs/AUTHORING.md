@@ -286,6 +286,7 @@ What the flags mean:
 | `--max` | `render` and `inspect`: the longest side of the frame in pixels (default `256`, finite and at least `16`). On `render`, refused with `--viewport-from`, which already fixes the pixel size — **§8.6**, **§13** |
 | `--show`, `--dim`, `--at`, `--zoom` | `inspect` only — what it draws, whether the art is faded, which times of `--animation` it poses and the bone, slot or folds it frames to; §13 says each, with the refusals |
 | `--geometry` | `render` only: also write a `geometry.json` into each frame directory — per frame, every bone's world transform and every slot's region or mesh vertices in world units after skinning, plus each attachment's rest geometry and topology, on the frames' own grid and viewport. Every other file is byte for byte what the render writes without it. Refused with `--slot`/`--hide`, because the geometry is the whole pose whatever is drawn — **§8.2** |
+| `--extremes-only` | `render` only: imply `--extremes`, but write only `extremes.json` and readable `extremes.png` with the same bytes. Pose the same grid; rasterize only the setup/min/max pictures used by the plate. No ordinary frame PNGs, contact sheet or `frames.json`. Takes no `--sheet`, `--sheet-format`, `--page-edges`, `--geometry`, `--folds`, `--pass-through`, `--seam`, `--overlaps` or `--angle-range`; drop the named flag or use `--extremes` instead — **§8.11** |
 | `--extremes` | `render` only: add `extremes.json` and an `EXTREMES` line per set; a moving set with comparable geometry and readable images also gets a native six-panel `extremes.png`: setup, geometry-pair min/max and three premultiplied RGBA diffs with a legend. Per-channel extrema are independent of that geometry pair; valid channels survive geometry/image SKIPs, and channel refusals are named separately. Still or uncomparable geometry is a named SKIP, with no invented pair or PNG; observation failures do not change a successful render's exit status. Supports `--slot`/`--hide` on both posers, on the whole rig's viewport. Without the flag, no extremes observations are added — **§8.11** |
 | `--folds` | `render` only: also read which mesh triangles **fold** — turn over against the setup pose — and write a `folds.json` into each frame directory: per mesh, the frames with a folded triangle, the worst frame's count and which triangles, by index, with their world box and setup-pose area. One printed line per mesh that folds; a triangle degenerate or inverted at the setup pose is said once and never counted. A reading, not a gate. Every other file is byte for byte what the render writes without it, `geometry.json` included. Refused with `--slot`/`--hide`, for `--geometry`'s reason — **§8.3** |
 | `--pass-through` | `render` only: `<cloth>:<leg>[,<cloth>:<leg>…]` — also read where each cloth slot **passes through** its leg slot, and write a `pass-through.json` into each frame directory: the frames where the cloth draws over the leg and its drawn side lies inside the leg's drawn outline by 2 steps or more, each with the depth and the world box. One printed line per pair, and one per frame that passes through. The first name must draw over the second for a frame to be read — the declared order, never both. A reading, not a gate. Every other file is byte for byte what the render writes without it. An unknown slot, a slot that draws on no frame, a malformed list and a pair named twice are refused by name, and so is `--slot`/`--hide` beside it — **§8.5** |
@@ -9477,6 +9478,25 @@ bounds plus its `2`-px border on each side exceed `2048` (`w + 4 > 2048` or
 ```sh
 bun cli.ts render --candidate path/to/build --extremes [--animation turn] [--fps 12] [--max 256]
 ```
+
+Use `--extremes-only` instead when only those observations are needed:
+
+```sh
+bun cli.ts render --candidate path/to/build --extremes-only --out extremes/
+```
+
+It implies `--extremes` and writes the same `extremes.json` and readable
+`extremes.png` bytes, sampling the same poses and fitting the same viewport.
+Only the setup/min/max pictures needed by the plate are rasterized; ordinary
+frame PNGs, the contact sheet and `frames.json` are not produced. A still or
+refused set writes its JSON SKIP with no PNG. Skin, subset, environment, fps,
+animation and viewport options keep their meanings. Other diagnostic and sheet
+output flags listed in the `--extremes-only` row above are refused together
+rather than silently ignored. Use `--extremes` when those outputs are needed.
+Selected set directories are replaced just as in an ordinary render; a prior
+root `frames.json` is removed because it would advertise frames no longer there.
+Unselected set directories are left alone. Use a dedicated output root when
+retaining an ordinary render beside these observations.
 
 Look at **min · max · diff before a person does**. A baked line carried by a
 moving part can be obvious in the difference image while a seam metric misses

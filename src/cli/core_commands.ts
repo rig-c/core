@@ -658,6 +658,14 @@ export function cmdRender(flags: Record<string, string>): void {
   const maxSide = readPositiveNumber(flags, 'max', 256, 16);
   // A box given rather than fitted (issue #1414), read before a line is printed, so a malformed one is refused first.
   const given = readGivenViewport(flags);
+  const extremesOnly = flags['extremes-only'] !== undefined;
+  if (extremesOnly) {
+    for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range']) {
+      if (flags[flag] !== undefined) {
+        throw new UsageError(`--extremes-only takes no --${flag}: it writes only extremes.json and, when readable, extremes.png. Drop --${flag}, or use --extremes for ordinary frames and additional outputs`);
+      }
+    }
+  }
   const wantsSheet = flags.sheet !== undefined;
   if (flags['sheet-format'] !== undefined && !wantsSheet) {
     throw new UsageError('--sheet-format takes --sheet: pass --sheet alongside --sheet-format <format>, or drop --sheet-format');
@@ -672,7 +680,7 @@ export function cmdRender(flags: Record<string, string>): void {
   const sheetPageEdges = wantsSheet ? readPageEdges(flags) : undefined;
   const outRoot = resolve(flags.out ?? 'render');
   const geometry = flags.geometry !== undefined;
-  const extremes = flags.extremes !== undefined;
+  const extremes = extremesOnly || flags.extremes !== undefined;
   // The fold reading (issue #1383) is its own flag rather than a part of --geometry, so a caller that asked for
   // neither, or for --geometry alone, gets the bytes it always got: geometry.json is the pose, and a reading derived
   // from it is a second file beside it, written only when asked for.
@@ -1063,6 +1071,22 @@ export function cmdRender(flags: Record<string, string>): void {
   }
 
   mkdirSync(outRoot, { recursive: true });
+  if (extremesOnly) {
+    // Reuse the same posed grid and plates; selecting extremes needs no ordinary pixels.
+    // Clear only the selected sets, just as the ordinary render does. No frames.json
+    // is written: this output is an observation, not a frame set consumable by check.
+    for (const [name, extreme] of extremeReadings) {
+      const dir = join(outRoot, frameSetDir(name, fps));
+      if (existsSync(dir)) rmSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'extremes.json'), extremesText(extreme.reading));
+      if (extreme.plate !== null) extreme.plate.writePng(join(dir, 'extremes.png'));
+      console.log(`  ..    ${extremesLine(extreme.reading)}`);
+    }
+    // A prior ordinary render's index would falsely advertise now-removed frames.
+    rmSync(join(outRoot, FRAMES_SIDECAR), { force: true });
+    return;
+  }
   const sets: FrameSet[] = [];
   // A mesh's setup faults are a property of the mesh, not of an animation: said once, the first time a set shows it.
   const faultsSaid = new Set<string>();

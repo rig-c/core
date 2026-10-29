@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.81.1](https://github.com/rig-c/core/compare/v2.81.0...v2.81.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **docs:** refresh package names and renderer guide currency ([#1638](https://github.com/rig-c/core/issues/1638)) ([2c89554](https://github.com/rig-c/core/commit/2c895542f0f52414e7efd2c6600e4b86c8862893)), closes [#1637](https://github.com/rig-c/core/issues/1637)
+
 ## [2.81.0](https://github.com/rig-c/core/compare/v2.80.0...v2.81.0) (2026-10-29)
 
 

@@ -1,5 +1,5 @@
 /** Closed controls for #1632. Runs on the render pool, standalone or through selftest's tally. */
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, cpSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, cpSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -148,6 +148,33 @@ export function runExtremesSuite(report?: Say): number {
       const geometryExtraFiles = geomExtra.status === 0 ? tree(join(work, 'geometry-extra')) : {};
       say('EX17B_ORIGINAL_GEOMETRY_JSON_AND_FRAMES_UNCHANGED_WITH_OPTIONAL_SOURCE_IDENTITY', geom.status === 0 && geomExtra.status === 0 && Object.keys(geometryFiles).length > 0 && Object.entries(geometryFiles).every(([p, h]) => geometryExtraFiles[p] === h), `${Object.keys(geometryFiles).length} existing geometry/frame file hashes; exits ${geom.status}/${geomExtra.status}`);
       say('EX18_REAL_CLI_REPEAT_JSON_PNG_BYTES_IDENTICAL', JSON.stringify(tree(join(work, 'flag'))) === JSON.stringify(tree(join(work, 'repeat'))), 'all output files identical in repeat');
+      // #1642: the output allowlist is closed. A leaked ordinary frame must fail this control.
+      const onlyRun = render('only', ['--extremes-only']);
+      const onlyFiles = onlyRun.status === 0 ? tree(join(work, 'only')) : {};
+      const expectedOnly = Object.fromEntries(Object.entries(flagged).filter(([p]) => /\/extremes\.(json|png)$/.test(p)));
+      const onlyMatches = (files: Record<string, string>): boolean =>
+        Object.keys(files).length === Object.keys(expectedOnly).length &&
+        Object.entries(files).every(([p, h]) => expectedOnly[p] === h);
+      say('EX26_EXTREMES_ONLY_CLOSED_OUTPUT_BYTES', onlyRun.status === 0 && onlyMatches(onlyFiles), `exit ${onlyRun.status}; ${Object.keys(onlyFiles).length} files; ${(onlyRun.stderr ?? '').slice(-350)}`);
+      if (onlyRun.status === 0) writeFileSync(join(work, 'only', 'channels', 'f0000.png'), 'planted ordinary frame');
+      say('EX27_EXTREMES_ONLY_ORDINARY_FRAME_PLANT_GOES_RED', onlyRun.status === 0 && !onlyMatches(tree(join(work, 'only'))), 'same output checker reads disk and rejects an unexpected ordinary frame');
+      if (onlyRun.status === 0) rmSync(join(work, 'only', 'channels', 'f0000.png'));
+      const reuse = render('plain', ['--extremes-only', '--extremes']);
+      say('EX28_EXTREMES_ONLY_REUSED_OUTPUT_CLEARS_FRAMES_CONTACT_AND_INDEX', reuse.status === 0 && onlyMatches(tree(join(work, 'plain'))), 'reused ordinary output; explicit --extremes is redundant');
+      for (const poser of ['core', 'spine']) {
+        const oldRun = render(`old-${poser}`, ['--extremes', '--poser', poser, '--fps', '1', '--hide', 'arm']);
+        const newRun = render(`only-${poser}`, ['--extremes-only', '--poser', poser, '--fps', '1', '--hide', 'arm']);
+        const oldFiles = oldRun.status === 0 ? tree(join(work, `old-${poser}`)) : {};
+        const newFiles = newRun.status === 0 ? tree(join(work, `only-${poser}`)) : {};
+        const expected = Object.fromEntries(Object.entries(oldFiles).filter(([p]) => /\/extremes\.(json|png)$/.test(p)));
+        say(`EX29_EXTREMES_ONLY_BOTH_POSERS_SUBSET_FPS_SKIP[${poser}]`, oldRun.status === 0 && newRun.status === 0 && Object.keys(expected).length === 2 && JSON.stringify(expected) === JSON.stringify(newFiles), `exits ${oldRun.status}/${newRun.status}; still subset has JSON only`);
+      }
+      for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range']) {
+        const values: Record<string, string[]> = { 'sheet-format': ['json-hash'], 'page-edges': ['pot'], 'pass-through': ['body:arm'], seam: ['body:arm'], 'angle-range': ['arm:root'] };
+        const refused = render(`refuse-${flag}`, ['--extremes-only', `--${flag}`, ...(values[flag] ?? [])]);
+        say(`EX30_EXTREMES_ONLY_INCOMPATIBLE_OUTPUT_REFUSED[${flag}]`, refused.status === 2 && refused.stderr.includes(`--extremes-only takes no --${flag}`) && !existsSync(join(work, `refuse-${flag}`)), `exit ${refused.status}; no output`);
+      }
+
       const two = render('two', ['--extremes', '--animation', 'channels', '--fps', '1']);
       const edgeRead = two.status === 0 ? JSON.parse(readFileSync(join(work, 'two', 'channels@1fps', 'extremes.json'), 'utf8')) as ExtremesReading : null;
       say('EX19_REAL_TWO_FRAME_ANIMATION_AND_STILL_SKIP', edgeRead?.grid.length === 2 && JSON.parse(readFileSync(join(work, 'flag', 'still', 'extremes.json'), 'utf8')).status === 'SKIP', `edge exit ${two.status}`);

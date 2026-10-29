@@ -1033,7 +1033,7 @@ function posedBoneStep(doc: CompiledDocument, timelines: CoreAnimationTimelines,
     const records = pathDeformed(doc, posedRecords(setupRecords, constraints, t), timelines, t, plant);
     // A path constraint may read a slot bone the runtime has not yet brought up to date in this pass, as the previous pass left it (`./constraints_path.ts`, *Which slot bone*); `poseAnimations` holds that pass to the setup pose's reading.
     const previous = setupRecords.some((r) => r.kind === 'path') ? applyConstraints(doc.bones, (plant.evaluate ?? worldTransforms)(doc.bones, active), active, plant.constraints ? plant.constraints(setupRecords) : setupRecords, null, undefined, undefined, undefined, solverRules(plant.solver)) : null;
-    world = applyConstraints(bones, initialWorld, active, plant.constraints ? plant.constraints(records) : records, previous, sliders, undefined, undefined, solverRules(plant.solver));
+    world = applyConstraints(bones, initialWorld, active, plant.constraints ? plant.constraints(records) : records, previous, sliders, undefined, plant.readLocals === undefined ? undefined : (state) => plant.readLocals?.(state.bones, sliders ?? []), solverRules(plant.solver));
     if (stage !== undefined) stage.end('constraints');
   }
   for (const b of bones) if (world.get(b.name) === undefined) throw new CoreInputError(`the evaluator returned no transform for bone "${b.name}"`);
@@ -1066,7 +1066,7 @@ function steppedLocals(doc: CompiledDocument, bones: ModelBone[], plant: Timelin
     stage.begin('constraints');
   }
   const stepped = stepPhysicsRecords(records(), physicsKeyed, t, active, step.ctx, step.before);
-  const world = applyConstraints(bones, initialWorld, active, plant.constraints ? plant.constraints(stepped) : stepped, null, sliders, step.ctx, undefined, solverRules(plant.solver));
+  const world = applyConstraints(bones, initialWorld, active, plant.constraints ? plant.constraints(stepped) : stepped, null, sliders, step.ctx, plant.readLocals === undefined ? undefined : (state) => plant.readLocals?.(state.bones, sliders ?? []), solverRules(plant.solver));
   if (stage !== undefined) stage.end('constraints');
   for (const b of bones) if (world.get(b.name) === undefined) throw new CoreInputError(`the evaluator returned no transform for bone "${b.name}"`);
   return { bones, world, active, round: plant.round ?? gridRound };

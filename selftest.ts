@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runExtremesSuite } from './selftest_extremes.ts';
 import { alphaClipInputs, writeAlphaClipFixture, apertureDepthLevel, ALPHA_CLIP_FIXTURE } from './fixtures/alpha_clip.ts';
 import { buildAlphaClipProof, proveAlphaClipBuild, clipRoundingWorld, ALPHA_CLIP_BOUNDS } from './tools/alpha_clip_proof.ts';
 import { refuseClipCrossing, refuseClipDegeneracy, clipCarriers } from './src/alpha_clip.ts';
@@ -148201,6 +148202,7 @@ function main(): void {
   tally.of('folds', runFoldsSuite);
   tally.of('pass-through', runPassThroughSuite);
   tally.of('seam', runSeamSuite);
+  tally.of('extremes', () => runExtremesSuite(reportCase));
   tally.of('whirl', runWhirlSuite);
   tally.of('render-viewport', runRenderViewportSuite);
   tally.of('angle-range', runAngleRangeSuite);
@@ -149096,6 +149098,7 @@ function main(): void {
       '`render`, `render --geometry`, `check` and the library export name one planted setup bone, one leaf beside ' +
       'finite bones and one key in the same sentence with nothing written, while a skeleton that draws nothing still ' +
       'says "posed no drawable attachment")' +
+      ', + ' + n('extremes') + ' extremes controls (issue #1632: original vertex pairs, independent local channel extrema, alpha-aware diffs and native panels on both posers)' +
       ', + ' + n('pose') + ' pose controls (a rig rendered at a chosen scale and its placements read back out of the picture ' +
       'within a pixel, a degree and 8% — one PNG posed twice reported as TWO placements rather than picked ' +
       "between, a round part's rotation reported as free where nothing else is, a foreign part / a part the " +

@@ -1,3 +1,5 @@
+import { localChannels, deformChannels, identifyAttachment } from './render_channels.ts';
+import type { ChannelValue } from './render_shared.ts';
 /**
  * The render's second poser (issue #968, step 3d of issue #380): the posing
  * seam of `src/render.ts` (`Poser` / `Posed`) implemented over rigc's own
@@ -462,7 +464,7 @@ function clipCover(pose: RawPose, active: ReadonlySet<string>): Map<string, Clip
 }
 
 /** One posed moment of the core, read through the seam's `Posed`. */
-function corePosed(input: CoreInput, pose: RawPose, through: ShapeClipper, stepped: readonly string[]): Posed {
+function corePosed(input: CoreInput, pose: RawPose, through: ShapeClipper, stepped: readonly string[], channels?: ChannelValue[]): Posed {
   const slotRows = new Map<string, CoreSlotRow>(pose.slots.map((row) => [row[0], row]));
   let regions: Map<string, DrawnRegion> | null = null;
   const regionsOf = (): Map<string, DrawnRegion> => {
@@ -504,8 +506,25 @@ function corePosed(input: CoreInput, pose: RawPose, through: ShapeClipper, stepp
         scaleY: b.scaleY,
       }) : inactiveBoneSnapshot(b.name));
     },
-    attachments: (): AttachmentPose[] =>
-      pose.drawn.map((d) => ({ slot: d.slot, attachment: d.attachment, vertices: [...d.vertices], color: tintOf(d) })),
+    attachments: (identity = false): AttachmentPose[] =>
+      pose.drawn.map((d) => {
+        const row = { slot: d.slot, attachment: d.attachment, vertices: [...d.vertices], color: tintOf(d) };
+        if (!identity) return row;
+        const source = pose.shown.find((s) => s.slot === d.slot)?.geometry;
+        if (source === undefined) throw new CoreInputError(`slot "${d.slot}" has no original attachment identity`);
+        return identifyAttachment(row, source);
+      }),
+    ...(channels === undefined ? {} : { channels: (): ChannelValue[] => {
+      const out = [...channels];
+      for (const shown of pose.shown) {
+        const g = shown.geometry;
+        const v = g.kind === 'mesh' ? g.vertices : g.kind === 'linkedmesh' ? sourceOfDoc(input.doc)(g.skin, g.slot, g.source) : null;
+        if (v === null || typeof v === 'string') continue;
+        const setup = v.weighted ? new Array<number>(v.bindings.reduce((n, b) => n + b.length * 2, 0)).fill(0) : v.xy;
+        out.push(...deformChannels(shown.slot, shown.name, shown.deform ?? [], setup, g));
+      }
+      return out;
+    } }),
     physics: (): string[] => [...stepped],
   };
 }
@@ -756,11 +775,16 @@ export function corePoser(
     bones: doc.bones.map((b) => ({ name: b.name, parent: b.parent ?? null })),
     slots: doc.slots.map((s) => ({ name: s.name, bone: s.bone })),
     subset: (opts, skin) => subsetOver(roster, opts, skin),
-    setup: (skin) => {
+    setup: (skin, channels) => {
       const input = inputOf(skin);
-      return corePosed(input, poseRawSetup(input.doc, { through }), through, []);
+      let values: ChannelValue[] | undefined;
+      const observe = channels ? { readLocals: (bones: readonly import('./model.ts').ModelBone[], sliders: readonly import('./core/constraints_slider.ts').SliderApplication[]) => { values = localChannels(bones, sliders); } } : {};
+      const pose = poseRawSetup(input.doc, { through, ...observe });
+      return corePosed(input, pose, through, [], values);
     },
-    animation: (name, skin, fps, count, visit, environment) => {
+    animation: (name, skin, fps, count, visit, environment, channels) => {
+      let values: ChannelValue[] | undefined;
+      const observe = channels ? { readLocals: (bones: readonly import('./model.ts').ModelBone[], sliders: readonly import('./core/constraints_slider.ts').SliderApplication[]) => { values = localChannels(bones, sliders); } } : {};
       const input = inputOf(skin);
       const step = 1 / fps;
       // Each pose is drawn as it is posed and released before the next (issue #1180), so the walk holds one pose and not
@@ -778,12 +802,12 @@ export function corePoser(
         if (ctx.time > 0 && ctx.states.get(r.name)?.lastTime === ctx.time) steppedNow.add(r.name);
         return moved;
       };
-      walk(input.doc, name, new Array<number>(count).fill(step), { through, physicsStep }, (pose, i) => {
+      walk(input.doc, name, new Array<number>(count).fill(step), { through, physicsStep, ...observe }, (pose, i) => {
         const stepped = [...steppedNow].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
         steppedNow.clear();
         if (drawFailed.length > 0) return;
         try {
-          visit(i, corePosed(input, pose, through, stepped));
+          visit(i, corePosed(input, pose, through, stepped, values));
         } catch (thrown) {
           drawFailed.push(thrown);
         }

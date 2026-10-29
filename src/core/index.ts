@@ -1085,6 +1085,8 @@ export interface StageHooks {
  * channel misread — and nothing else passes any.
  */
 export interface CorePlant {
+  /** Optional read of the solved local channels and applied slider mappings; never modifies the pose. */
+  readLocals?: (bones: readonly ModelBone[], sliders: readonly SliderApplication[]) => void;
   evaluate?: SetupEvaluator;
   shown?: ShownResolver;
   colour?: ColourReader;
@@ -1335,7 +1337,7 @@ export function poseSetup(doc: CompiledDocument, plant: CorePlant = {}, physics?
   if (bonesWhy === null) {
     const active = activeBones(doc);
     const records = constraintRecords(doc);
-    setupWorld = applyConstraints(doc.bones, evaluate(doc.bones, active), active, plant.constraints ? plant.constraints(records) : records, null, applied, physics, undefined, solverRules(plant.solver));
+    setupWorld = applyConstraints(doc.bones, evaluate(doc.bones, active), active, plant.constraints ? plant.constraints(records) : records, null, applied, physics, plant.readLocals === undefined ? undefined : (state) => plant.readLocals?.(state.bones, applied), solverRules(plant.solver));
     const world = setupWorld;
     bones = doc.bones.map((b): CoreBoneRow => {
       const t = world.get(b.name);

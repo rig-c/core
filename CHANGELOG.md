@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.82.0](https://github.com/rig-c/core/compare/v2.81.1...v2.82.0) (2026-10-29)
+
+
+### Features
+
+* **render:** --extremes-only writes the extremes without rasterizing the frames and contact sheet a caller discards ([#1643](https://github.com/rig-c/core/issues/1643)) ([2c337d9](https://github.com/rig-c/core/commit/2c337d97cb9e355bf92e7ed505f697b52c369bec))
+
 ## [2.81.1](https://github.com/rig-c/core/compare/v2.81.0...v2.81.1) (2026-10-29)
 
 

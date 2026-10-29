@@ -1976,5 +1976,10 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  await main();
+  if (process.argv[2] === '--apply-only') {
+    const { applyBenchMain } = await import('./pose_apply_bench.ts');
+    await applyBenchMain(process.argv.slice(3));
+  } else {
+    await main();
+  }
 }

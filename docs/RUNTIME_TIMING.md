@@ -289,3 +289,253 @@ Evidence SHA-256 (raw files retained privately on Nova):
 | Microbench summary, eight A/A and eight A/B launches | `df77fd7a9cf86657f1ed2efc9f22468cd2f03ea8e57dd9a48cccab871d8d3e08` |
 | Calibration | `a85e133ebcdd1825077cd5a99057d6de2072ecd0ee5e61d48eafcea69a8eb04e` |
 
+
+## Apply-only noise instrument (#1636)
+
+`bun tools/pose_bench.ts --apply-only --help` selects an apply-only instrument;
+existing stage-benchmark exports and commands remain available. Both tools are
+repository utilities, outside the package's `files` allowlist. This mode compares
+two independent source imports of production `RuntimePose.apply`; it measures
+neither rendering nor an official-runtime ratio and makes no product speed claim.
+
+The protocol pins both the [original bar](https://github.com/rig-c/core/issues/1636#issuecomment-6500771472)
+and the [amendment posted before replacement timing](https://github.com/rig-c/core/issues/1636#issuecomment-6501222823).
+The amendment preserves the acceptance thresholds, estimator, seeds and primary
+512-pair sample size; it separates diagnostic acquisition from acceptance.
+The primary meter is **process CPU**, `process.cpuUsage` user plus system, across
+all process threads. It is not thread CPU. Wall time from `hrtime.bigint` is
+retained beside it. CPU starts before wall; wall ends before CPU. Neither meter
+subtracts its reading overhead. Loading, compilation, warm-up, output hashes and
+statistics are outside the timed interval. If CPU is unavailable, its estimates
+are null and the wall-only diagnostic cannot claim CPU acceptance.
+
+Each block applies the public spineboy or raptor `walk` to 100 instances over
+256 fixed times. Instance i has grid phase `17*i`, modulo 256; time is the
+production animation duration times that grid fraction. Physics uses apply's
+normal `none`/zero-delta defaults. The loop reads a fixed world element into a
+pose sink. Both arms use the same wrapper, including a consumed integer-work
+sink at zero extra iterations. A planted B changes only the extra recurrence
+count per apply, fixed separately for each fixture before acceptance. Normal GC
+remains enabled; no forced collection, renderer, vertex computation or profiler
+runs in the interval.
+
+Adjacent A/B pairs contain one block of each arm. Each two-pair superblock
+contains one AB and one BA, with its order randomized by xorshift32 seed 1636.
+A separate diagnostic uses 128 matched pair rows per fixture and mode. Its
+grouped mode executes 64 A blocks then 64 B blocks, and 64 B blocks then 64 A
+blocks; seed 1636 determines which direction runs first. Both directions carry
+equal work. Grouped rows have `order: null`: they match indices across long runs,
+not adjacent randomized AB/BA pairs. The acquisition record includes the actual arm/index
+execution sequence, grouped direction boundaries and its SHA-256. Acquisition
+mode order in the diagnostic is also seeded by 1636. The four
+CPU/wall × paired/unpaired reducers use the same raw samples within a mode.
+This separates changing the meter from changing the reducer; comparing grouped
+with interleaved acquisition separately examines short-block interleaving.
+Historical independent-launch envelopes are not a current control for this tool.
+
+The paired estimate is the median of `100*(B-A)/A`. Its percentile bootstrap
+uses 10,000 resamples, seed `0x1636b005`, and contiguous clusters of eight pairs.
+A cluster is the resampling unit; individual applies and frames are not
+independent samples. The unpaired diagnostic is `100*(median(B)-median(A))/median(A)`;
+it resamples arm clusters independently. The bootstrap assumes dependence is
+adequately represented by these clusters; five launches do not prove this for
+arbitrary workloads or machines. Results are scoped to their frozen input and
+host. The intervals are nominal 95% intervals, without a simultaneous-coverage
+claim across the collection of cells.
+
+Every acceptance launch completes 512 interleaved pairs per fixture. Grouped
+acquisition is diagnostic only and is absent from all ten acceptance jobs.
+128/256-pair checkpoints are diagnostic, never early success. Five exclusive
+A/A jobs alternate with five planted jobs. In every job and both fixtures, A/A
+requires primary interleaved paired median within ±1% and its interval containing
+zero. The plant requires median +2% through +4% and its entire interval inside
++1% through +5%. A failed bar is retained; it cannot widen its own envelope.
+When A/A fails, report the largest absolute median and full CI envelope as the
+observed resolution, without promoting that range to a guarantee. Future perf
+cards must cite that observed scope and post their effect bar before measuring.
+
+### Preparing and running a comparison
+
+Prepare a private packet with independent copies `a/src` and `b/src`, the two
+model fixtures, the original bar and amendment texts, a starting-count seed JSON,
+and a config file. No private calibration receipt is needed. Each source manifest is
+a JSON array of `{ "path": "src/…", "sha256": "…" }` entries covering the copied
+source tree. The config has this shape; all paths resolve relative to its own
+folder, including the source roots, and must remain inside that folder:
+
+```json
+{
+  "version": "rigc-pose-noise/2",
+  "sources": {
+    "a": { "root": "a", "manifest": "a-manifest.json", "sha256": "MANIFEST_DIGEST" },
+    "b": { "root": "b", "manifest": "b-manifest.json", "sha256": "MANIFEST_DIGEST" }
+  },
+  "fixtures": {
+    "spineboy": { "path": "fixtures/spineboy.model.json", "sha256": "FIXTURE_DIGEST" },
+    "raptor": { "path": "fixtures/raptor.model.json", "sha256": "FIXTURE_DIGEST" }
+  },
+  "bar": { "path": "noise-bar.txt", "sha256": "BAR_DIGEST", "url": "ORIGINAL_1636_COMMENT_URL" },
+  "amendment": { "path": "amendment.txt", "sha256": "AMENDMENT_DIGEST", "url": "AMENDMENT_1636_COMMENT_URL" },
+  "calibrationSeed": { "path": "calibration-seed.json", "sha256": "YOUR_SEED_FILE_DIGEST" }
+}
+```
+
+The exact minimal seed schema is:
+
+```json
+{"counts":{"spineboy":238,"raptor":235}}
+```
+
+Each count is an integer from 1 through 4096. Save this as your own
+`calibration-seed.json`, compute SHA-256 over those exact bytes (for example,
+`sha256sum packet/calibration-seed.json`), and put that digest in
+`calibrationSeed.sha256`. These are starting counts, not acceptance counts or a
+promise of a 3% effect. The unchanged controller performs three 64-pair correction
+rounds and a fresh 128-pair verification before freezing the acceptance counts.
+The reported study used its complete historical RED receipt as the pinned seed;
+that was provenance for this run only, not a dependency of reusable setup.
+
+Use real SHA-256 digests and both posted issue-comment URLs; the two texts
+remain separate pins. The seed supplies integer starting counts. Source and fixture
+hashes are checked before imports and again after timing. A/A additionally
+requires matching source manifests. Independent real paths and different
+RuntimePose constructors prevent both imports silently resolving to one module.
+The untimed reference computes its schedule by formula, compares full exposed
+apply state and the pose sink, and independently computes the integer-work sink.
+No-op, shifted-time, tampered-input and synthetic statistics controls precede
+measurement. `--preflight` reads no timing meters.
+
+```sh
+bun tools/pose_bench.ts --apply-only --config packet/config.json --preflight --out preflight.json
+nova-run.sh --label 'core#1636 calibration' --owner '<owner>' --session '<actual-session>' --exclusive --install 'PLAYWRIGHT_SKIP_BROWSER_GC=1 bun install --frozen-lockfile' -- bun tools/pose_bench.ts --apply-only --config packet/config.json --calibrate --out calibration.json
+nova-run.sh --label 'core#1636 diagnostic' --owner '<owner>' --session '<actual-session>' --exclusive --install 'PLAYWRIGHT_SKIP_BROWSER_GC=1 bun install --frozen-lockfile' -- bun tools/pose_bench.ts --apply-only --config packet/config.json --calibration calibration.json --diagnostic --out diagnostic.json
+nova-run.sh --label 'core#1636 AA1' --owner '<owner>' --session '<actual-session>' --exclusive --install 'PLAYWRIGHT_SKIP_BROWSER_GC=1 bun install --frozen-lockfile' -- bun tools/pose_bench.ts --apply-only --config packet/config.json --calibration calibration.json --measure AA1 --out AA1.json
+```
+
+The runner uploads its working directory: ensure every referenced file is inside
+that packet. One replacement calibration performs three 64-pair correction rounds
+per fixture (the posted maximum), each updating `round(oldCount*3/medianPct)`,
+clamped to 1–4096. Nonpositive or nonfinite estimates stop the job. Three rounds
+are fixed rather than chosen after a favorable estimate. Then a fresh 128-pair
+acquisition verifies the final count; its median must be within 2–4%. No count
+changes after that verification or from diagnostic/acceptance data. Retain the
+calibration and all correction/verification raw samples. Run the one 128-pair
+diagnostic next, then pass the exact calibration unchanged to AA1/plant1 through
+AA5/plant5. Tool and config digests must match, and the calibration must explicitly
+record admission. Every output path must be new; existing
+receipts are refused. Linux x64 timing belongs on the exclusive Nova pool, whose
+15-minute deadline includes install and capture. Calibration forecasts the full
+512-pair, interleaved-only, two-fixture budget from fresh verification wall time,
+with 50% headroom plus 60 seconds. Its forecast must be below 840 seconds; an
+unresolved plant or forecast refuses acceptance before AA1. Missing CPU, failed
+hashes, timeouts and failed jobs are reported with their receipts, never replaced
+by favorable retries. Acceptance pass/fail is stored in JSON; a red noise bar
+alone does not truncate the remaining predeclared launches.
+
+### Original calibration: preserved STOP, no acceptance result
+
+The original calibration job `20261029T153030Z-6e3f26601434455ea09717c6787b3543`
+returned exit 1 after 109.168 seconds of slot occupancy on Bun 1.4.4/Linux x64,
+Intel Core Ultra 7 265K. It retained eight raw acquisitions (448 arm blocks).
+These are the original 64-pair verification estimates, not 512-pair acceptance:
+
+| Fixture | Extra iterations/apply | Process CPU paired median | Bootstrap 95% interval |
+| --- | ---: | ---: | ---: |
+| spineboy/walk | 238 | +4.259500% | [+0.906030%, +6.279955%] |
+| raptor/walk | 235 | +3.550134% | [+0.040287%, +4.960725%] |
+
+Spineboy's verification median missed the declared 2–4% calibration window.
+The former combined interleaved-plus-grouped forecast was 1,042.983542256 seconds,
+above the 840-second safety guard. That conservative forecast was **not a measured
+timeout** and does not establish that the full workload could not fit 15 minutes.
+The actual job finished well before its 900-second deadline. No acceptance job
+had been launched **before the amendment**. No acceptance job was replaced during
+the subsequent ten-job series. The amendment changes acquisition placement and
+the bounded calibration procedure, not these preserved results or acceptance bars.
+
+The first grouped implementation hardcoded A then B; it did not execute the
+planned reverse direction. That branch was not reached by the original calibration,
+which used interleaved acquisition only. The revision checkpoint verified
+both real grouped directions with untimed controls. The diagnostic reported below
+subsequently measured both acquisition modes; it makes no universal benefit claim.
+
+Original calibration JSON SHA-256:
+`66ad1414f116134b40155bd3ddfa27f2755841becc9914f550e7f0cc518e2e8a`.
+Raw command-log SHA-256:
+`7a418354b6a3cc0599241f6bc91d843e8f801ba35ad31679f8d7666567ff6a55`.
+The ten-job acceptance result below does not certify a ±1% instrument or a
+reproducible ~3% plant.
+
+### Ten-job acceptance measurement (2026-10-30)
+
+**Disposition: STOP — acceptance failed; instrument and evidence delivered.**
+
+All ten exclusive commands and sealed recoveries returned exit 0. The separate data bars passed in 1/5 A/A jobs and 3/5 planted jobs; both bars required all five. No timing rerun, replacement, acceptance tuning or envelope relaxation was made. The source, config and calibration digests remained fixed.
+
+Bun 1.4.4/Linux x64 on Intel Core Ultra 7 265K; 512 interleaved pairs per fixture. Every planted job used the frozen extra-work counts 174 (spineboy) and 246 (raptor). CPU below means process user+system across all threads. Values are percentages, rounded to six decimals; bar decisions use the unrounded JSON.
+
+| Run | spineboy CPU paired median [95% CI] | raptor CPU paired median [95% CI] | Both-fixture bar |
+| --- | ---: | ---: | --- |
+| AA1 | -0.710314 [-1.264196, -0.284770] | -0.540995 [-1.083882, +0.274269] | FAIL |
+| plant1 | +0.785782 [+0.030892, +1.472592] | +3.007601 [+2.389502, +3.575190] | FAIL |
+| AA2 | -0.581985 [-1.179802, +0.236927] | +0.058108 [-0.512487, +0.567997] | PASS |
+| plant2 | +2.467752 [+2.014131, +3.188963] | +2.598626 [+2.139795, +3.174119] | PASS |
+| AA3 | -0.020220 [-0.572832, +0.641219] | +0.601287 [+0.021759, +1.048186] | FAIL |
+| plant3 | +3.431866 [+2.754839, +4.267439] | +3.654190 [+3.078063, +4.340765] | PASS |
+| AA4 | -2.368696 [-2.730422, -1.796232] | -0.551697 [-1.178353, +0.159370] | FAIL |
+| plant4 | +2.808980 [+1.900153, +3.334008] | +2.642162 [+1.621053, +3.307806] | PASS |
+| AA5 | -0.679091 [-1.351240, +0.425807] | -0.718889 [-1.698750, -0.199221] | FAIL |
+| plant5 | +8.219347 [+7.291596, +9.024476] | +2.998221 [+2.178476, +3.789246] | FAIL |
+
+Across the five A/A jobs and both fixtures, the largest absolute CPU paired median was 2.3686959321%, and the union of the nominal 95% intervals was [-2.7304222236%, +1.0481857128%]. Its symmetric observed extent is ±2.7304222236% (about ±2.731%). This is an observed resolution for this series, not a validated universal floor, simultaneous confidence bound, or guarantee that a particular effect above it is detectable. It does not turn the failed ±1% bar green. A future card must cite this scope and post its own bar before measuring.
+
+| Fixture / reducer | Max absolute A/A median | Observed A/A CI envelope |
+| --- | ---: | ---: |
+| spineboy / cpuUs/paired | 2.368696% | [-2.730422%, +0.641219%] |
+| spineboy / wallNs/paired | 2.324983% | [-2.776204%, +0.658379%] |
+| spineboy / cpuUs/unpaired | 2.788663% | [-5.795626%, +5.610763%] |
+| spineboy / wallNs/unpaired | 2.567468% | [-5.880431%, +5.312688%] |
+| raptor / cpuUs/paired | 0.718889% | [-1.698750%, +1.048186%] |
+| raptor / wallNs/paired | 0.795955% | [-1.703889%, +1.051620%] |
+| raptor / cpuUs/unpaired | 2.240602% | [-5.056062%, +6.446508%] |
+| raptor / wallNs/unpaired | 2.344236% | [-5.024471%, +6.390083%] |
+
+With one frozen count, spineboy's five planted medians ranged from +0.7857817230% to +8.2193469354% (about +0.7858% through +8.2193%). The required planted reproducibility failed. Calibration admission did not certify a 3% instrument. No cause is inferred from these observations.
+
+The separately labelled 128-pair diagnostic recorded both real grouped directions, 64 matched rows each. CPU/wall and paired/unpaired estimates use the same raw data within each mode. It does **not** establish CPU superiority over wall time. Historical independent-launch drift is not imported as a current control or a claimed improvement ratio.
+
+| Diagnostic fixture / mode | CPU paired median [95% CI] | Wall paired median [95% CI] |
+| --- | ---: | ---: | ---: |
+| spineboy / interleaved | +0.492604 [-1.483828, +1.967355] | -0.053579 [-1.785413, +1.445525] |
+| spineboy / grouped | +4.142463 [-6.780537, +10.850709] | +4.209384 [-6.781966, +10.952656] |
+| raptor / grouped | +5.655798 [-0.395527, +11.763349] | +5.676542 [-0.363735, +11.438097] |
+| raptor / interleaved | +0.570738 [-0.791011, +1.685035] | +0.562980 [-0.801535, +1.763630] |
+
+All raw CPU/wall samples, both reducers, all checkpoints, actual execution orders, output checksums, source manifests and sealed receipts are retained privately. No product code was optimized. These commands did not certify a renderer, GPU, browser or universal hardware result.
+
+Post-series untimed preflight and controller controls returned 0 (preflight meter reads: 0). Ordinary-pool typecheck, lint and the unmodified full selftest also returned 0 (94 suites, 2,735 printed case lines); this correctness verification is separate from the failed measurement bars.
+
+| Run | Nova job ID | Runner exit |
+| --- | --- | ---: |
+| AA1 | `20261029T160027Z-428688ab1d08407d904a809e2d828405` | 0 |
+| plant1 | `20261029T160609Z-2d4101b43c954f40aa98388c7ba90381` | 0 |
+| AA2 | `20261029T161203Z-68f446c8372244048ee1dd793b0de3e8` | 0 |
+| plant2 | `20261029T161751Z-9a6334f523bb41c390e3f5c8827a331f` | 0 |
+| AA3 | `20261029T162338Z-94edd6035586472ab3d8f3d36e6c5443` | 0 |
+| plant3 | `20261029T162924Z-43e54028a04f4eb887422cfc9fec3ddb` | 0 |
+| AA4 | `20261029T163519Z-6f19e1bf742f4be585a9be612fc26e39` | 0 |
+| plant4 | `20261029T164106Z-d7837814dbc141a99dff68208d3d930f` | 0 |
+| AA5 | `20261029T164703Z-3e0bcd46f3864100a0593e0ac7a3b456` | 0 |
+| plant5 | `20261029T165250Z-70c6da0abc4442aea75dc03507f9acd8` | 0 |
+| Full verification | `20261029T165910Z-cd2b9c69083740e89c22c8e8c38bbcbb` | 0 |
+
+Evidence SHA-256:
+
+| Record | Digest |
+| --- | --- |
+| Timed tool | `f81d9bed46bc6de9bd14707eba3d281d33c96b39966d2ded78ad694b1e2e1c1e` |
+| Config, pinning both posted texts | `4ed2446fcc0fa0e99efd1d42c60741451d00ae28febe919e0c721a3fea895e8d` |
+| Frozen admitted calibration | `29ae00d518231a8c658f0292d5fa7e78ed2b7908449467f56f98f3d49699a01f` |
+| Ten-job summary and raw receipt index | `19e68f12826073dbb35ed9eb6b55fb34fa45605b6b77a4f2aa743958b6b4e242` |
+| Diagnostic JSON | `92aa73b9e2fa9cdc5125433a4ee68a6bcc2ee753f5bace7edf198922407c6c78` |
+| Full-verification receipt | `30de3d27daad4de55c3da50e1cabeeb11db8af547a032e707efad2b4f4d25fa5` |

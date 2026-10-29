@@ -2,7 +2,7 @@
 name: rigc-rigging
 description: Decide a Spine rig's hierarchy with rigc — how many bones, where each pivot sits, what hangs off what, offsets, chains and what a chain can reach, siblings versus chains, constraints as structure — and which of those decisions the reference frames can check. Use when the request is a skeleton from loose part PNGs, such as "rig these parts", "make a Spine skeleton" or "where do the joints go", before any motion is authored. Not for Live2D, cutting an illustration into parts, or VTuber-style tracking.
 license: MIT
-compatibility: Requires Bun 1.4 or later and the npm package rig-c.
+compatibility: Requires Bun 1.4 or later and the npm package @rig-c/core (rig-c is the convenience name).
 ---
 
 # Rigging — the hierarchy itself
@@ -52,7 +52,7 @@ are named in RIGGING §11 — neither as a pass bar.
    [INGEST.md](https://github.com/rig-c/core/blob/main/docs/INGEST.md) if the skeleton was handed to you already
    compiled.
 
-Every guide linked here is in the installed package at `node_modules/rig-c/docs/`,
+Every guide linked here is in the installed package at `node_modules/@rig-c/core/docs/`,
 which is the copy that matches the rigc you run; the links go to the repository's
 `main`. Inside the Claude Code plugin the same files are at `${CLAUDE_PLUGIN_ROOT}/docs/`.
 

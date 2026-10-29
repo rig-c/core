@@ -334,8 +334,10 @@ That is what `id-token: write` in the `publish` job's permissions is for, and it
 what lets the publish carry `--provenance`. The registry side of it is
 configured — the fields are recorded below, and nothing there is outstanding.
 
-**The package name is `rig-c`, and `spine-rigc` and `@rig-c/core` are its aliases** — do not retry
-the short one. The first publish of `rigc@0.2.0` was refused by the registry
+**The canonical npm package is `@rig-c/core`.** `rig-c` is the checkout
+manifest name the publish packs from and the convenience install name;
+`spine-rigc` is the legacy install name. Do not retry the short name `rigc`.
+The first publish of `rigc@0.2.0` was refused by the registry
 with `403 Package name too similar to existing packages rc,rfdc,bigi`, which is
 a registry-side rule no account setting or flag overrides, and npm support
 confirmed on 2026-10-09 that no manual exception exists; the scope `@rigc` is
@@ -347,12 +349,13 @@ needs, and no third party's product name in it. When the repository moved to
 the `rig-c` organisation as `rig-c/core`, issue
 [#1347](https://github.com/rig-c/core/issues/1347) added `@rig-c/core`: the
 same package under the toolchain's npm scope, beside `@rig-c/parts` and
-`@rig-c/play`. `rig-c` stays the name to install. `bin` installs the
+`@rig-c/play`. `@rig-c/core` is the name to install. `bin` installs the
 command as `rigc` under any of the three names.
 
-`spine-rigc` is **an alias, not a retirement**, and `@rig-c/core` is an alias
-of the same kind: every version is published under every name, with the same
-files. `rig-c@2.20.4` went up by hand from the
+`spine-rigc` is **an alias, not a retirement**. The workflow also publishes
+`@rig-c/core` through its alias-packing step; that mechanism does not change
+which name is canonical. The workflow publishes each release under all three
+names, with the same product files. `rig-c@2.20.4` went up by hand from the
 registry's own `spine-rigc@2.20.4` tarball with the `name` line changed and
 nothing else (213 files, the same list); every version after it is the
 workflow's, every name from one run. The two tarballs never share a
@@ -1280,10 +1283,10 @@ no frames, which only the installed call probe must catch. `CUR135` holds the
 facade's exact values, original function identity and runtime-free value closure;
 types remain recorded rather than runtime-checked, under the rule below.
 
-This additive entry is a **minor** release contract. It is not available in
-2.68.0; the next minor, 2.69.0, is the planned first version. Consumers must wait
-for the cut and its measured artifact before pinning `>=2.69.0 <3.0.0`. A source
-or packed-candidate result is not a postcut registry confirmation.
+This additive entry is a **minor** release contract, first published in 2.69.0
+([#1562](https://github.com/rig-c/core/pull/1562)); it is not available in 2.68.0.
+Consumers can pin `>=2.69.0 <3.0.0`. A source or packed-candidate result is not
+a postcut registry confirmation.
 
 🧪 **`rig-c/runtime` is experimental, and not promised until it stabilises**
 ([#1591](https://github.com/rig-c/core/issues/1591), requested for play#200).

@@ -2,7 +2,7 @@
 name: rigc-motion
 description: Author a Spine animation with rigc from key poses — an idle, a loop, a move from one picture to another — with timing and spacing, ease in and out, anticipation, arcs, overlap, follow-through, squash and stretch, and candidate variants a person can choose between. Use when the request is a movement on an existing or planned rig, in the animator's words too: "animate this rig", "make it breathe", "go from pose A to pose B", "make it feel heavier", "the cape should follow through". Not for Live2D, separating an image into parts, or real-time tracking.
 license: MIT
-compatibility: Requires Bun 1.4 or later and the npm package rig-c.
+compatibility: Requires Bun 1.4 or later and the npm package @rig-c/core (rig-c is the convenience name).
 ---
 
 # Motion — what goes between two poses
@@ -54,7 +54,7 @@ thing that judges a movement is a person's eye through `rigc vote` — MOTION §
    head turn; [INGEST.md](https://github.com/rig-c/core/blob/main/docs/INGEST.md) if the rig arrived as a compiled
    skeleton rather than loose parts.
 
-Every guide linked here is in the installed package at `node_modules/rig-c/docs/`,
+Every guide linked here is in the installed package at `node_modules/@rig-c/core/docs/`,
 which is the copy that matches the rigc you run; the links go to the repository's
 `main`. Inside the Claude Code plugin the same files are at `${CLAUDE_PLUGIN_ROOT}/docs/`.
 

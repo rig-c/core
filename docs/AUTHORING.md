@@ -146,6 +146,9 @@ bun cli.ts check \
 # read the table → fix the spec → build again → check again
 #   ↳ read its per-frame column before its MAE — §9.2
 
+# Before a person looks: inspect each motion's min, max and diff (§8.11).
+bun cli.ts render --candidate path/to/spine --extremes --out frames/
+
 # …and if nobody gave you frames, LOOK at it instead — neither needs a reference:
 bun cli.ts render  --candidate path/to/spine    # PNG frames + a contact sheet grid
 bun cli.ts preview --candidate path/to/spine    # one .html that plays it in Spine's own player
@@ -9463,6 +9466,88 @@ bounds plus its `2`-px border on each side exceed `2048` (`w + 4 > 2048` or
 `h + 4 > 2048`) are refused by name, exit 2, with nothing written (`SH17`).
 
 ---
+
+### 8.11 Min, max and diff before a person looks — `render --extremes`
+
+```sh
+bun cli.ts render --candidate path/to/build --extremes [--animation turn] [--fps 12] [--max 256]
+```
+
+Look at **min · max · diff before a person does**. A baked line carried by a
+moving part can be obvious in the difference image while a seam metric misses
+it. This flag makes the picture; it does not classify tears or ghosts and does
+not change the seam metric.
+
+Each set gets `extremes.json` and one `EXTREMES` line. A moving set also gets
+`extremes.png`, with six panels from left to right:
+**setup | min | max | abs(max-min) | abs(min-setup) | abs(max-setup)**.
+Every panel has the render's native viewport width, height and scale; the legend
+is appended below, wrapping its text without shrinking any picture. The three
+pose panels are transparent renders. Each diff pixel is opaque greyscale on
+black, with luminance
+`round(max(abs(Ra*Aa/255-Rb*Ab/255), abs(Ga*Aa/255-Gb*Ab/255), abs(Ba*Aa/255-Bb*Ab/255), abs(Aa-Ab)))`.
+Alpha participates; RGB behind alpha zero contributes zero. There is no contrast
+amplification or additional scaling.
+
+The JSON keeps two different observations separate:
+
+- **`channels`**: every sampled local bone rotation, componentwise translation,
+  signed scale and shear, deform offset coordinate (per influence for weighted
+  meshes), and each applied slider's mapped time, with its minimum and maximum,
+  exact frame timestamp and selection reason. Held bone components are included
+  explicitly. A slider applies its own mapping; its time is read from the pose,
+  rather than guessed from elapsed time. A mix-zero slider or one whose driver
+  bone is inactive did not apply a mapping and contributes no stale time.
+- **`geometryPair`**: exhaustively compare frame pairs on the set's own grid.
+  For a pair, measure the Euclidean world distance of each corresponding original
+  attachment vertex with the shared deterministic `sqrt(dx*dx+dy*dy)` length
+  helper, and take the greatest. Select the pair with the greatest
+  such distance. Record that maximum in world units and its slot, attachment and
+  vertex witness. `min` and `max` in the picture mean the earlier and later
+  frame of **this pair**; they are not a pose combining every channel's minima
+  or maxima. The channel table can choose entirely different frames.
+
+`channelStatus` (`READ`, `PARTIAL` or `SKIP`) and `channelRefusals` describe
+channel validity separately from the picture's `status` and `reason`. A geometry
+correspondence failure or failed optional image read **preserves every valid
+independent channel extremum**; an image failure also retains a valid geometry
+pair if one was measured. A non-finite scalar refuses only that channel. If a
+whole frame's channel reader failed, extrema on the full grid are unknown and
+the channel table is a named SKIP while geometry can still be read.
+
+Deform samples are offsets from their original source, read only where that
+posed attachment supplies the coordinate. A deform path names slot, attachment
+display name and coordinate. If two different original sources share that path,
+its extrema cannot be represented unambiguously under the name: refuse that
+series by name in `channelRefusals`, preserving unrelated bone, slider and other
+deform series. Missing original deform-source identity is refused the same way;
+never merge unrelated coordinates because their names happen to match.
+
+Ties keep the earliest frame for a channel and the earliest ordered frame pair
+for geometry, then the first attachment identity in UTF-16 code-unit order and
+vertex index. Times are copied from sampled frames. No continuous-time extremum
+between grid points is claimed. A single frame or a set with no selected vertex
+motion has `status: "SKIP"`, a named reason and no invented pair or PNG. Channels
+still describe the samples, including any local change leaving geometry still.
+
+Both posers support `--slot` and `--hide`: resolve the flags normally, then filter
+original attachment geometry by those slot names. The viewport stays the whole
+rig's. This reads original vertices **before clipping, occlusion and tint alpha**;
+re-clipped triangles never supply cross-frame indices. An attachment switch,
+missing attachment or changed vertex count cannot establish correspondence.
+The flag also checks the actual original source identity: two different
+attachments can have the same display name and vertex count. That identity is
+kept outside serialized geometry so existing geometry files are unchanged.
+If the optional source identity was not captured, correspondence is unavailable
+and is refused by name too. When correspondence cannot be established, the
+set writes a named `EXTREMES_OBSERVATION_REFUSED` SKIP instead of comparing
+unrelated indices. Optional image failures preserve the independently collected
+channels. Channel failures are reported separately as described above.
+**Observation failures do not change a successful render's exit status.** Invalid CLI arguments retain their normal refusal semantics.
+
+Without `--extremes` the existing frames and files are unchanged. The flag adds
+its observations alongside them. A SKIP removes a stale `extremes.png` for that
+set so an earlier pair cannot masquerade as the current reading.
 
 ## 9. Checking against the frames — `rigc check`
 

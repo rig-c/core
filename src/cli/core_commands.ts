@@ -1,3 +1,4 @@
+import { extremesOf, extremesText, extremesPlate, extremesLine, extremesRefusal } from '../extremes.ts';
 /**
  * The bodies of the commands that reach nothing of spine-core — `explain`,
  * `ingest`, `diff`, `check`, `render`, `inspect`, `pose`, `chainfit` and `skills` —
@@ -44,7 +45,7 @@ import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError,
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
-import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
+import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
 import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
@@ -671,6 +672,7 @@ export function cmdRender(flags: Record<string, string>): void {
   const sheetPageEdges = wantsSheet ? readPageEdges(flags) : undefined;
   const outRoot = resolve(flags.out ?? 'render');
   const geometry = flags.geometry !== undefined;
+  const extremes = flags.extremes !== undefined;
   // The fold reading (issue #1383) is its own flag rather than a part of --geometry, so a caller that asked for
   // neither, or for --geometry alone, gets the bytes it always got: geometry.json is the pose, and a reading derived
   // from it is a second file beside it, written only when asked for.
@@ -843,11 +845,12 @@ export function cmdRender(flags: Record<string, string>): void {
     // the export's grid is this frame set's by construction.
     // The bones ride along for --geometry and --angle-range, the whole attachments for --geometry and the two readings off them.
     const wantsBones = geometry || anglePairs !== undefined;
-    const wantsGeometry = geometry || folds || passPairs !== undefined || seamPairs !== undefined;
+    const wantsGeometry = extremes || geometry || folds || passPairs !== undefined || seamPairs !== undefined;
     // The physics constraints each frame's step stepped ride along whenever the rig declares one (issue #1467): the
     // `physics:` line and frames.json's `physics` field are read off them.
     const sampling = {
       ...pose,
+      ...(extremes ? { channels: true } : {}),
       ...(wantsBones ? { bones: true } : {}),
       ...(wantsGeometry ? { geometry: true } : {}),
       ...(physicsDeclared.length > 0 ? { physics: true } : {}),
@@ -856,6 +859,36 @@ export function cmdRender(flags: Record<string, string>): void {
       only === undefined
         ? sampleAll(poser, fps, sampling)
         : new Map([[only, sampleAnimation(poser, only, fps, sampling)]]);
+    const extremeReadings = new Map<string, { reading: ReturnType<typeof extremesOf>; plate: Plate | null }>();
+    if (extremes) {
+      // Setup is an optional observation too: a failed extra read cannot turn a drawable set into a gate failure.
+      let setup: Frame | undefined;
+      let setupFailure: string | undefined;
+      for (const [name, frames] of sampled) {
+        let reading: ReturnType<typeof extremesOf> | undefined;
+        try {
+          reading = extremesOf(name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name, fps, frames, pose);
+          let plate: Plate | null = null;
+          if (reading.geometryPair !== null) {
+            if (setupFailure !== undefined) throw new Error(setupFailure);
+            if (setup === undefined) {
+              try {
+                setup = sampleSetupPose(poser, pose)[0];
+                if (setup === undefined) throw new Error('setup pose sample is absent');
+              } catch (err) {
+                setupFailure = `setup pose observation failed: ${err instanceof Error ? err.message : String(err)}`;
+                throw new Error(setupFailure);
+              }
+            }
+            plate = extremesPlate(reading, setup, frames, pages, viewport);
+          }
+          extremeReadings.set(name, { reading, plate });
+        } catch (err) {
+          const refused = extremesRefusal(name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name, fps, frames, err instanceof Error ? err.message : String(err), reading);
+          extremeReadings.set(name, { reading: refused, plate: null });
+        }
+      }
+    }
     // Every file's text before the first write, so a refused number leaves the
     // output directory as it was rather than half of a frame set behind it.
     const geometryTexts = new Map<string, string>();
@@ -1002,9 +1035,9 @@ export function cmdRender(flags: Record<string, string>): void {
         }
       }
     }
-    return { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks };
+    return { viewport, fitted, sampled, extremeReadings, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks };
   });
-  const { viewport, fitted, sampled, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks } = posed.value;
+  const { viewport, fitted, sampled, extremeReadings, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks } = posed.value;
   console.log(`  ..    poser    ${posed.note}`);
   if (environment !== undefined) {
     const response = environmentResponse(skeletonText);
@@ -1056,6 +1089,13 @@ export function cmdRender(flags: Record<string, string>): void {
     if (foldReading !== undefined) writeFileSync(join(dir, FOLDS_FILE), foldsText(foldReading));
     const passReading = passReadings.get(name);
     if (passReading !== undefined) writeFileSync(join(dir, PASS_THROUGH_FILE), passThroughText(passReading));
+    const extreme = extremeReadings.get(name);
+    if (extreme !== undefined) {
+      writeFileSync(join(dir, 'extremes.json'), extremesText(extreme.reading));
+      if (extreme.plate === null) rmSync(join(dir, 'extremes.png'), { force: true });
+      else extreme.plate.writePng(join(dir, 'extremes.png'));
+      console.log(`  ..    ${extremesLine(extreme.reading)}`);
+    }
     const seamReading = seamReadings.get(name);
     if (seamReading !== undefined) writeFileSync(join(dir, SEAM_FILE), seamText(seamReading));
     const overlapReading = overlapReadings.get(name);

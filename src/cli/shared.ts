@@ -152,7 +152,7 @@ export { PACKAGE_ROOT, readPackageMeta, readVersion };
  * needs a value` (issue #328). `CLI10`/`CLI11` in `selftest.ts` now hold the two
  * halves together by reading `--help` rather than by naming a flag.
  */
-const BOOLEAN_FLAGS = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'folds', 'overlaps', 'sheet', 'accept-skeleton-differences', 'keep-pages', 'dim']);
+const BOOLEAN_FLAGS = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'folds', 'extremes', 'overlaps', 'sheet', 'accept-skeleton-differences', 'keep-pages', 'dim']);
 
 /**
  * The flags a command is allowed to spell more than once.
@@ -1066,6 +1066,7 @@ const FLAG_MEANINGS: Record<string, string> = {
     'Each frame with a moving pair also gets an outline plate, overlaps-f<NNNN>.png: every slot in a moving pair as its contour in its own ' +
     'colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the ' +
     "author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Not with --slot/--hide",
+  extremes: 'also write extremes.json and a native six-panel extremes.png per set: setup, geometry-pair min/max and premultiplied RGBA diffs, with a legend. Per-channel extrema are recorded separately and valid channels survive geometry/image SKIPs; channel refusals are named separately. Still geometry reports SKIP; a reading, not a gate. Attachment identity/count changes record a named SKIP without changing render exit; supports --slot/--hide on both posers',
   seam:
     `also read, for each <slot>:<slot> pair, where the two drawings stop meeting, and write ${SEAM_FILE} into each frame directory: ` +
     'per pair, the frames with a gap — background inside the hull of the band the two drawings share at the setup pose, carried to the frame by both — ' +
@@ -1756,7 +1757,7 @@ export const COMMANDS: CommandDoc[] = [
     runtime: false,
     spineFormat: false,
     usage: [
-      'rigc render --candidate <dir | skeleton.json> [--animation <name>] [--skin <name>] [--fps 12] [--max 256] [--geometry] [--folds] [--poser core|spine] [--out render/]',
+      'rigc render --candidate <dir | skeleton.json> [--animation <name>] [--skin <name>] [--fps 12] [--max 256] [--geometry] [--folds] [--extremes] [--poser core|spine] [--out render/]',
       'rigc render … --slot <name[,name…]> | --hide <name[,name…]>   (a subset of the slots, on the whole rig\'s grid)',
       'rigc render … --environment <schedule.json>   (the wind and gravity the physics answers, in time)',
       'rigc render … --pass-through <cloth>:<leg>[,…]   (the frames where a cloth drawn over a leg passes through it)',
@@ -1766,7 +1767,7 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
       'rigc render … --sheet [--sheet-format json-hash] [--page-edges pot|free]   (deterministic sprite sheets + JSON hash table + sheet-manifest.json per set)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'poser', 'out'],
     overrides: {
       'page-edges': {
         meaning:

@@ -415,6 +415,8 @@ export interface UvWindow {
 
 /** Options for `piecesOf` and the samplers that call it. */
 export interface PoseOptions {
+  /** Also read local bone/deform channels and mapped slider times, and retain original attachment source identity outside JSON, for --extremes. */
+  channels?: boolean;
   /** Also record each piece's original-art UVs — see `PieceTexture`. */
   texture?: boolean;
   /**
@@ -595,7 +597,13 @@ export interface ClipSource {
 /** One drawable in a posed frame. */
 export type Piece = Quad | Mesh;
 
+export interface ChannelValue { path: string[]; value: number }
+
 export interface Frame {
+  /** Sampled local channels, only when requested. */
+  channels?: ChannelValue[];
+  /** A failed optional observation does not fail the draw. */
+  channelError?: string;
   /** Index within the sampled sequence — the number in `f0000.png`. */
   index: number;
   time: number;
@@ -1107,12 +1115,14 @@ export interface DrawOptions {
  * what it needs before the next frame is posed.
  */
 export interface Posed {
+  /** Optional channel read, on the very pose drawn; no extra stepping. */
+  channels?(): ChannelValue[];
   /** The drawables in draw order — see `piecesOf` for the walk and the clip. */
   pieces(draw: DrawOptions): Piece[];
   /** Every bone's world transform, in the skeleton's declaration order. */
   bones(): BoneSnapshot[];
-  /** Every slot's region or mesh attachment, whole, in the posed draw order. */
-  attachments(): AttachmentPose[];
+  /** Every slot's region or mesh attachment, whole, in draw order; identity=true retains the original source in an out-of-JSON registry for --extremes. */
+  attachments(identity?: boolean): AttachmentPose[];
   /**
    * The physics constraints the step that posed this moment stepped, by name in
    * code-unit order (issue #1467). A constraint is stepped when, after a step
@@ -1143,14 +1153,14 @@ export interface Poser {
   /** `slotSubsetOf` against this skeleton posed under `skin` — refused by `SlotSubsetError`. */
   subset(opts: Pick<PoseOptions, 'slots' | 'hidden'> | undefined, skin: string | undefined): SlotSubset | undefined;
   /** The setup pose under `skin` (absent: no skin set at all). */
-  setup(skin: string | undefined): Posed;
+  setup(skin: string | undefined, channels?: boolean): Posed;
   /**
    * Animation `name` under `skin`, not looping: `visit(i, posed)` for every
    * `i` from 0 to `count`, the pose at `i/fps`. The caller has checked `name`.
    * `environment(i)`, when given, is the change to the world the physics
    * answers set before the step that poses frame `i` (issue #1416).
    */
-  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined): void;
+  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean): void;
   /** The rest table for the (slot, attachment) pairs `shown` holds — see `AttachmentRest`. */
   rest(skin: string | undefined, shown: readonly AttachmentPose[][]): AttachmentRest[];
 }
@@ -1188,12 +1198,21 @@ function drawResolver(poser: Poser, opts: PoseOptions | undefined): () => DrawOp
 
 /** One frame off one posed moment, with what `opts` asked to record beside the pieces. */
 function frameOf(index: number, time: number, posed: Posed, draw: DrawOptions, opts: PoseOptions | undefined): Frame {
+  let channels: Pick<Frame, 'channels' | 'channelError'> = {};
+  if (opts?.channels) {
+    try {
+      if (posed.channels === undefined) throw new Error('poser does not expose local channels');
+      channels = { channels: posed.channels() };
+    }
+    catch (err) { channels = { channelError: `frame ${index}: local channel read failed: ${err instanceof Error ? err.message : String(err)}` }; }
+  }
   return {
     index,
     time,
     pieces: posed.pieces(draw),
+    ...channels,
     ...(opts?.bones ? { bones: posed.bones() } : {}),
-    ...(opts?.geometry ? { attachments: posed.attachments() } : {}),
+    ...(opts?.geometry ? { attachments: opts.channels ? posed.attachments(true) : posed.attachments() } : {}),
     ...(opts?.physics ? { physics: posed.physics() } : {}),
   };
 }
@@ -1220,7 +1239,8 @@ export function sampleAnimation(source: PoseSource, name: string, fps: number, o
     frames.push(frameOf(i, i * step, posed, draw(), opts));
   };
   // Without an environment the call is the one it always was, so a poser that takes none is asked nothing new.
-  if (opts?.environment === undefined) poser.animation(name, opts?.skin, fps, count, visit);
+  if (opts?.channels) poser.animation(name, opts.skin, fps, count, visit, opts.environment === undefined ? undefined : environmentAt(opts.environment, fps), true);
+  else if (opts?.environment === undefined) poser.animation(name, opts?.skin, fps, count, visit);
   else poser.animation(name, opts.skin, fps, count, visit, environmentAt(opts.environment, fps));
   return frames;
 }
@@ -1235,7 +1255,7 @@ export function sampleAnimation(source: PoseSource, name: string, fps: number, o
  */
 export function sampleSetupPose(source: PoseSource, opts?: PoseOptions): Frame[] {
   const poser = poserOf(source);
-  const posed = poser.setup(opts?.skin);
+  const posed = opts?.channels ? poser.setup(opts.skin, true) : poser.setup(opts?.skin);
   return [frameOf(0, 0, posed, drawResolver(poser, opts)(), opts)];
 }
 

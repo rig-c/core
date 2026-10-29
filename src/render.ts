@@ -1,3 +1,4 @@
+import { localChannels, deformChannels, identifyAttachment } from './render_channels.ts';
 /**
  * The rasteriser — one code path for reference frames and for candidates.
  *
@@ -118,6 +119,7 @@ import {
   Skeleton,
   SkeletonClipping,
   SkeletonJson,
+  Slider,
   TextureAtlas,
   TextureAtlasRegion,
   SkeletonData,
@@ -548,8 +550,21 @@ function spinePosed(skeleton: Skeleton): Posed {
   return {
     pieces: (draw) => drawPieces(skeleton, draw),
     bones: () => boneSnapshots(skeleton),
-    attachments: () => attachmentsOf(skeleton),
+    attachments: (identity) => attachmentsOf(skeleton, identity),
     physics: () => steppedPhysicsOf(skeleton),
+    channels: () => {
+      const values = localChannels(skeleton.bones.map((b) => {
+        const p = b.appliedPose;
+        return { name: b.data.name, rotation: p.rotation, x: p.x, y: p.y, scaleX: p.scaleX, scaleY: p.scaleY, shearX: p.shearX, shearY: p.shearY };
+      }), skeleton.constraints.filter((c): c is Slider => c instanceof Slider && c.active && c.appliedPose.mix !== 0 && (c.bone === null || c.bone.active)).map((c) => ({ name: c.data.name, time: c.appliedPose.time })));
+      for (const slot of skeleton.slots) {
+        const a = slot.appliedPose.attachment;
+        if (!(a instanceof MeshAttachment)) continue;
+        const setup = a.bones === null ? Array.from(a.vertices) : new Array<number>(a.vertices.length / 3 * 2).fill(0);
+        values.push(...deformChannels(slot.data.name, a.name, slot.appliedPose.deform, setup, a));
+      }
+      return values;
+    },
   };
 }
 
@@ -803,17 +818,18 @@ function worldVerticesOf(skeleton: Skeleton, slot: Slot, attachment: MeshAttachm
  * Every slot's region or mesh attachment, whole, in the posed draw order — see
  * `Frame.attachments`. No subset and no clip: those are `piecesOf`'s business.
  */
-function attachmentsOf(skeleton: Skeleton): AttachmentPose[] {
+function attachmentsOf(skeleton: Skeleton, identity = false): AttachmentPose[] {
   const out: AttachmentPose[] = [];
   for (const slot of skeleton.drawOrder.appliedPose) {
     const attachment = slot.appliedPose.attachment;
     if (!(attachment instanceof MeshAttachment) && !(attachment instanceof RegionAttachment)) continue;
-    out.push({
+    const row = {
       slot: slot.data.name,
       attachment: attachment.name,
       vertices: worldVerticesOf(skeleton, slot, attachment),
       color: tintOf(slot, attachment),
-    });
+    };
+    out.push(identity ? identifyAttachment(row, attachment) : row);
   }
   return out;
 }

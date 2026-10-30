@@ -582,24 +582,24 @@ material, like the gallery: a clone runs them.
 
 | Command | Does |
 | --- | --- |
-| `build` | Compile, gate and write the rig. |
-| `validate` | Re-gate artifacts already on disk. |
-| `repack` | Repack a build from its output. |
-| `ingest` | Read a skeleton back into specs. |
-| `split` | Separate disconnected mesh pieces. |
-| `explain` | Print the compiled rig as a table. |
-| `render` | Write PNG frames and a contact sheet. |
-| `preview` | Write a playable HTML preview. |
-| `vote` | Make a ballot and record its answer. |
-| `pose` | Read part placements from a picture. |
-| `chainfit` | Read occluded parts through a candidate rig. |
-| `diff` | Compare two skeletons structurally. |
-| `bonedist` | Measure per-bone world-transform distance. |
-| `check` | Compare a candidate against reference pictures. |
-| `bench` | Run a rung of the benchmark ladder. |
-| `guide` | Read a named failure or guide section. |
-| `skills install` | Install the packaged agent skills. |
-| `review` | Hand a build to the review package. |
+| `build` | Compile, gate and write the rig. [`build` in the CLI reference](docs/AUTHORING.md#cmd-build) |
+| `validate` | Re-gate artifacts already on disk. [`validate` in the CLI reference](docs/AUTHORING.md#cmd-validate) |
+| `repack` | Repack a build from its output. [`repack` in the CLI reference](docs/AUTHORING.md#cmd-repack) |
+| `ingest` | Read a skeleton back into specs. [`ingest` in the CLI reference](docs/AUTHORING.md#cmd-ingest) |
+| `split` | Separate disconnected mesh pieces. [`split` in the CLI reference](docs/AUTHORING.md#cmd-split) |
+| `explain` | Print the compiled rig as a table. [`explain` in the CLI reference](docs/AUTHORING.md#cmd-explain) |
+| `render` | Write PNG frames and a contact sheet. [`render` in the CLI reference](docs/AUTHORING.md#cmd-render) |
+| `preview` | Write a playable HTML preview. [`preview` in the CLI reference](docs/AUTHORING.md#cmd-preview) |
+| `vote` | Make a ballot and record its answer. [`vote` in the CLI reference](docs/AUTHORING.md#cmd-vote) |
+| `pose` | Read part placements from a picture. [`pose` in the CLI reference](docs/AUTHORING.md#cmd-pose) |
+| `chainfit` | Read occluded parts through a candidate rig. [`chainfit` in the CLI reference](docs/AUTHORING.md#cmd-chainfit) |
+| `diff` | Compare two skeletons structurally. [`diff` in the CLI reference](docs/AUTHORING.md#cmd-diff) |
+| `bonedist` | Measure per-bone world-transform distance. [`bonedist` in the CLI reference](docs/AUTHORING.md#cmd-bonedist) |
+| `check` | Compare a candidate against reference pictures. [`check` in the CLI reference](docs/AUTHORING.md#cmd-check) |
+| `bench` | Run a rung of the benchmark ladder. [`bench` in the CLI reference](docs/AUTHORING.md#cmd-bench) |
+| `guide` | Read a named failure or guide section. [`guide` in the CLI reference](docs/AUTHORING.md#cmd-guide) |
+| `skills install` | Install the packaged agent skills. [`skills install` in the CLI reference](docs/AUTHORING.md#cmd-skills-install) |
+| `review` | Hand a build to the review package. [`review` in the CLI reference](docs/AUTHORING.md#cmd-review) |
 
 ### Existing skeletons and the editor
 

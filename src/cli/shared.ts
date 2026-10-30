@@ -1073,7 +1073,7 @@ const FLAG_MEANINGS: Record<string, string> = {
     'per pair, the frames with a gap — background inside the carried overlap hull and a local sweep of the same setup band cell through both drawings — ' +
     'and the frames with a visible ghost after draw order — the band of one drawing showing where, from its partner\'s point of view, nothing was drawn at the setup pose — each with ' +
     `its cell count, area and world box. Cells are one texel of the coarser drawing, drawn at ${DRAWN_ALPHA} of 255 or more. One line per pair; a pair whose ` +
-    'drawings share no cell at the setup pose is a SKIP. exposureA/B count each named slot’s positive-alpha cells on otherwise empty skeleton background, even without a band or partner. A reading, not a gate: the exit status never moves. An unknown slot, a slot with itself, ' +
+    'drawings share no cell at the setup pose is a SKIP. Raw gap measures swept support, not certified tearing. jointContact separately reports pair material connectivity: joined, separated, or unavailable with a reason; it does not infer anatomical joint intent or rule out local notches. exposureA/B count each named slot’s positive-alpha cells on otherwise empty skeleton background, even without a band or partner. A reading, not a gate: the exit status never moves. An unknown slot, a slot with itself, ' +
     'a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name. Not with --slot/--hide',
   'angle-range':
     'also read, for each <bone>:<relative-to> pair, the range of the first bone\'s world direction against the second\'s over each set\'s ' +

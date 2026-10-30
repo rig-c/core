@@ -144253,6 +144253,8 @@ function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slo
 
 import { carry, SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
 import { seamCellControls } from './fixtures/seam_controls.ts';
+import { seamContactControls } from './fixtures/seam_contact_controls.ts';
+import { seamContactRenderControls } from './fixtures/seam_contact_render.ts';
 
 /**
  * How far the seam probe turns the skirt, in degrees: the issue's figure, past
@@ -144603,12 +144605,14 @@ function runSeamSuite(): number {
   console.log('\n── seam: where two slots that meet stop meeting (issue #1456) ──');
   let bad = 0;
   for (const row of seamCellControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1656: visibility, local material correspondence and whole-slot background exposure');
+  for (const row of seamContactControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1659: raw swept gaps do not establish material separation');
   const say = (name: string, ok: boolean, detail: string, why: string): void => {
     bad += reportCase(name, ok, detail, why);
   };
   const fps = PROTOCOL_FPS;
   const probe = passThroughFixture();
   const work = mkdtempSync(join(harnessTemp(), 'rigc-seam-'));
+  for (const row of seamContactRenderControls(join(work, 'contact'))) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1659: independent rectangular oracle over actual gated builds and both render posers');
   const pre: string[] = [];
   const motionPath = join(work, 'seam_probe.motion.json');
   writeFileSync(motionPath, seamProbeMotion(readFileSync(probe.motionPath, 'utf8')));

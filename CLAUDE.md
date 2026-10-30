@@ -7,8 +7,8 @@ Guidance for AI-assisted sessions working on this repository.
 rigc compiles a **rig spec** plus a motion spec — and, for a cut with measured art
 behind it, a cut manifest — into Spine 4.3 skeleton data and a one-part-per-page
 atlas, then round-trips the result through `@esotericsoftware/spine-core` and
-50 named assertions before anything is written. Read [README.md](README.md) for
-the formats, the CLI and the assertion list; [`src/rig.ts`](src/rig.ts) is the
+50 named assertions before anything is written. Read [AUTHORING §0](docs/AUTHORING.md#0-the-loop)
+for the CLI, its formats and failure map, and [INGEST](docs/INGEST.md) for existing skeletons; [`src/rig.ts`](src/rig.ts) is the
 rig spec's own documentation.
 
 [docs/AUTHORING.md](docs/AUTHORING.md) is the guide an agent authors *from* — the
@@ -209,6 +209,20 @@ sincere about it. rigc exists to convert that silence into a named failure.
   alternative that was rejected with the reason** — which is why commit messages
   and pull requests here carry the argument rather than a summary of the diff.
   That is not ceremony; it is the only channel that survives the session.
+
+## README boundary
+
+The README is what a person reads to decide and get a first result: what the
+package is, install, one first run with its output shown, one line per command
+with a link, and links to the detailed guides. It holds no flag lists, refusal
+catalogues, dated or machine-specific figures, version history, or licence text
+beyond a pointer to NOTICE.md. **A feature PR adds at most one line to it.**
+Move detail to the appropriate guide rather than growing the landing page; keep
+inbound heading anchors as one-sentence link stubs and repoint content pins.
+Package-relative links must target shipped files; use absolute GitHub links for
+repository-only material. `scripts/check_readme.ts` enforces the fixed word cap,
+level-two heading allowlist and dated-measurement exclusions; its planted-failure
+controls run in CI. Do not raise the cap to accommodate a feature paragraph.
 
 ## Conventions
 

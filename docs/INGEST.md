@@ -20,7 +20,7 @@ reproduces* — so deliberately extending or renaming a foreign skeleton **lower
 them**, by design (§4.2, §4.3). Neither one has a pass bar, and this page does not
 invent one.
 
-- Formats and the CLI reference: [README.md](../README.md)
+- Formats and the CLI reference: [AUTHORING §0](AUTHORING.md#0-the-loop)
 - The rig spec, field by field: **AUTHORING §3**, and [`src/rig.ts`](../src/rig.ts)
 - The motion spec, field by field: **AUTHORING §4**
 - Named failures, and the file each one points at: **AUTHORING §5–§6**
@@ -1490,3 +1490,142 @@ The transcription these recipes start from is
 unmodified. The re-pivoted, renamed and extended variants in §4 were built from copies
 of it; none is committed, because each is an illustration of an edit rather than a
 transcription of anything.
+
+### Starting from a skeleton you already have
+
+`rigc ingest` reads a Spine 4.3 `skeleton.json` and writes the two spec files that
+rebuild it. It is the only command that runs against `build`'s direction, and the
+only one whose contract is an equality rather than a rulebook:
+
+```bash
+rigc ingest hero.json --out specs/ --images parts/
+rigc build --rig specs/rig.json --motion specs/motion.json --out build/
+rigc diff build/skeleton.json hero.json
+```
+
+`--images parts/` is what makes the second line carry no flag: it writes the spec's
+own `images` directory, spelled from `--out`, so the specs are self-contained from
+there on. Leave it off and the `image` names resolve against `specs/` itself, which
+holds no art — every rebuild then has to repeat `build --images parts/`.
+
+**`build(ingest(x))` is `x`.** Over the eleven rigs this repository builds — the seven
+gallery examples, the three generated probes and a coverage probe written for the
+purpose — the rebuilt `skeleton.json` is byte for byte the file the decompiler read.
+The atlas is held to a weaker
+claim on purpose, and the weakening is measured rather than assumed: it comes back
+equal as a **multiset of region blocks**, because the order the pages are collected in
+is in no field of the skeleton.
+
+**And over twelve skeletons nobody here wrote.** Every editor export in the fetched
+example corpus, ingested, rebuilt through the pack beside it and `diff`ed against the
+source, comes back **12 of 12, no blockers, 1.000 on every measure the report
+carries** — and each rebuild is its export's own text in canonical form, apart from
+the header's `hash` and `spine`: the editor's project hash and the runtime version
+rigc stamps, the two keys the rig spec has no field for by design (12 of 12) — and
+the header's box, which `build` computes rather than carries (issue #907): the rebuild
+writes spine-core's `getBounds` over the export on the header's 1e-6 grid at float32, equal on all twelve,
+where the editor wrote its own arithmetic, up to 0.0071 units away.
+[INGEST.md §2.3](../docs/INGEST.md) states that pass line and why those two are the
+exceptions.
+
+**What it reads is skeleton JSON and nothing else** — no `.spine` project, no binary
+`.skel`, no atlas, no art. So it never invents, and the things it cannot get out of
+the file are **findings** with codes rather than plausible values: a construct the
+spec format cannot hold (`point`, a `sequence` block, an unknown field
+on a bone, slot or constraint) is a blocker, the command exits non-zero, and both
+specs are still written — a spec plus a list of what is missing from it beats no spec.
+
+⚠️ **Two values are not in a skeleton at all.**
+
+- **The stage.** `skeleton.width`/`height`. A skeleton that declares none is carried as
+  declaring none — the rig spec states `"width": null, "height": null` and the rebuild
+  carries no box either, byte for byte — and `--stage x,y,w,h` is how a
+  caller *adds* one, recorded as a judgement. It is not derivable — posing the rig gives
+  the *animated* extent, which is a different number from the setup box. ⛔ **And `--stage` beside a box the file already states is refused
+  too**, for the opposite reason: two sources for one value, where the file is the record
+  of what was measured. **All twelve exports in the example corpus carry a stage** and
+  none of them needs the flag. It is the value that costs least to get wrong, because
+  `diff` reports the box and gates nothing on it. 🔁 The box an export's header carries
+  is its setup-pose bounding box, and it becomes the rebuild's *stage*; the rebuild's own
+  header is computed again, because since issue #907 `build` writes the setup-pose
+  bounding box there — never the stage — held to spine-core's `getBounds`. 📦 A rig
+  that has to carry its stage in the Spine files asks for it as a bounding box
+  (`skeleton.stageBox`, written by `build` from the stage and held by
+  `A50_STAGE_BOX_IS_THE_STAGE`), and `ingest --stage-box <slot>` reads that box back as
+  the rebuild's stage — [AUTHORING §3.1](../docs/AUTHORING.md) has the field and the
+  paragraph for a consumer of the files.
+- **An animation's duration.** The format has no such field. The largest key time is
+  the only derivable answer and it is what a runtime plays to; it is wrong for an
+  animation that holds its last pose past its last key, so it is recorded as a finding
+  on every animation rather than chosen quietly.
+
+Both specs carry a `note` that `ingest` writes itself, saying the file is decompiled
+and naming the skeleton it came from — because a decompiled spec is indistinguishable
+from an authored one by inspection, every gate here calls it green (it *is* green),
+and no gate can catch a missing note.
+
+[docs/INGEST.md](../docs/INGEST.md) is the whole page on working from a file you were
+handed; [docs/AUTHORING.md](../docs/AUTHORING.md) §0.3 is the loop.
+
+### The editor round trip — for a licence holder, never in CI
+
+`tools/editor_roundtrip.ts` drives the loop the output's whole premise rests on:
+build → **import into the Spine editor** → export back to JSON → gate, `diff`,
+`render` and `check` the export against the build it came from.
+
+```
+bun cli.ts build --rig … --motion … --out build/ --copy-images
+bun tools/editor_roundtrip.ts --build build/ --editor /Applications/Spine.app/Contents/MacOS/Spine
+```
+
+Of the editor's `--version` it records one line, the `Spine <x.y.z> …` line that
+carries the version, and nothing else that command prints — the rest of it
+names the licence holder — or `editor version: not found in --version output`
+where no such line is there. That call carries the same `-u` as the import and
+the export, so a trip pinned with `--editor-version <v>` names the editor it
+pinned and says so on the line (`(read from --version under -u <v>, …)`); an
+unpinned trip names the launcher's default. Once the export exists the version
+is held against the export's own `skeleton.spine`, and a disagreement is a FAIL
+naming both values — the line would otherwise name an editor the trip did not
+run on. It prints the import and export exit codes, the
+validator's verdict on the export, every `diff` measure that moved, `check`'s mean MAE and worst drift per
+animation **for each skin the build and the export both declare** — one
+render-and-check block per skin, with a per-skin roll-up under them, because a
+rig's contested art lives in its named skins and a single un-skinned check draws
+none of it; a skin only one side declares is a FAIL naming it as **lost** (or
+**added**) **by the export**, with `diff`'s `attachments.skins` beside it, and is
+rendered on neither side — and a
+field-by-field list of what the editor rewrote. Every step quotes what its child
+said when that child did not do what it was for, the renderers included — the
+editor's words in full and in order, except its `Licensed to:` line, which names
+the licence holder and is replaced by a line saying it was withheld; a skin
+**neither** side can draw — a hit-box rig, say — is a **SKIP** naming that, not a
+red, because `check` had nothing to compare and `diff` and `validate` have
+already measured the rig. One side drawing where the other does not is the
+divergence the trip exists to find and stays a failure. A human edit made in the
+editor survives the trip back.
+
+🔒 **It requires a licensed Spine editor on the machine, by construction**, and
+drives only the [documented command line](https://esotericsoftware.com/spine-command-line-interface)
+— never the UI, and it produces nothing the editor did not produce. With no
+editor present it refuses by name and exits non-zero, and so does the **trial**:
+the trial cannot save projects or export animation data, so the refusal names
+what it found — the executable, the bundle, the `CFBundleName` that bundle
+declares, or the banner the binary prints about itself — rather than starting it
+and failing downstream. Both refusals point at `--exported <file>`, which
+measures an export the editor already made and is the half of this tool that
+needs no editor at all. A build whose `skeleton.json` is missing, is not JSON, or
+holds JSON that is not one object is refused by name before the editor starts,
+and so is a build with no atlas or an atlas that is a directory, or an
+`--exported` file that is not one JSON object.
+
+⛔ **Run the round trip by hand, on a machine that has the editor.** CI has no
+editor, so no automated check runs it. The
+[pre-landing fixture policy](https://github.com/rig-c/core/blob/main/CLAUDE.md#the-selftest-and-its-fixtures)
+is the canonical explanation of which rigs the by-hand measurement covers and why.
+
+⚠️ Build with `--copy-images`. An ordinary build's atlas names its pages by a
+relative path back to the art directory, and the round trip copies that atlas to
+a directory at another depth — the tool refuses such a build by name rather than
+letting `A17` blame the editor for the harness's own doing.
+

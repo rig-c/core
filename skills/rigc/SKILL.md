@@ -148,5 +148,7 @@ spec files field by field, the emission rules, the loop, and the failure map. Th
 Every guide linked here is in the installed package at `node_modules/@rig-c/core/docs/`,
 which is the copy that matches the rigc you run; the links go to the repository's
 `main`. Inside the Claude Code plugin the same files are at `${CLAUDE_PLUGIN_ROOT}/docs/`.
-Formats, the CLI reference and the licence chain:
-[README.md](https://github.com/rig-c/core/blob/main/README.md), installed at `node_modules/@rig-c/core/README.md`.
+Formats and the CLI reference: [AUTHORING §0](https://github.com/rig-c/core/blob/main/docs/AUTHORING.md#0-the-loop),
+installed at `node_modules/@rig-c/core/docs/AUTHORING.md`;
+existing skeletons: [INGEST](https://github.com/rig-c/core/blob/main/docs/INGEST.md);
+licensing: [NOTICE](https://github.com/rig-c/core/blob/main/NOTICE.md).

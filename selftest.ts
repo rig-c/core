@@ -145595,9 +145595,9 @@ function setupSetFaults(label: string, row: string, root: string, fps: number): 
 }
 
 /**
- * README.md's two statements of where `render` writes (issue #1468): the render
- * paragraph of the walkthrough, from its bold lead to the next command's, and the
- * `render` row of the Commands table. Each is cut out by its own lead so a
+ * docs/AUTHORING.md's two statements of where `render` writes (issue #1468): the render
+ * paragraph of the CLI reference, from its bold lead to the next command's, and the
+ * `render` row of the command table. Each is cut out by its own lead so a
  * sentence moved into the neighbouring paragraph does not count, and a lead that
  * is gone is returned as the fault rather than read as an empty, clean place.
  */
@@ -145607,11 +145607,11 @@ function readmeRenderPlaces(readme: string): { places: Array<readonly [string, s
   const lead = '**`render`** samples every animation';
   const at = readme.indexOf(lead);
   const end = at < 0 ? -1 : readme.indexOf('**`preview`**', at);
-  if (at < 0 || end < 0) faults.push(`README.md has no render paragraph from ${JSON.stringify(lead)} to the **\`preview\`** one`);
-  else places.push(['README.md render paragraph', readme.slice(at, end)]);
+  if (at < 0 || end < 0) faults.push(`docs/AUTHORING.md has no render paragraph from ${JSON.stringify(lead)} to the **\`preview\`** one`);
+  else places.push(['docs/AUTHORING.md render paragraph', readme.slice(at, end)]);
   const row = readme.split('\n').find((line) => line.startsWith('| `render --candidate <dir>` |'));
-  if (row === undefined) faults.push('README.md\'s Commands table has no "| `render --candidate <dir>` |" row');
-  else places.push(['README.md Commands row', row]);
+  if (row === undefined) faults.push('docs/AUTHORING.md\'s command table has no "| `render --candidate <dir>` |" row');
+  else places.push(['docs/AUTHORING.md Commands row', row]);
   return { places, faults };
 }
 
@@ -145727,8 +145727,7 @@ function runRenderNamingSuite(): number {
   for (const [name, run] of [['--fps 24', at24], ['--geometry', atDefault], ['--geometry --skin --environment', full]] as const) {
     if (pre.length === 0 && (run === null || run.status !== 0)) pre.push(`render ${name} exited ${String(run?.status)}: ${(run?.stderr ?? '').trim().slice(0, 300)}`);
   }
-  const readme = readFileSync(join(import.meta.dir, 'README.md'), 'utf8');
-  const readmeRender = readmeRenderPlaces(readme);
+  const readmeRender = readmeRenderPlaces(guide);
   pre.push(...readmeRender.faults);
   const outRow = renderOutRow(help.stdout);
   if (outRow.fault !== null) pre.push(outRow.fault);
@@ -145839,7 +145838,7 @@ function runRenderNamingSuite(): number {
     );
   }
 
-  // RN05 — issue #1468: README.md with the sentence taken out of either place is red, by that place's name.
+  // RN05 — issues #1468/#1648: AUTHORING.md with the sentence taken out of either place is red, by that place's name.
   {
     const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults(readmeRender.places, frameSetDir);
     const fragment = fpsNamingFragments(frameSetDir)[0];
@@ -145849,13 +145848,13 @@ function runRenderNamingSuite(): number {
       const named = fpsNamingFaults([[label, without]], frameSetDir);
       if (!named.some((f) => f.startsWith(label))) misses.push(`${label} with ${fragment} removed read clean`);
     }
-    const cut = readmeRenderPlaces(readme.replace('**`render`** samples every animation', '**`render`** draws every animation'));
-    if (cut.faults.length === 0) misses.push('a README.md whose render paragraph lost its lead was still read as a place');
+    const cut = readmeRenderPlaces(guide.replace('**`render`** samples every animation', '**`render`** draws every animation'));
+    if (cut.faults.length === 0) misses.push('an AUTHORING.md whose render paragraph lost its lead was still read as a place');
     say(
-      'RN05_README_WITHOUT_THE_FPS_DIRECTORY_SENTENCE_IS_RED',
+      'RN05_AUTHORING_WITHOUT_THE_FPS_DIRECTORY_SENTENCE_IS_RED',
       cleanFaults.length === 0 && misses.length === 0 && readmeRender.places.length === 2,
       cleanFaults.length > 0
-        ? `the unplanted README.md is already red: ${cleanFaults[0]}`
+        ? `the unplanted AUTHORING.md is already red: ${cleanFaults[0]}`
         : misses.length > 0
           ? misses[0]
           : `${fragment} removed from each of ${readmeRender.places.map(([label]) => label).join(' and ')} is named by that place, and a paragraph whose lead is gone is a fault rather than an empty place`,

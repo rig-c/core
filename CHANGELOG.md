@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.82.2](https://github.com/rig-c/core/compare/v2.82.1...v2.82.2) (2026-10-30)
+
+
+### Bug Fixes
+
+* **docs:** give README links text that names where they go ([#1653](https://github.com/rig-c/core/issues/1653)) ([148cc3a](https://github.com/rig-c/core/commit/148cc3a4dd6969e3124e98bbc4ffc89e1ccf8cf4))
+* **pose:** keep the true-location seed alive to the final dedupe ([#1654](https://github.com/rig-c/core/issues/1654)) ([10987e2](https://github.com/rig-c/core/commit/10987e20f73d9a9ca89f959d22c35df256be3958)), closes [#1649](https://github.com/rig-c/core/issues/1649) [#1645](https://github.com/rig-c/core/issues/1645)
+
 ## [2.82.1](https://github.com/rig-c/core/compare/v2.82.0...v2.82.1) (2026-10-30)
 
 

@@ -24,6 +24,15 @@ permissions:
   contents: read
 
 jobs:
+  readme:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun test scripts/check_readme.test.ts
+      - run: bun scripts/check_readme.ts
+
   # The selftest as n shards and their merge (issues #1116, #1249). The matrix,
   # the merge and the corpus fetch live in selftest-shards.yml, which
   # release.yml calls on the tag it is about to publish, so the gate CI reads

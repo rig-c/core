@@ -1070,10 +1070,10 @@ const FLAG_MEANINGS: Record<string, string> = {
   extremes: 'also write extremes.json and a native six-panel extremes.png per set: setup, geometry-pair min/max and premultiplied RGBA diffs, with a legend. Per-channel extrema are recorded separately and valid channels survive geometry/image SKIPs; channel refusals are named separately. Still geometry reports SKIP; a reading, not a gate. Attachment identity/count changes record a named SKIP without changing render exit; supports --slot/--hide on both posers',
   seam:
     `also read, for each <slot>:<slot> pair, where the two drawings stop meeting, and write ${SEAM_FILE} into each frame directory: ` +
-    'per pair, the frames with a gap — background inside the hull of the band the two drawings share at the setup pose, carried to the frame by both — ' +
-    'and the frames with a ghost — the band of one drawing showing where, from its partner\'s point of view, nothing was drawn at the setup pose — each with ' +
+    'per pair, the frames with a gap — background inside the carried overlap hull and a local sweep of the same setup band cell through both drawings — ' +
+    'and the frames with a visible ghost after draw order — the band of one drawing showing where, from its partner\'s point of view, nothing was drawn at the setup pose — each with ' +
     `its cell count, area and world box. Cells are one texel of the coarser drawing, drawn at ${DRAWN_ALPHA} of 255 or more. One line per pair; a pair whose ` +
-    'drawings share no cell at the setup pose is a SKIP. A reading, not a gate: the exit status never moves. An unknown slot, a slot with itself, ' +
+    'drawings share no cell at the setup pose is a SKIP. exposureA/B count each named slot’s positive-alpha cells on otherwise empty skeleton background, even without a band or partner. A reading, not a gate: the exit status never moves. An unknown slot, a slot with itself, ' +
     'a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name. Not with --slot/--hide',
   'angle-range':
     'also read, for each <bone>:<relative-to> pair, the range of the first bone\'s world direction against the second\'s over each set\'s ' +
@@ -1762,7 +1762,7 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --slot <name[,name…]> | --hide <name[,name…]>   (a subset of the slots, on the whole rig\'s grid)',
       'rigc render … --environment <schedule.json>   (the wind and gravity the physics answers, in time)',
       'rigc render … --pass-through <cloth>:<leg>[,…]   (the frames where a cloth drawn over a leg passes through it)',
-      'rigc render … --seam <slot>:<slot>[,…]   (the frames where two slots that meet open a gap or show a ghost)',
+      'rigc render … --seam <slot>:<slot>[,…]   (joint gaps, visible ghosts and each named slot’s background exposure)',
       'rigc render … --overlaps   (which slot each frame drew over which, by name, with an outline plate)',
       'rigc render … --angle-range <bone>:<relative-to>[,…]   (how far a bone turns against another, per animation)',
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',

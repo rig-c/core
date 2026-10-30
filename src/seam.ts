@@ -39,34 +39,29 @@
  *   read, and a pair whose band is empty on every frame both draw is a **SKIP**,
  *   never a pass. The band has no width of its own: it is the overlap the art
  *   states, dilated by nothing.
- * - **gap** — background appears in the joint. The band's cells, carried to the
- *   frame by each piece (its centre through that piece's setup-pose triangle),
- *   span a convex hull: the region the joint occupies now, as both pieces place
- *   it. A cell inside that hull is a gap cell when neither piece draws it at the
- *   frame and at least one piece, carrying it back, finds it drawn by either
- *   drawing at the setup pose — the two no longer cover what they covered
- *   together. The hull is the joint's own extent, so a piece's far end swinging
- *   away from where it was is not read; the rest test is what keeps a band that
- *   is concave at the setup pose from reading its own notch on every frame.
- * - **ghost** — alpha appears where the rest composite had none. A cell one
- *   piece draws at the frame and the other does not is a ghost cell when the
- *   drawing piece, carrying it back, lands it in the band, and the other piece,
- *   carrying it back, finds neither drawing there at the setup pose — the
- *   overlap band swung clear of its partner.
+ * - **gap** — neither drawing paints the cell, and at least one inverse
+ *   attachment map finds setup art there. The candidate must lie in both the
+ *   outer hull of the transported band centres AND a local sweep joining the
+ *   SAME setup band cell through the two attachment maps. Local sweeps are
+ *   convex hulls of that cell's eight carried corners; they do not bridge
+ *   unrelated overlap islands or concave notches. The rig's alpha and triangle
+ *   maps supply this joint support, with no pivot radius. This is an explicit
+ *   geometric reading, not an inference of artistic intent or all possible tears.
+ * - **ghost** — a one-sided drawing carried from the setup band whose partner's
+ *   inverse map finds no setup art. Count it only if that slot still contributes
+ *   after source-over in frame draw order: later opaque art hides it, partial
+ *   alpha retains a contribution. All fragments of later slots participate.
+ * - **exposureA/B** — whole-drawing positive-alpha cells of each named slot
+ *   where removing all fragments of that slot leaves alpha zero. Other slots
+ *   exclude exposure regardless of draw order, even below half opacity. Exposure
+ *   is independent of the band and is measured with an absent partner too; it
+ *   never enters opens/maxPx. It is not a difference from setup.
  *
- * Each frame's figures are the cell counts (`px`), the cell size, their area,
- * and the world box of the counted cells (each cell's whole square).
- * The pair's gap is partitioned into gapOpen (the transparent skeleton frame
- * has alpha 0 there) and gapCovered (positive rendered alpha from any piece,
- * including a faint pair member). This does not change the half-opacity pair
- * predicate: another drawing can cover what the pair no longer covers.
- *
- * Known reach, stated rather than discovered: a piece folded right back over its
- * partner carries the band across the region it vacated, so a hull that wide
- * reads the vacated cells its partner's view still finds drawn; a mesh whose
- * vertices stretch the art the band lies in reads the stretched band, which is
- * what it draws. Draw order does not enter: a cell is covered or bare whichever
- * piece is in front.
+ * Hits carry cell count, area and whole-cell world box; sparse spans and earliest
+ * worst-frame summaries share one derivation. gapOpen/gapCovered still partition
+ * gap by zero/positive alpha of the transparent whole-skeleton composite.
+ * Shared transforms read closed. The outer-hull reach remains bounded: tears
+ * outside the transported setup overlap are not certified absent by a zero.
  *
  * Pure: no clock, no randomness, no runtime. The pieces, the attachments and the
  * rest table are handed in by whichever poser drew the frames.
@@ -188,6 +183,9 @@ export interface SeamPairReading {
   gapOpen: SeamKindReading;
   /** Gap cells whose skeleton composite has positive rendered alpha, even below half opacity. */
   gapCovered: SeamKindReading;
+  /** Positive-alpha cells contributed by the named slot where all OTHER slots have zero alpha. Independent of the band. */
+  exposureA: SeamKindReading;
+  exposureB: SeamKindReading;
 }
 
 /** `seam.json`: one frame set's reading, every pair the flag names, in the flag's order. */
@@ -198,7 +196,7 @@ export interface SeamFile {
   skin?: string;
   fps: number;
   /** What the numbers mean, stated in the file so a reader does not need this module. */
-  reading: { read: string; cell: string; drawn: string; band: string; carried: string; gap: string; ghost: string; box: string; status: string; ghostA: string; ghostB: string; gapOpen: string; gapCovered: string };
+  reading: { read: string; cell: string; drawn: string; band: string; carried: string; gap: string; ghost: string; box: string; status: string; ghostA: string; ghostB: string; gapOpen: string; gapCovered: string; exposureA: string; exposureB: string };
   pairs: SeamPairReading[];
 }
 
@@ -217,6 +215,10 @@ export interface SeamPlant {
   ghostAnyArt?: boolean;
   /** Attribute every ghost to a, regardless of which piece draws it. */
   ghostOnlyA?: boolean;
+  /** Ignore later drawings when reading ghosts. */
+  hiddenGhost?: boolean;
+  /** Bridge unrelated overlap cells with the old global hull. */
+  globalHull?: boolean;
   /** Wrong composite readings: half opacity, only the pair, or every gap forced to one kind. */
   gapCoverage?: 'half' | 'pair' | 'open' | 'covered';
   /** Report a pair with no band as read, rather than as a SKIP. */
@@ -387,11 +389,10 @@ function frameAlphaCells(pieces: readonly Piece[], pages: ReadonlyMap<string, Pl
   return cells;
 }
 
-/** One frame's counts, or `null` when the two drawings share no cell at the setup pose. See the module comment. */
-function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells } | null {
-  // One grid over both drawings at the setup pose and at the frame, on multiples of the cell from the world origin.
+/** One origin-aligned texel grid, also used when only one named slot draws. */
+function gridOf(sides: readonly Side[], cell: number, extra: readonly Piece[] = []): Grid {
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
-  for (const xy of [A.rest, B.rest, A.piece.world, B.piece.world]) {
+  for (const xy of [...sides.flatMap((side) => [side.rest, side.piece.world]), ...extra.map((piece) => piece.world)]) {
     for (let i = 0; i + 1 < xy.length; i += 2) {
       x0 = Math.min(x0, xy[i]);
       y0 = Math.min(y0, xy[i + 1]);
@@ -403,7 +404,78 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   const maxY = (Math.ceil(y1 / cell) + 1) * cell;
   const width = Math.ceil((x1 - minX) / cell) + 1;
   const height = Math.ceil((maxY - y0) / cell) + 1;
-  const grid: Grid = { viewport: { minX, minY: maxY - height * cell, maxX: minX + width * cell, maxY, scale: 1 / cell, width, height }, cell };
+  return { viewport: { minX, minY: maxY - height * cell, maxX: minX + width * cell, maxY, scale: 1 / cell, width, height }, cell };
+}
+
+const emptyCells = (): Cells => ({ px: 0, box: null });
+function takeCell(into: Cells, qx: number, qy: number, cell: number): void {
+  into.px++;
+  const h = cell / 2;
+  into.box ??= [Infinity, Infinity, -Infinity, -Infinity];
+  into.box[0] = Math.min(into.box[0], qx - h);
+  into.box[1] = Math.min(into.box[1], qy - h);
+  into.box[2] = Math.max(into.box[2], qx + h);
+  into.box[3] = Math.max(into.box[3], qy + h);
+}
+
+/**
+ * Symbolic nonzero source-over contribution per named slot. Later alpha 255
+ * erases earlier contributions; any positive emission of that slot adds one.
+ * Partial alpha cannot erase a nonzero contribution. Traverse EVERY fragment,
+ * including multiple pieces of the same slot and clipped source meshes.
+ * Exposure asks a separate counterfactual: would removing this slot leave
+ * alpha zero? It therefore excludes even faint art of any other slot, before
+ * OR after the named slot. No setup comparison or seam band enters.
+ */
+function slotCells(frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, slots: readonly string[]): { visible: Uint8Array; exposure: Cells }[] {
+  const n = grid.viewport.width * grid.viewport.height;
+  const masks = slots.map(() => ({ visible: new Uint8Array(n), own: new Uint8Array(n), other: new Uint8Array(n), exposure: emptyCells() }));
+  const project = projector(grid.viewport);
+  for (const piece of frame.pieces) {
+    const page = pages.get(piece.page);
+    if (page === undefined) throw new SeamError(`slot "${piece.slot}" samples atlas page "${piece.page}", which is not among [${[...pages.keys()].join(', ')}]`);
+    rasterisePiece(page, piece, project, grid.viewport, (x, y, _r, _g, _b, alpha) => {
+      const k = y * grid.viewport.width + x;
+      for (let i = 0; i < slots.length; i++) {
+        const m = masks[i];
+        if (alpha === 255) m.visible[k] = 0;
+        if (alpha > 0) {
+          if (piece.slot === slots[i]) m.own[k] = m.visible[k] = 1;
+          else m.other[k] = 1;
+        }
+      }
+    });
+  }
+  for (const m of masks) for (let k = 0; k < n; k++) if (m.own[k] && !m.other[k]) {
+    takeCell(m.exposure, centreX(grid, k % grid.viewport.width), centreY(grid, Math.floor(k / grid.viewport.width)), grid.cell);
+  }
+  return masks;
+}
+
+/** Rasterise a convex swept cell by scanline; never fill between unrelated band cells. */
+function markHull(hull: ReadonlyArray<[number, number]>, grid: Grid, cells: Uint8Array): void {
+  if (hull.length === 0) return;
+  const { minX, maxY, width, height } = grid.viewport;
+  const lo = Math.max(0, Math.ceil((maxY - Math.max(...hull.map((p) => p[1]))) / grid.cell - 0.5));
+  const hi = Math.min(height - 1, Math.floor((maxY - Math.min(...hull.map((p) => p[1]))) / grid.cell - 0.5));
+  for (let py = lo; py <= hi; py++) {
+    const y = centreY(grid, py);
+    let left = Infinity, right = -Infinity;
+    for (let i = 0; i < hull.length; i++) {
+      const [x0, y0] = hull[i], [x1, y1] = hull[(i + 1) % hull.length];
+      if (y < Math.min(y0, y1) || y > Math.max(y0, y1)) continue;
+      if (y0 === y1) { left = Math.min(left, x0, x1); right = Math.max(right, x0, x1); }
+      else { const x = x0 + (y - y0) * (x1 - x0) / (y1 - y0); left = Math.min(left, x); right = Math.max(right, x); }
+    }
+    const x0 = Math.max(0, Math.ceil((left - minX) / grid.cell - 0.5));
+    const x1 = Math.min(width - 1, Math.floor((right - minX) / grid.cell - 0.5));
+    for (let px = x0; px <= x1; px++) cells[py * width + px] = 1;
+  }
+}
+
+/** One frame's counts, or `null` when the two drawings share no cell at the setup pose. See the module comment. */
+function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, visibility: readonly Uint8Array[]): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells } | null {
+  const { width, height } = grid.viewport;
   const restA = restPiece(A);
   const restB = restPiece(B);
   const bandA = drawnCells(restA, A.page, grid.viewport);
@@ -411,7 +483,13 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   // The band: both drawings at the setup pose. Carried to the frame by each piece, its centres span the joint's hull.
   const restIdsA = triangleIds(A.triangles, A.rest, grid);
   const restIdsB = triangleIds(B.triangles, B.rest, grid);
+  // The corner lattice is offset by half a cell. Reuse the same lowest-index
+  // containing-triangle rule as centres, including overlapping setup meshes.
+  const corners: Grid = { cell, viewport: { ...grid.viewport, minX: grid.viewport.minX - cell / 2, minY: grid.viewport.minY - cell / 2, maxX: grid.viewport.maxX + cell / 2, maxY: grid.viewport.maxY + cell / 2, width: width + 1, height: height + 1 } };
+  const cornerIdsA = triangleIds(A.triangles, A.rest, corners);
+  const cornerIdsB = triangleIds(B.triangles, B.rest, corners);
   const carried: Array<[number, number]> = [];
+  const joint = new Uint8Array(width * height);
   let band = 0;
   let [bx0, by0, bx1, by1] = [Infinity, Infinity, -Infinity, -Infinity];
   for (let py = 0; py < height; py++) {
@@ -422,16 +500,27 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
       const qx = centreX(grid, px);
       const qy = centreY(grid, py);
       [bx0, by0, bx1, by1] = [Math.min(bx0, qx), Math.min(by0, qy), Math.max(bx1, qx), Math.max(by1, qy)];
-      for (const [side, ids] of [[A, restIdsA], [B, restIdsB]] as const) {
+      const local: Array<[number, number]> = [];
+      for (const [side, ids, cornerIds] of [[A, restIdsA, cornerIdsA], [B, restIdsB, cornerIdsB]] as const) {
         const p = plant.world ? ([qx, qy] as [number, number]) : carry(side.triangles, side.rest, side.piece.world, ids[k], qx, qy);
         if (p !== null) carried.push(p);
+        // The same material cell through BOTH attachment maps. Corners use
+        // their own triangle when the cell crosses a skinned mesh edge.
+        for (const ox of [0, 1]) for (const oy of [0, 1]) {
+          const x = grid.viewport.minX + (px + ox) * cell, y = grid.viewport.maxY - (py + oy) * cell;
+          const id = cornerIds[(py + oy) * (width + 1) + px + ox];
+          const corner = plant.world ? [x, y] as [number, number] : carry(side.triangles, side.rest, side.piece.world, id, x, y);
+          if (corner !== null) local.push(corner);
+        }
       }
+      markHull(hullOf(local), grid, joint);
     }
   }
   if (band === 0) return null;
   const hull = hullOf(carried);
   const drawnA = drawnCells(A.piece, A.page, grid.viewport);
   const drawnB = drawnCells(B.piece, B.page, grid.viewport);
+  const [visibleA, visibleB] = visibility;
   const posedIdsA = triangleIds(A.triangles, A.piece.world, grid);
   const posedIdsB = triangleIds(B.triangles, B.piece.world, grid);
   // A frame point carried back into a side's setup pose.
@@ -446,15 +535,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   const gapOpen: Cells = { px: 0, box: null };
   const gapCovered: Cells = { px: 0, box: null };
   let alphaCells: Uint8Array | null = null;
-  const take = (into: Cells, qx: number, qy: number): void => {
-    into.px++;
-    const h = cell / 2;
-    into.box ??= [Infinity, Infinity, -Infinity, -Infinity];
-    into.box[0] = Math.min(into.box[0], qx - h);
-    into.box[1] = Math.min(into.box[1], qy - h);
-    into.box[2] = Math.max(into.box[2], qx + h);
-    into.box[3] = Math.max(into.box[3], qy + h);
-  };
+  const take = (into: Cells, qx: number, qy: number): void => takeCell(into, qx, qy, cell);
   if (plant.never) return { gap, ghost, ghostA, ghostB, gapOpen, gapCovered };
   const inBand = (p: [number, number] | null): boolean => p !== null && p[0] >= bx0 - cell / 2 && p[0] <= bx1 + cell / 2 && p[1] >= by0 - cell / 2 && p[1] <= by1 + cell / 2;
   for (let py = 0; py < height; py++) {
@@ -465,7 +546,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
       const a = drawnA[k] !== 0;
       const b = drawnB[k] !== 0;
       if (!a && !b) {
-        if (!plant.noHull && !inHull(hull, qx, qy)) continue;
+        if (!plant.noHull && (!inHull(hull, qx, qy) || (!plant.globalHull && !joint[k]))) continue;
         const fromA = composite(back(A, posedIdsA, k, qx, qy));
         const fromB = composite(back(B, posedIdsB, k, qx, qy));
         if (plant.bothViews ? fromA && fromB : fromA || fromB) {
@@ -477,6 +558,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
         continue;
       }
       if (a && b) continue;
+      if (!plant.hiddenGhost && !(a ? visibleA[k] : visibleB[k])) continue;
       // One piece draws the cell and its partner does not.
       const [mine, myIds, myRest, other, otherIds] = a ? [A, posedIdsA, restA, B, posedIdsB] : [B, posedIdsB, restB, A, posedIdsA];
       const otherRest = a ? restB : restA;
@@ -551,17 +633,25 @@ export function seamsOf(
     const ghostsB: SeamHit[] = [];
     const openGaps: SeamHit[] = [];
     const coveredGaps: SeamHit[] = [];
+    const exposuresA: SeamHit[] = [], exposuresB: SeamHit[] = [];
     for (const frame of frames) {
       const A = sideOf(frame, a);
       const B = sideOf(frame, b);
+      const sides = [A, B].filter((side): side is Side => side !== null);
+      if (sides.length === 0) continue;
+      const sizes = sides.map((side) => texelSize(side.piece, side.rest, side.page));
+      if (sizes.some((size) => size === null)) throw new SeamError(`frame ${frame.index}: slot "${sides[sizes.indexOf(null)].piece.slot}" draws no area at its setup pose, so it has no texel to grid the seam by`);
+      const exposureCell = Math.max(...sizes.filter((size): size is number => size !== null));
+      const exposureGrid = gridOf(sides, exposureCell, frame.pieces.filter((piece) => piece.slot === a || piece.slot === b));
+      const exposure = slotCells(frame, pages, exposureGrid, [a, b]);
+      for (const [i, into] of [[0, exposuresA], [1, exposuresB]] as const) {
+        const cells = exposure[i].exposure;
+        if (cells.px > 0 && cells.box !== null) into.push({ index: frame.index, time: frame.time, px: cells.px, cell: exposureCell, area: cells.px * exposureCell * exposureCell, box: cells.box });
+      }
       if (A === null || B === null) continue;
       drawn++;
-      const cellA = texelSize(A.piece, A.rest, A.page);
-      const cellB = texelSize(B.piece, B.rest, B.page);
-      const flat = cellA === null ? a : cellB === null ? b : null;
-      if (cellA === null || cellB === null) throw new SeamError(`frame ${frame.index}: slot "${flat}" draws no area at its setup pose, so it has no texel to grid the seam by`);
-      const cell = Math.max(cellA, cellB);
-      const read = readFrame(A, B, cell, plant, frame, pages);
+      const cell = exposureCell;
+      const read = readFrame(A, B, cell, plant, frame, pages, exposureGrid, exposure.map((m) => m.visible));
       if (read === null) continue;
       banded++;
       for (const [cells, into] of [[read.gap, gaps], [read.ghost, ghosts], [read.ghostA, ghostsA], [read.ghostB, ghostsB], [read.gapOpen, openGaps], [read.gapCovered, coveredGaps]] as const) {
@@ -573,25 +663,27 @@ export function seamsOf(
     const opens = [...new Set([...gaps, ...ghosts].map((f) => f.index))].sort((x, y) => x - y);
     const maxPx = Math.max(0, ...gaps.map((f) => f.px), ...ghosts.map((f) => f.px));
     const status = banded === 0 && !plant.skipAsRead ? 'skip' : 'read';
-    return { a, b, drawn, banded, status, opens, maxPx, gap, ghost, ghostA: kindOf(ghostsA), ghostB: kindOf(ghostsB), gapOpen: kindOf(openGaps), gapCovered: kindOf(coveredGaps) };
+    return { a, b, drawn, banded, status, opens, maxPx, gap, ghost, ghostA: kindOf(ghostsA), ghostB: kindOf(ghostsB), gapOpen: kindOf(openGaps), gapCovered: kindOf(coveredGaps), exposureA: kindOf(exposuresA), exposureB: kindOf(exposuresB) };
   });
 }
 
 /** What `seam.json` states its numbers mean — the one wording the file and the docs share. */
 export const SEAM_READING: SeamFile['reading'] = {
-  read: 'a frame is read when both slots draw and their two drawings share a cell at the setup pose (the band); draw order does not enter',
-  cell: "every count is of cells one texel of the coarser of the two drawings at the setup pose (the rest table's vertices), in world units, on multiples of that texel from the world origin; px is a count of cells, cell the cell's side in world units, area px × cell² in world units²",
+  read: 'a frame is read when both slots draw and their two drawings share a cell at the setup pose (the band); ghost visibility follows frame draw order; exposure is also measured without a band',
+  cell: "every count is of cells one texel of the coarser of the two drawings at the setup pose (the rest table's vertices; the present member alone for exposure when its partner is absent), in world units, on multiples of that texel from the world origin; px is a count of cells, cell the cell's side in world units, area px × cell² in world units²",
   drawn: `a cell is drawn by a piece when the renderer paints its centre at ${DRAWN_ALPHA} of 255 or more (half opacity) — the slot's art through its page, the frame's tint included, at the setup pose drawn at the same tint`,
   band: "the band is the cells both drawings draw at the setup pose — where the two were painted to overlap, dilated by nothing",
   carried:
     "a frame point is carried into a piece's setup pose by the affine map of the piece's triangle holding it as the frame poses it, or, outside the piece's mesh, of the triangle it is least outside of (the largest smallest barycentric weight, the lowest index on a tie); a band cell is carried to the frame the other way",
-  gap: "a gap cell lies inside the convex hull of the band's cell centres carried to the frame by both pieces, is drawn by neither piece at the frame, and at least one piece, carrying it back, finds it drawn by either drawing at the setup pose",
-  ghost: "a ghost cell is drawn at the frame by one piece and not the other; the drawing piece, carrying it back, lands it in the band, and the other piece, carrying it back, finds neither drawing there at the setup pose",
+  gap: "a gap cell lies inside the convex hull of the band's cell centres carried to the frame by both pieces, is inside the union of local sweeps of the SAME setup-overlap cell through both attachment maps, is drawn by neither piece at the frame, and at least one piece, carrying it back, finds it drawn by either drawing at the setup pose",
+  ghost: "a ghost cell has nonzero source-over contribution from its named slot after all later drawings (opaque later art hides it; partial alpha does not), is drawn at the frame by one piece and not the other; the drawing piece, carrying it back, lands it in the band, and the other piece, carrying it back, finds neither drawing there at the setup pose",
   box: "a frame's box is [minX, minY, maxX, maxY] in world units (y up) over the whole squares of that kind's counted cells",
   status: 'a pair is skip when no frame is read — the two never draw together, or never share a cell at the setup pose — which is nothing measured, not a seam that held',
   ghostA: 'the ghost cells drawn by a only, with the same frames, spans and worst shape as ghost; ghostA and ghostB partition ghost on every frame',
   ghostB: 'the ghost cells drawn by b only; a and b are the named pair order, not which piece is in front — reversing the pair exchanges ghostA and ghostB',
   gapOpen: 'the gap cells whose centre has alpha 0 in the transparent frame composite of every skeleton drawing, using the renderer on the same cell grid; gapOpen and gapCovered partition gap',
+  exposureA: 'positive-rendered-alpha cells from named slot a where removing every fragment of that slot leaves alpha 0 from all other skeleton slots, regardless of draw order; measured over the whole drawing even without a seam band or partner; same hit, span and worst units as gap',
+  exposureB: 'the same background exposure for named slot b; swapping the pair exchanges exposureA and exposureB; exposure does not enter opens or maxPx and is not a change-from-setup measurement',
   gapCovered: 'the gap cells whose centre has positive rendered alpha from any skeleton drawing, including the pair; alpha 1..127 covers too — this is not the pair\'s half-opacity test, and no presentation background enters',
 };
 
@@ -609,7 +701,7 @@ export function seamText(file: SeamFile): string {
 const outward = (x: number, up: boolean): string => ((up ? Math.ceil(x * 100) : Math.floor(x * 100)) / 100).toFixed(2);
 
 /** One kind's clause: `gap on N frame(s) [runs], worst frame i (t=…s): P px (A units² at C units a px) in world box …`, or `no gap`. */
-function kindText(kind: 'gap' | 'ghost', reading: SeamKindReading): string {
+function kindText(kind: string, reading: SeamKindReading): string {
   const w = reading.worst;
   if (w === null) return `no ${kind}`;
   const [x0, y0, x1, y1] = w.box;
@@ -624,7 +716,7 @@ function kindText(kind: 'gap' | 'ghost', reading: SeamKindReading): string {
  * The line for one pair over one set — printed for every pair, so a pair that
  * stays closed says so, and a pair with nothing to read says SKIP and why.
  */
-export function seamLine(animation: string | null, fps: number, pair: SeamPairReading): string {
+function seamSummary(animation: string | null, fps: number, pair: SeamPairReading): string {
   const where = animation === null ? 'the setup pose' : JSON.stringify(animation);
   const head = `${where}: seam "${pair.a}" | "${pair.b}"`;
   if (pair.drawn === 0) return `${head}: SKIP — the two slots draw together on no frame, so there is no seam to read`;
@@ -634,4 +726,9 @@ export function seamLine(animation: string | null, fps: number, pair: SeamPairRe
     `${head} opens on ${pair.opens.length} of ${pair.banded} frame(s) read [${indexRuns(pair.opens)}] at ${fps} fps, max ${pair.maxPx} px — ` +
     `${kindText('gap', pair.gap)}; ${kindText('ghost', pair.ghost)}`
   );
+}
+
+/** The seam summary plus whole-drawing background exposures, including on SKIP pairs. */
+export function seamLine(animation: string | null, fps: number, pair: SeamPairReading): string {
+  return `${seamSummary(animation, fps, pair)}; ${kindText(`exposure ${JSON.stringify(pair.a)}`, pair.exposureA)}; ${kindText(`exposure ${JSON.stringify(pair.b)}`, pair.exposureB)}`;
 }

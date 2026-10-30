@@ -144252,6 +144252,7 @@ function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slo
 // ---------------------------------------------------------------------------
 
 import { carry, SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
+import { seamCellControls } from './fixtures/seam_controls.ts';
 
 /**
  * How far the seam probe turns the skirt, in degrees: the issue's figure, past
@@ -144259,10 +144260,11 @@ import { carry, SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, t
  */
 const SEAM_TURN = 40;
 
-/** The pairs the seam probe is read with: the skirt over the leg, and the two copies of the leg, which move together. */
+/** Both skirt interfaces and the two leg copies: the front copy hides the rear ghost and supplies the visible positive control. */
 const SEAM_PROBE_PAIRS: readonly SeamPair[] = [
   { a: 'skirt', b: 'leg' },
   { a: 'leg_front', b: 'leg' },
+  { a: 'skirt', b: 'leg_front' },
 ];
 
 /** A world box `[minX, minY, maxX, maxY]`. */
@@ -144384,20 +144386,20 @@ function seamApartFaults(readings: SeamReadings, fps: number): string[] {
 
 /** SE04's reading: the leg shifted shows its band past the skirt's side — a ghost of exactly that rectangle on every frame, and no gap. */
 function seamShiftFaults(readings: SeamReadings, fps: number): string[] {
-  const pair = seamPairOf(readings, 'shift', 'skirt', 'leg');
-  if (pair === undefined) return ['no reading of "skirt|leg" on "shift"'];
+  const pair = seamPairOf(readings, 'shift', 'skirt', 'leg_front');
+  if (pair === undefined) return ['no reading of "skirt|leg_front" on "shift"'];
   const faults: string[] = [];
   const n = seamProbeFrames('shift', fps);
   const { skirt, band } = seamProbeRects();
   const want: SeamProbeBox = [band[0] + seamProbeShift(), band[1], skirt[0], band[3]];
   const px = (want[2] - want[0]) * (want[3] - want[1]);
-  if (pair.gap.frames.length !== 0) faults.push(`"skirt|leg" on "shift" opens a gap on [${pair.gap.frames.map((f) => f.index).join(', ')}] — the leg covers everything between the band's two places`);
-  if (pair.ghost.frames.length !== n) faults.push(`"skirt|leg" on "shift" shows a ghost on [${pair.ghost.frames.map((f) => f.index).join(', ')}], required every frame 0-${n - 1}`);
+  if (pair.gap.frames.length !== 0) faults.push(`"skirt|leg_front" on "shift" opens a gap on [${pair.gap.frames.map((f) => f.index).join(', ')}] — the leg covers everything between the band's two places`);
+  if (pair.ghost.frames.length !== n) faults.push(`"skirt|leg_front" on "shift" shows a ghost on [${pair.ghost.frames.map((f) => f.index).join(', ')}], required every frame 0-${n - 1}`);
   for (const f of pair.ghost.frames) {
     if (f.px !== px) faults.push(`"shift" frame ${f.index} ghost ${f.px} px, the probe's numbers give ${px} — the band's part past the skirt's side`);
     if (f.box.some((v, i) => Math.abs(v - want[i]) > 1e-6)) faults.push(`"shift" frame ${f.index} ghost box ${JSON.stringify(f.box)}, the probe's numbers give ${JSON.stringify(want)}`);
   }
-  if (pair.maxPx !== (pair.ghost.frames.length === 0 ? 0 : px) || JSON.stringify(pair.opens) !== JSON.stringify(pair.ghost.frames.map((f) => f.index))) faults.push(`"skirt|leg" on "shift" carries opens ${JSON.stringify(pair.opens)} and maxPx ${pair.maxPx}, not its ghost frames' and their most`);
+  if (pair.maxPx !== (pair.ghost.frames.length === 0 ? 0 : px) || JSON.stringify(pair.opens) !== JSON.stringify(pair.ghost.frames.map((f) => f.index))) faults.push(`"skirt|leg_front" on "shift" carries opens ${JSON.stringify(pair.opens)} and maxPx ${pair.maxPx}, not its ghost frames' and their most`);
   return faults;
 }
 
@@ -144447,7 +144449,7 @@ function seamOwnerSwapFaults(forward: SeamReadings, reverse: SeamReadings, fps: 
       if (JSON.stringify(p[key]) !== JSON.stringify(q[key])) faults.push(`${set} ${p.a}|${p.b}: reversal changed ${key}`);
     }
     if (JSON.stringify(p.ghostA) !== JSON.stringify(q.ghostB) || JSON.stringify(p.ghostB) !== JSON.stringify(q.ghostA)) faults.push(`${set} ${p.a}|${p.b}: reversal did not exchange owners`);
-    if (set === 'shift' && p.a === 'skirt' && p.b === 'leg' && (JSON.stringify(p.ghostA) !== JSON.stringify(empty) || JSON.stringify(p.ghostB) !== JSON.stringify(p.ghost))) faults.push('shift: the derived strip is drawn by leg/B only');
+    if (set === 'shift' && p.a === 'skirt' && p.b === 'leg_front' && (JSON.stringify(p.ghostA) !== JSON.stringify(empty) || JSON.stringify(p.ghostB) !== JSON.stringify(p.ghost))) faults.push('shift: the visible derived strip is drawn by leg_front/B only');
   }
   return faults;
 }
@@ -144600,6 +144602,7 @@ function runSeamCoverageControls(work: string): number {
 function runSeamSuite(): number {
   console.log('\n── seam: where two slots that meet stop meeting (issue #1456) ──');
   let bad = 0;
+  for (const row of seamCellControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1656: visibility, local material correspondence and whole-slot background exposure');
   const say = (name: string, ok: boolean, detail: string, why: string): void => {
     bad += reportCase(name, ok, detail, why);
   };
@@ -144910,7 +144913,7 @@ function runSeamSuite(): number {
   {
     const faults = [...pre, ...seamOwnerSwapFaults(clean, reversed, fps)];
     const ok = faults.length === 0;
-    say('SE18_REVERSING_THE_PAIR_EXCHANGES_GHOST_OWNERS', ok, probeDetail(ok, faults, 'actual reversed pairs exchange complete owner readings; the independently derived shifted strip is leg/B only, and becomes A only'), 'issue #1555: a and b are input roles, independent of the pieces\' draw order');
+    say('SE18_REVERSING_THE_PAIR_EXCHANGES_GHOST_OWNERS', ok, probeDetail(ok, faults, 'actual reversed pairs exchange complete owner readings; the independently derived shifted strip is leg_front/B only, and becomes A only'), 'issue #1555: a and b are input roles, independent of the pieces\' draw order');
   }
   {
     const mutant = library(built, SEAM_PROBE_PAIRS, { ghostOnlyA: true });
@@ -144931,11 +144934,11 @@ function runSeamSuite(): number {
       const rest = poser.rest(undefined, sampled.map((f) => f.attachments ?? []));
       const frame = sampled[0];
       const sparse = [0, 2, 3, 5].map((index) => ({ index, time: index / fps, pieces: frame.pieces, attachments: frame.attachments ?? [] }));
-      const pair = seamsOf([SEAM_PROBE_PAIRS[0]], rest, sparse, posable.pages)[0];
+      const pair = seamsOf([SEAM_PROBE_PAIRS[2]], rest, sparse, posable.pages)[0];
       faults.push(...seamOwnerFaults(new Map([['sparse', [pair]]])));
       if (JSON.stringify(pair.ghostB.spans.map((s) => s.frames)) !== JSON.stringify([[0, 0], [2, 3], [5, 5]]) || pair.ghostB.worst?.index !== 0) faults.push('sparse: missing spans or first tied maximum');
-      for (const frames of [[], sparse.map((f) => ({ ...f, pieces: f.pieces.filter((p) => p.slot !== 'leg') }))]) {
-        const p = seamsOf([SEAM_PROBE_PAIRS[0]], rest, frames, posable.pages)[0];
+      for (const frames of [[], sparse.map((f) => ({ ...f, pieces: f.pieces.filter((p) => p.slot !== 'leg_front') }))]) {
+        const p = seamsOf([SEAM_PROBE_PAIRS[2]], rest, frames, posable.pages)[0];
         if (p.status !== 'skip' || p.drawn !== 0 || p.ghostA.frames.length !== 0 || p.ghostB.frames.length !== 0) faults.push('empty or absent slot: owner reading is not empty SKIP');
         faults.push(...seamOwnerFaults(new Map([['empty', [p]]])));
       }

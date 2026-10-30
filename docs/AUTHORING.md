@@ -129,7 +129,7 @@ commands take it and what its default is.
 | `ingest <skeleton.json> --out <dir>` | `build` run backwards: reads a Spine 4.3 skeleton and writes the rig spec and motion spec that **rebuild it**, plus a findings report naming everything it could not carry. a skeleton that declares no stage is carried as declaring none, `--stage x,y,w,h` adds a box to one — and is refused, rather than ignored, beside one that declares a box — and `--images <dir>` writes the spec's own images directory — the opposite direction from `build --images`, which overrides it — so the rebuild carries no flag at all <a id="cmd-ingest"></a> |
 | `split --rig … --motion … --slot <name> --out <dir>` | the answer to a mesh refused because its triangles are **several pieces that share no vertex** — two legs after the triangles bridging them were deleted. It reads the two specs and writes them back into an absent or empty `--out` with one mesh per piece: piece 1 stays in the slot, piece k gets a new slot `<slot>_<k>` after it, each with the original's uvs and weights unchanged, its triangles renumbered outline first where the hull rule needs it, and every deform key re-sliced to the new indices — plus `split.json`, where every original vertex and triangle went. One piece is said so and nothing is written; what it cannot carry is refused by name ([AUTHORING §3.4.11](../docs/AUTHORING.md)) <a id="cmd-split"></a> |
 | `explain --rig … --motion …` | the compiled rig as a table — every bone with its resolved parent, the slots in draw order, every timeline key by key. Writes nothing. What to reach for when a rig compiles and still looks wrong <a id="cmd-explain"></a> |
-| `render --candidate <dir>` | PNG frames plus a contact sheet, in `render/`, one directory per set: `<anim>@<fps>fps/` rather than `<anim>/` at any rate but the default — `--fps 24` writes `<anim>@24fps/`, and the default 12 writes `<anim>/`. `--hide <slot,…>` or `--slot <slot,…>` draws part of the rig on the **same grid** as the whole, so the two frames overlay and the difference is the part; `frames.json` records the subset and `check` refuses such a set as a reference. `--geometry` adds a `geometry.json` per set: every frame's bone world transforms and skinned attachment vertices, with the rest geometry, on the frames' own grid. `--folds` adds a `folds.json` per set and prints one line per mesh with a triangle turned over against the setup pose: the frames, the worst frame's count and which triangles, their world box and their setup-pose area. `--pass-through <cloth>:<leg>` adds a `pass-through.json` per set and prints the frames where a cloth drawn over a leg has its side inside the leg's drawn outline, with the depth and the world box — a reading, not a gate. `--seam <slot>:<slot>` adds a `seam.json` per set and prints, per pair, the frames where two slots that meet open background inside the joint (a gap) or show the overlap band of one past the other (a ghost), with the worst frame's cell count and world box; `ghostA` and `ghostB` partition the same ghost by which named pair member drew it, each with its own frames, spans and worst; `gapOpen` and `gapCovered` partition `gap` by zero versus positive rendered alpha from the whole skeleton, including faint and clipped drawings ([AUTHORING §8.8](../docs/AUTHORING.md#88-where-two-slots-stop-meeting--render---seam)) — a reading, not a gate; the exit status never moves. `--overlaps` adds an `overlaps.json` per set and prints one `OVERLAP "<under>" under "<over>"` line per pair of slots where the one drawn later covers the earlier one and the motion moves it — the frames, and the most pixels covered and the frame of them — with an outline plate per covered frame; the render reports what was drawn, and the draw-order key is the author's remedy — a reading, not a gate. `--extremes` adds `extremes.json` and a native six-panel `extremes.png` (setup, geometry-pair min/max and three premultiplied RGBA diffs with a legend), plus one `EXTREMES` line per set. Per-channel minima/maxima and the farthest original-vertex geometry pair are distinct readings; valid channel extrema survive a geometry/image SKIP, with channel refusals reported separately; still or uncomparable geometry reports a named SKIP without changing render exit status. `--extremes-only` writes the same `extremes.json` and readable `extremes.png` bytes while skipping ordinary frame rasterization/encoding, `contact.png` and `frames.json`; it implies `--extremes` and takes no other diagnostic or sheet output flags. Look at min, max and diff before a person does ([AUTHORING §8.11](../docs/AUTHORING.md#811-min-max-and-diff-before-a-person-looks--render---extremes)). `--angle-range <bone>:<relative-to>` prints how far one bone turns against another over each set: the lowest and highest angle and the frames they fall on — a reading, not a gate. `--viewport <x,y,w,h>` or `--viewport-from <frames.json>` draws over a given box instead of a fitted one, so two builds land on one pixel grid; a slot that reaches past it is named by set and frame, and `frames.json` records it. `--environment <schedule.json>` draws the rig under the wind and gravity its physics answers, in time — the same frames on the core and on spine-core; an inspection of the response the rig states, not a scene. `--sheet [--sheet-format json-hash] [--page-edges pot\|free]` also packs each set's straight-alpha transparent frames into `sheet.png` + `sheet.json` (TexturePacker JSON Hash with a shared world-origin `anchor` and `2`-px clamped edge extrusion, verified through `pixi.js@8.22.0` and `phaser@3.90.0` by `tools/sheet_readers.ts`) and `sheet-manifest.json` (`rigc-sheet/1`), leaving diagnostic `f####.png` and `contact.png` unchanged ([AUTHORING §8.10](../docs/AUTHORING.md#810-sprite-sheets-from-a-render--render---sheet)) — a self-contained sprite object per animation set; when animations play and how a scene is composed remains the consumer's <a id="cmd-render"></a> |
+| `render --candidate <dir>` | PNG frames plus a contact sheet, in `render/`, one directory per set: `<anim>@<fps>fps/` rather than `<anim>/` at any rate but the default — `--fps 24` writes `<anim>@24fps/`, and the default 12 writes `<anim>/`. `--hide <slot,…>` or `--slot <slot,…>` draws part of the rig on the **same grid** as the whole, so the two frames overlay and the difference is the part; `frames.json` records the subset and `check` refuses such a set as a reference. `--geometry` adds a `geometry.json` per set: every frame's bone world transforms and skinned attachment vertices, with the rest geometry, on the frames' own grid. `--folds` adds a `folds.json` per set and prints one line per mesh with a triangle turned over against the setup pose: the frames, the worst frame's count and which triangles, their world box and their setup-pose area. `--pass-through <cloth>:<leg>` adds a `pass-through.json` per set and prints the frames where a cloth drawn over a leg has its side inside the leg's drawn outline, with the depth and the world box — a reading, not a gate. `--seam <slot>:<slot>` adds a `seam.json` per set and prints, per pair, the frames where two slots that meet open background inside the joint (a gap) or show the overlap band of one past the other (a ghost), with the worst frame's cell count and world box; `ghostA` and `ghostB` partition the same ghost by which named pair member drew it, each with its own frames, spans and worst; `gapOpen` and `gapCovered` partition `gap` by zero versus positive rendered alpha from the whole skeleton, including faint and clipped drawings; ghost counts only visible contributions after draw order; `exposureA`/`exposureB` report each named slot’s whole-drawing background exposure even without a band ([AUTHORING §8.8](../docs/AUTHORING.md#88-where-two-slots-stop-meeting--render---seam)) — a reading, not a gate; the exit status never moves. `--overlaps` adds an `overlaps.json` per set and prints one `OVERLAP "<under>" under "<over>"` line per pair of slots where the one drawn later covers the earlier one and the motion moves it — the frames, and the most pixels covered and the frame of them — with an outline plate per covered frame; the render reports what was drawn, and the draw-order key is the author's remedy — a reading, not a gate. `--extremes` adds `extremes.json` and a native six-panel `extremes.png` (setup, geometry-pair min/max and three premultiplied RGBA diffs with a legend), plus one `EXTREMES` line per set. Per-channel minima/maxima and the farthest original-vertex geometry pair are distinct readings; valid channel extrema survive a geometry/image SKIP, with channel refusals reported separately; still or uncomparable geometry reports a named SKIP without changing render exit status. `--extremes-only` writes the same `extremes.json` and readable `extremes.png` bytes while skipping ordinary frame rasterization/encoding, `contact.png` and `frames.json`; it implies `--extremes` and takes no other diagnostic or sheet output flags. Look at min, max and diff before a person does ([AUTHORING §8.11](../docs/AUTHORING.md#811-min-max-and-diff-before-a-person-looks--render---extremes)). `--angle-range <bone>:<relative-to>` prints how far one bone turns against another over each set: the lowest and highest angle and the frames they fall on — a reading, not a gate. `--viewport <x,y,w,h>` or `--viewport-from <frames.json>` draws over a given box instead of a fitted one, so two builds land on one pixel grid; a slot that reaches past it is named by set and frame, and `frames.json` records it. `--environment <schedule.json>` draws the rig under the wind and gravity its physics answers, in time — the same frames on the core and on spine-core; an inspection of the response the rig states, not a scene. `--sheet [--sheet-format json-hash] [--page-edges pot\|free]` also packs each set's straight-alpha transparent frames into `sheet.png` + `sheet.json` (TexturePacker JSON Hash with a shared world-origin `anchor` and `2`-px clamped edge extrusion, verified through `pixi.js@8.22.0` and `phaser@3.90.0` by `tools/sheet_readers.ts`) and `sheet-manifest.json` (`rigc-sheet/1`), leaving diagnostic `f####.png` and `contact.png` unchanged ([AUTHORING §8.10](../docs/AUTHORING.md#810-sprite-sheets-from-a-render--render---sheet)) — a self-contained sprite object per animation set; when animations play and how a scene is composed remains the consumer's <a id="cmd-render"></a> |
 | `preview --candidate <dir>` | one self-contained `.html` that plays it, headed by the line `validate <dir>` prints for it and the rigc version — a refused candidate is still previewed, and its header says so in the gate's words. Repeat `--candidate` for one page with a pane per candidate, in the order given; a green `build` ends by naming this command for its own `--out` <a id="cmd-preview"></a> |
 | `vote --candidate a --candidate b` | one `.html` that asks a human which; `vote --record <file>` checks the answer into `votes.jsonl` <a id="cmd-vote"></a> |
 | `pose --images <dir> --frame <png>` | reads part placements **out of** a picture <a id="cmd-pose"></a> |
@@ -381,7 +381,7 @@ What the flags mean:
 | `--extremes` | `render` only: add `extremes.json` and an `EXTREMES` line per set; a moving set with comparable geometry and readable images also gets a native six-panel `extremes.png`: setup, geometry-pair min/max and three premultiplied RGBA diffs with a legend. Per-channel extrema are independent of that geometry pair; valid channels survive geometry/image SKIPs, and channel refusals are named separately. Still or uncomparable geometry is a named SKIP, with no invented pair or PNG; observation failures do not change a successful render's exit status. Supports `--slot`/`--hide` on both posers, on the whole rig's viewport. Without the flag, no extremes observations are added — **§8.11** |
 | `--folds` | `render` only: also read which mesh triangles **fold** — turn over against the setup pose — and write a `folds.json` into each frame directory: per mesh, the frames with a folded triangle, the worst frame's count and which triangles, by index, with their world box and setup-pose area. One printed line per mesh that folds; a triangle degenerate or inverted at the setup pose is said once and never counted. A reading, not a gate. Every other file is byte for byte what the render writes without it, `geometry.json` included. Refused with `--slot`/`--hide`, for `--geometry`'s reason — **§8.3** |
 | `--pass-through` | `render` only: `<cloth>:<leg>[,<cloth>:<leg>…]` — also read where each cloth slot **passes through** its leg slot, and write a `pass-through.json` into each frame directory: the frames where the cloth draws over the leg and its drawn side lies inside the leg's drawn outline by 2 steps or more, each with the depth and the world box. One printed line per pair, and one per frame that passes through. The first name must draw over the second for a frame to be read — the declared order, never both. A reading, not a gate. Every other file is byte for byte what the render writes without it. An unknown slot, a slot that draws on no frame, a malformed list and a pair named twice are refused by name, and so is `--slot`/`--hide` beside it — **§8.5** |
-| `--seam` | `render` only: `<slot>:<slot>[,<slot>:<slot>…]` — also read, for each pair, where the two drawings **stop meeting**, and write a `seam.json` into each frame directory: per pair, the frames with a **gap** (background inside the joint, where the two covered together at the setup pose) and the frames with a **ghost** (the overlap band of one showing where, from its partner's point of view, nothing was drawn), each with its cell count, area and world box, and as runs of frames with their times. One printed line per pair; a pair whose drawings share no cell at the setup pose is a **SKIP**. A reading, not a gate: the exit status never moves. Every other file is byte for byte what the render writes without it. An unknown slot, a slot with itself, a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name, and so is `--slot`/`--hide` beside it — **§8.8** |
+| `--seam` | `render` only: `<slot>:<slot>[,<slot>:<slot>…]` — also read, for each pair, where the two drawings **stop meeting**, and write a `seam.json` into each frame directory: per pair, the frames with a **gap** (background inside the joint, where the two covered together at the setup pose) and the frames with a **ghost** (the visible overlap band of one showing where, from its partner's point of view, nothing was drawn), plus `exposureA`/`exposureB` for each named slot’s positive-alpha drawing on otherwise empty skeleton background, each with its cell count, area and world box, and as runs of frames with their times. One printed line per pair; a pair whose drawings share no cell at the setup pose is a **SKIP**. A reading, not a gate: the exit status never moves. Every other file is byte for byte what the render writes without it. An unknown slot, a slot with itself, a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name, and so is `--slot`/`--hide` beside it — **§8.8** |
 | `--overlaps` | `render` only: also read **which slot each frame drew over which**, and write an `overlaps.json` into each frame directory: per frame, every pair of slots where the slot drawn later covers pixels the earlier one drew (drawn at 128 of 255 or more, on the frames' own pixels), with the pixel count and the pixel box. One `OVERLAP` line per pair that covers anything — its frames as runs, how many of the set, and the most pixels and the frame of them — and one line counting the pairs that are layering the motion does not move. Each frame with a moving pair also gets an **outline plate**, `overlaps-f<NNNN>.png`: every slot in a moving pair as its contour in its own colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Every other file is byte for byte what the render writes without it, and `frames.json` gains each set's `overlaps` record. Refused beside `--slot`/`--hide` — **§8.9** |
 | `--angle-range` | `render` only: `<bone>:<relative-to>[,<bone>:<relative-to>…]` — also read, for each pair, the range of the first bone's world direction against the second's over each set's frames, and print one line per pair per set: the lowest and the highest angle in degrees, the span, and the frame each was first reached on. A reading, not a gate: nothing is written, and every file is the bytes the render writes without it. An unknown bone (with the bones there are), a bone against itself, a malformed list and a pair named twice are refused by name, and so is a bone with no direction on a frame — **§8.7** |
 | `--sheet` | `render` only: also pack each rendered animation set as a straight-alpha transparent sprite sheet (`sheet.png` + `sheet.json`, plus `sheet2.png` / `sheet2.json` on multi-page spill, and `sheet-manifest.json` (`rigc-sheet/1`)) inside its set directory, and record `sheet` on each set in `frames.json`. Diagnostic `f####.png` and `contact.png` stay byte for byte what the render writes without it — **§8.10** |
@@ -9185,15 +9185,15 @@ inside it, and a second copy of the leg on the same bone):
 ```bash
 bun cli.ts render --candidate path/to/spine --animation swing --seam skirt:leg,leg_front:leg [--skin …] [--fps 12]
 # rigc render
-#   ..    swing            25 frame(s), 2.000s + contact.png + seam.json (1 of 2 pair(s) open) -> …/swing
-#   ..    seam     "swing": seam "skirt" | "leg" opens on 23 of 25 frame(s) read [1-23] at 12 fps, max 1606 px — gap on 13 frame(s) [6-18], worst frame 12 (t=1.0000s): 616 px (616.00 units² at 1.0000 units a px) in world box x [-7.00, 19.00] y [105.99, 196.00] (26.00 × 90.00); ghost on 23 frame(s) [1-23], worst frame 12 (t=1.0000s): 1606 px (1606.00 units² at 1.0000 units a px) in world box x [-27.00, 41.00] y [104.99, 198.00] (68.00 × 93.00)
-#   ..    seam     "swing": seam "leg_front" | "leg" stays closed on all 25 frame(s) read at 12 fps — no gap, no ghost
+# One seam line per pair, including no gap/no ghost or SKIP, followed by
+# exposure "<slot>" for each named member: frames, worst cell count and box.
 ```
 
 The skirt swinging off the leg opens background between the leg's right edge and
 the skirt's swung side (the gap, widest at the top of the swing), and uncovers the
-top of the leg the skirt hid at rest (the ghost). The two copies of the leg move
-on one bone and never open. A pair with nothing to read says so —
+top of a visible leg drawing the skirt hid at rest (the ghost). A leg drawing
+hidden by its opaque front copy contributes no ghost; reading `skirt:leg_front`
+measures that front copy instead. The two copies move on one bone and never open. A pair with nothing to read says so —
 `seam "a" | "b": SKIP — the two drawings share no cell at the setup pose on any of
 the N frame(s) both draw, so there is no band to read` — and a closed pair says
 `stays closed on all N frame(s) read`; the two are never the same line.
@@ -9225,17 +9225,31 @@ table's vertices, and the atlas alpha:
   were painted to overlap. It has **no width of its own**: it is the overlap the
   art states, dilated by nothing. A frame whose band is empty is not read; a pair
   whose band is empty on every frame both draw is a SKIP.
-- **gap** — a cell inside the convex hull of the band's cell centres, carried to
-  the frame by both pieces (the region the joint occupies now, as both place it),
-  that neither piece draws at the frame, and that at least one piece, carrying it
-  back, finds drawn by either drawing at the setup pose: the two no longer cover
-  what they covered together. The hull is the joint's own extent, which is what
-  keeps a piece's far end swinging away from reading as a tear; the rest test is
-  what keeps a band that is concave at the setup pose from reading its own notch.
+- **gap** — a cell inside the outer convex hull of the band's centres carried
+  through both pieces, **and inside a local sweep of the same setup band cell**,
+  that neither piece draws now, and that at least one inverse attachment map
+  finds drawn by either setup drawing. A local sweep is the convex hull of one
+  overlap cell's four corners carried through each attachment's triangle maps
+  (eight points); each corner uses its own setup triangle, extending the nearest
+  affine map outside a mesh as above. Take the union of these local sweeps,
+  never a hull joining unrelated overlap cells. The outer hull and inverse OR
+  test remain required. This derives joint support from the rig's art, texel
+  grid and deformation, without a pivot distance or a joint-disc limit. A
+  connected branch with two separated overlap rows can have plain background
+  between those rows: the outer hull alone fills it, while local correspondence
+  excludes it. A genuine opening between opposed overlap cells remains a gap.
+  The rectangle controls derive eight real tear cells; a notched branch derives
+  sixteen adjacent background cells excluded by this rule, including when both
+  kinds occur in the same frame.
 - **ghost** — a cell one piece draws at the frame and the other does not, which
   the drawing piece, carrying it back, lands in the band, and which the other,
-  carrying it back, finds neither drawing at at the setup pose: the overlap swung
-  clear of its partner.
+  carrying it back, finds neither drawing at the setup pose: the overlap swung
+  clear of its partner. It must also retain nonzero **source-over contribution**
+  from that named slot after every drawing in frame draw order. Later alpha 255
+  hides earlier contributions; partial alpha leaves a contribution, and earlier
+  art cannot hide later art. Every fragment of every slot participates, with
+  renderer alpha, tint, UV windows and clipping. This tests contribution, not a
+  colour difference or an artistic judgment.
 - **ghostA**, **ghostB** — that same ghost partitioned by the piece drawing the
   cell: `a` only or `b` only, respectively, in the flag's named pair order. On
   each frame `ghost.px = ghostA.px + ghostB.px` (an absent hit contributes 0),
@@ -9257,9 +9271,22 @@ Each partition's box lies in the union's. A gap in the pair can be covered by a
 third drawing and need not be a visible opening. Reversing the pair preserves
 both gap coverage readings.
 
-Draw order does not enter: a cell is covered or bare whichever piece is in front.
-An owner says which piece drew a ghost cell; it does not say which piece is over
-or under the other, or whether that exposure should fail a consumer's policy.
+- **exposureA**, **exposureB** — cells of positive rendered alpha from each
+  named slot where removing **all fragments of that slot** leaves alpha zero
+  from every other skeleton slot. The entire drawing enters, including art
+  outside the band, at setup as well as in motion. A positive-alpha drawing of
+  another slot excludes exposure regardless of its draw order or opacity: this
+  asks what the named slot adds on background, separately from ghost visibility.
+  No presentation background enters. Hits, spans and worst frames use the same
+  shape and units as gap; the grid uses the coarser pair texel when both draw,
+  or the present member's texel when its partner is absent. Exposure is measured
+  even when there is no band, while the seam still says SKIP. It is **not** a
+  change-from-setup measure, does not enter `opens` or `maxPx`, and can be nonzero
+  on a clean rig. Pair reversal exchanges the complete exposure readings.
+
+Draw order enters ghost visibility. Gap coverage and background exposure depend
+on zero versus positive alpha and do not depend on order. Named owners describe
+contributions; none of these fields decides whether a consumer should fail.
 
 **Outside the overlap hull is outside the gap reading.** Both `gap` and its
 `gapOpen` partition are judged only inside the carried setup-overlap hull. Art
@@ -9278,13 +9305,14 @@ cells on the joint rim. The [measurement receipt](https://github.com/rig-c/core/
 pins the inputs, commands and frame digest; these are seam cells, not display
 pixels. See [#1575](https://github.com/rig-c/core/issues/1575) for the reading.
 
-**Its reach, stated.** A piece folded right back over its partner carries the band
-across the region it vacated, so a hull that wide reads the vacated cells its
-partner's view still finds drawn. And no size is too small to print: on
-`gallery/walk`, built as its README says, `--seam thigh_f:shin_f,arm_f:hand_f`
-reads gaps of 1–2 px on 5 of the 12 frames at the knee and of 1 px on 2 at the
-wrist — the wrist's, drawn at 20 pixels a unit, is the V where the two outlines
-meet at an angle, one cell deep. Whether that is a tear is yours.
+**Its reach, stated.** Local material sweeps replace the old global hull's
+bridges across unrelated overlap cells. They still describe a sampled geometric
+support region, not an oracle for intended silhouette or an anatomical joint
+inferred from bone names. Folding or severe deformation can carry a local cell
+across vacated background; a result requires inspection. No minimum count, pivot
+radius or acceptance threshold is added. The controls include ordinary tears,
+adjacent background, hidden and partly visible ghosts, absent partners and
+whole-drawing exposures; they do not certify every possible art shape.
 
 **The file.** `seam.json`, `rigc-seam/1`, beside each set's frames — the contract
 a consumer reads it by. Every unit is in this table; the file's own `reading`
@@ -9296,7 +9324,7 @@ block carries the definitions above in words.
 | `animation` | string or `null` | — | the set's animation; `null` for a skeleton with none (its one frame is the setup pose) |
 | `skin` | string | — | the skin asked for; **absent** when none was |
 | `fps` | number | frames per second | the rate the set was sampled at |
-| `reading` | object | — | `read`, `cell`, `drawn`, `band`, `carried`, `gap`, `ghost`, `box`, `status`, `ghostA`, `ghostB`, `gapOpen`, `gapCovered`: the definitions, in words |
+| `reading` | object | — | `read`, `cell`, `drawn`, `band`, `carried`, `gap`, `ghost`, `box`, `status`, `ghostA`, `ghostB`, `gapOpen`, `gapCovered`, `exposureA`, `exposureB`: the definitions, in words |
 | `pairs[]` | array | — | one per pair, in the flag's order |
 | `pairs[].a`, `pairs[].b` | string | — | the two slots, as the flag names them |
 | `pairs[].drawn` | integer | frames | frames on which both slots draw |
@@ -9307,6 +9335,7 @@ block carries the definitions above in words.
 | `pairs[].gap`, `pairs[].ghost` | object | — | one per kind, each `{ frames, spans, worst }` |
 | `pairs[].ghostA`, `pairs[].ghostB` | object | — | the same `{ frames, spans, worst }` shape for ghost cells drawn by `a` only and `b` only; an empty owner has `frames: []`, `spans: []`, `worst: null` |
 | `pairs[].gapOpen`, `pairs[].gapCovered` | object | — | the same `{ frames, spans, worst }` shape for gap cells with zero or positive rendered skeleton-composite alpha, respectively; an empty kind has `frames: []`, `spans: []`, `worst: null` |
+| `pairs[].exposureA`, `pairs[].exposureB` | object | — | `{ frames, spans, worst }` for the whole named slot’s positive-alpha cells on otherwise zero-alpha skeleton background; measured independently of the band, including SKIP pairs; not part of `opens` or `maxPx` |
 | `<kind>.frames[]` | hit[] | — | only the frames with a cell of that kind, in frame order |
 | `<kind>.spans[]` | array | — | `<kind>.frames` as runs of consecutive indices: `{ frames: [first, last], times: [first, last], maxPx }` — frame indices, seconds, px |
 | `<kind>.worst` | hit or `null` | — | the frame with the most cells, the earliest on a tie; `null` when none |
@@ -9323,15 +9352,15 @@ span.times, maxPx: span.maxPx, kind }`, and one pair over one animation is
 `opens.length` frame(s) `[opens]`, max `maxPx` px — with `status: "skip"` the case
 to say SKIP for.
 
-The owner keys and their two legend entries are additive in `rigc-seam/1`.
-Removing just those four keys leaves the previous file's bytes after the same
-two-space JSON serialization and newline. The union, its spans and worst, and
-the printed summary retain their existing meanings; an owner may have different
-spans or a different worst frame from the union.
-Likewise `gapOpen`, `gapCovered` and their two legend entries are additive:
-removing only those entries leaves the previous file's bytes after the same
-serialization, including `gap`, `ghostA` and `ghostB`. The coverage partition may
-have different spans and worst frames from the union; it changes no seam policy.
+`rigc-seam/1` retains its hit and summary shapes and adds `exposureA/B` and
+their legend entries. The reader semantics intentionally change: ghosts hidden
+by later opaque art disappear, and global-hull-only gap cells disappear. This
+can reduce `ghost`, its owners, `gap`, its partitions, `opens` and `maxPx`;
+consumers using those readings as their own policy must account for the change.
+The seam remains a reading: no compiler assertion or CLI exit verdict changes.
+Clean stationary/shared-motion pair fields remain unchanged apart from exposure;
+the `reading` legend states the revised definitions. Historical measurements
+above pin their old reader and must not be treated as current measurements.
 
 **Refused, nothing written:** a slot the skeleton does not have (with the slots it
 does), an entry without exactly one `:`, an empty entry or name, a slot paired with

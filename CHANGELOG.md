@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.83.0](https://github.com/rig-c/core/compare/v2.82.2...v2.83.0) (2026-10-30)
+
+
+### Features
+
+* **seam:** visible-only ghost, joint-aware gap, per-piece exposure ([#1657](https://github.com/rig-c/core/issues/1657)) ([f174d2f](https://github.com/rig-c/core/commit/f174d2f909f77503a04b5c4a98199b5ee8447239))
+
 ## [2.82.2](https://github.com/rig-c/core/compare/v2.82.1...v2.82.2) (2026-10-30)
 
 

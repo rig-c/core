@@ -1405,11 +1405,11 @@ rigc pose
   ..    ground  rgb(232, 232, 232) over 100% of the border ring
   ..    parts   …/packed-only  (1 png)
   ..    search  scale 0.5–2 in 7 step(s) · rotation -180°–180° in 24 step(s) of 15° · refuse above residual 0.25
-  PLACE  3-timing-and-spacing.png  x=  324.3  y=  188.3  rot=  -91.6°  scale=0.630  residual=0.2085  unexplained= 30%
+  PLACE  3-timing-and-spacing.png  x=  324.6  y=  189.8  rot=  -91.1°  scale=0.625  residual=0.2080  unexplained= 29%
                                    found on a 14x7 anchor grid, step 4 at 16x reduction
 ```
 
-⚠️ **`residual=0.2085` is *under* the default 0.25 refusal bar**, so nothing refused
+⚠️ **`residual=0.2080` is *under* the default 0.25 refusal bar**, so nothing refused
 it, and `PLACE` rather than `AMBIG` means nothing flagged it either. With the same frame
 and the two real loose parts, the answer is what it should be:
 
@@ -1424,7 +1424,7 @@ rigc pose
   ..    ground  rgb(232, 232, 232) over 100% of the border ring
   ..    parts   …/examples/3-timing-and-spacing/images  (2 png)
   ..    search  scale 0.3–0.6 in 4 step(s) · rotation -180°–180° in 24 step(s) of 15° · refuse above residual 0.25
-  PLACE  pendulum.png  x=  319.3  y=  214.6  rot=  -88.9°  scale=0.411  residual=0.0428  unexplained=  7%
+  PLACE  pendulum.png  x=  319.4  y=  214.4  rot=  -88.9°  scale=0.412  residual=0.0421  unexplained=  7%
                        found on a 28x13 anchor grid, step 2 at 16x reduction
   PLACE  square.png    x=  437.1  y=  343.1  rot=    0.0°  scale=0.410  residual=0.0334  unexplained=  4%
                        found on a 113x51 anchor grid, step 2 at 4x reduction

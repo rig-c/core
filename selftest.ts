@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import * as poseSearch from './src/pose.ts';
 import { runExtremesSuite } from './selftest_extremes.ts';
 import { alphaClipInputs, writeAlphaClipFixture, apertureDepthLevel, ALPHA_CLIP_FIXTURE } from './fixtures/alpha_clip.ts';
 import { buildAlphaClipProof, proveAlphaClipBuild, clipRoundingWorld, ALPHA_CLIP_BOUNDS } from './tools/alpha_clip_proof.ts';
@@ -92264,6 +92265,70 @@ function poseNearestEach(
   });
 }
 
+/** Public repeated-part controls, with truth composed from authored attachment/bone transforms. */
+function realRepeatedPoseFixtures(): { name: string; images: string; part: string; frame: string; truth: PosePlacementTruth }[] {
+  const root = mkdtempSync(join(harnessTemp(), 'rigc-pose-repeats-'));
+  const official = (example: string, file: string) => ({
+    name: example, skeleton: join(INGEST_CORPUS_ROOT, example, 'export', file),
+    atlas: join(INGEST_CORPUS_ROOT, example, 'export', `${example}.atlas`),
+    images: join(INGEST_CORPUS_ROOT, example, 'images'), gallery: false,
+  });
+  const rideOut = join(root, 'ride', 'build');
+  const build = runCli(['build', '--rig', 'gallery/ride/rig.json', '--motion', 'gallery/ride/motion.json', '--images', 'gallery/ride/parts', '--out', rideOut]);
+  if (build.status !== 0) throw new Error(`repeat control build refused: ${build.stderr}\n${build.stdout}`);
+  const sources = [
+    official('4-wave-principle', '4-wave-principle-ess.json'),
+    official('8-follow-through', '8-follow-through-pro-pendulum.json'),
+    { name: 'ride', skeleton: join(rideOut, 'skeleton.json'), atlas: join(rideOut, 'skeleton.atlas'), images: resolve('gallery/ride/parts'), gallery: true },
+  ];
+  const out: ReturnType<typeof realRepeatedPoseFixtures> = [];
+  interface Entry { x?: number; y?: number; rotation?: number; width: number; height: number; scaleX?: number; scaleY?: number }
+  interface Source { slots: { name: string; bone: string }[]; skins: { name: string; attachments: Record<string, Record<string, Entry>> }[] }
+  for (const source of sources) {
+    if (!existsSync(source.skeleton) || !existsSync(source.atlas) || !existsSync(source.images)) {
+      console.log(`  SKIP  repeated-part control ${source.name}: run \`bun run fetch-examples\`; this is a HOLE, not a pass.`);
+      continue;
+    }
+    const text = readFileSync(source.skeleton, 'utf8');
+    const doc = JSON.parse(text) as Source;
+    const candidate = loadCandidate({ skeletonText: text, atlasText: readFileSync(source.atlas, 'utf8'), atlasDir: dirname(source.atlas), label: source.name }, { skeleton: source.skeleton, atlas: source.atlas }, undefined);
+    const frames = throughPoser(candidate.choice, (poser) => {
+      const result = [{ name: 'setup', frame: sampleSetupPose(poser, { texture: true, bones: true })[0] }];
+      const animations = source.gallery ? poser.animations : [poser.animations.find((a) => a.name === 'walk') ?? poser.animations[0]].filter((a) => a !== undefined);
+      for (const animation of animations) {
+        const all = sampleAnimation(poser, animation.name, 20, { texture: true, bones: true });
+        result.push({ name: `${animation.name}-mid`, frame: all[Math.floor((all.length - 1) / 2)] });
+      }
+      return result;
+    }).value;
+    const bounds = unionBounds(frames.map((f) => [f.frame]));
+    const minX = Math.floor(bounds.minX) - 16, minY = Math.floor(bounds.minY) - 16;
+    const width = Math.ceil(bounds.maxX) + 16 - minX, height = Math.ceil(bounds.maxY) + 16 - minY;
+    const viewport = viewportOfSize(minX, minY, width, height, 1, width, height);
+    const project = projector(viewport);
+    const requested = source.name === '4-wave-principle' ? [['setup', 'chain-4'], ['ball-catch-mid', 'chain-4']] : source.name === 'ride' ? [['ride-mid', 'leg_l']] : [['setup', 'chain-2']];
+    for (const [frameName, slotName] of requested) {
+      const f = frames.find((f) => f.name === frameName)?.frame;
+      const slot = doc.slots.find((s) => s.name === slotName);
+      const bone = f?.bones?.find((b) => b.name === slot?.bone);
+      const entry = doc.skins.find((s) => s.name === 'default')?.attachments[slotName]?.[slotName];
+      if (!f || !slot || !bone || !entry) throw new Error(`repeat control cannot resolve ${source.name}/${frameName}/${slotName}`);
+      const part = join(source.images, `${slotName}.png`), plate = readPlate(part);
+      const radians = (entry.rotation ?? 0) * Math.PI / 180, c = Math.cos(radians), s = Math.sin(radians);
+      const sx = entry.width / plate.width * (entry.scaleX ?? 1), sy = entry.height / plate.height * (entry.scaleY ?? 1);
+      const ax = (bone.a * c + bone.b * s) * sx, ay = (bone.c * c + bone.d * s) * sx;
+      const bx = (bone.a * -s + bone.b * c) * -sy, by = (bone.c * -s + bone.d * c) * -sy;
+      if (Math.abs(Math.hypot(ax, ay) - Math.hypot(bx, by)) > 1e-6 || Math.abs(ax * bx + ay * by) > 1e-6) throw new Error('repeat control is not a rigid similarity');
+      const [x, y] = project(bone.worldX + bone.a * (entry.x ?? 0) + bone.b * (entry.y ?? 0), bone.worldY + bone.c * (entry.x ?? 0) + bone.d * (entry.y ?? 0));
+      const truth = { x, y, rotationDeg: Math.atan2(-ay, ax) * 180 / Math.PI, scale: Math.hypot(ax, ay) * viewport.scale };
+      const dir = join(root, source.name); mkdirSync(dir, { recursive: true });
+      const frame = join(dir, `${frameName}.png`); renderFrame(f, candidate.pages, viewport, BACKGROUND).writePng(frame);
+      out.push({ name: `${source.name}/${frameName}/${slotName}`, images: source.images, part, frame, truth });
+    }
+  }
+  return out;
+}
+
 function runPoseSuite(): number {
   console.log('\n── reading a pose frame: pose (issue #241) ──');
   let bad = 0;
@@ -92340,9 +92405,9 @@ function runPoseSuite(): number {
     // 🌱 The plant is the grid releases before 1.4.0 searched on — a quarter-span
     // stride and two cells of suppression, the pair of numbers that, put back
     // alone, made a pair of legs come back as one placement (issue #1517).
-    const planted: PoseCoarseGrid = { ...COARSE_GRID, strideFraction: COARSE_GRID.strideFraction * 2, suppressionCells: COARSE_GRID.suppressionCells / 2 };
+    const planted: PoseCoarseGrid = { strideFraction: 0.25, suppressionCells: 2, minimaPerScale: 5 };
     const read = (grid: PoseCoarseGrid) => {
-      const part = estimatePose({ imagesDir: twins.parts, framePath: twins.framePath, coarseGrid: grid }).parts[0];
+      const part = estimatePose({ imagesDir: twins.parts, framePath: twins.framePath, coarseGrid: grid, coarsePolicy: grid === planted ? 'legacy-only' : 'short-support' }).parts[0];
       const found = part?.placement ? [part.placement, ...part.alternates] : [];
       const [a, b] = poseNearestEach(found, twins.truth);
       const held = part !== undefined && part.ambiguous && a !== null && b !== null && poseWithin(a) && poseWithin(b);
@@ -92424,7 +92489,7 @@ function runPoseSuite(): number {
     if (!(twinPart?.ambiguous ?? false) || twinPart?.legibility?.floor !== 'above') probes.push('the twins are not an ambiguity above the floor');
     probes.push(...misread('the twins', twinReading, 'route').map((f) => `${f}: ${JSON.stringify(twinReading)}`));
     if (!(cli.stdout.includes(twinReading) && twinReading !== '')) probes.push("the twins' reading is not on the console");
-    if (!(guide.includes(twinReading) && twinReading !== '')) probes.push("the twins' reading is not quoted in AUTHORING §11.5");
+    if (!(guide.includes(twinReading) && twinReading !== '')) probes.push(`the twins' reading is not quoted in AUTHORING §11.5: ${JSON.stringify(twinReading)}`);
     if (!(eyesPart?.ambiguous ?? false) || eyesPart?.legibility?.floor !== 'above') probes.push('the far pair at two scales is not an ambiguity above the floor');
     probes.push(...misread('the far pair', eyesReading, 'window').map((f) => `${f}: ${JSON.stringify(eyesReading)}`));
     // The turned case is only this case if the margin really holds a turned fit
@@ -93866,6 +93931,78 @@ function runPoseSuite(): number {
       );
     }
   }
+
+  // Same public inputs that exposed the defect. Truth uses authored geometry,
+  // never an estimate or a locator-supplied seed. The old search is the plant.
+  {
+    const cases = realRepeatedPoseFixtures();
+    for (let i = 0; i < cases.length; i++) {
+      const fx = cases[i];
+      const read = (legacy: boolean) => {
+        const trace: PoseTrace = { levels: [], measured: [] };
+        const p = estimatePose({ imagesDir: fx.images, parts: [fx.part], framePath: fx.frame, coarsePolicy: legacy ? 'legacy-only' : 'short-support', trace }).parts[0];
+        const found = p.placement ? [p.placement, ...p.alternates] : [];
+        const delta = poseNearestEach(found, [fx.truth])[0];
+        return { held: p.refusal === null && delta !== null && poseWithin(delta), delta, p, trace };
+      };
+      const current = read(false), old = read(true);
+      say(
+        `PO${36 + i}_A_REPEATED_PUBLIC_PART_RETAINS_ITS_INTENDED_POSITION`,
+        current.held && !old.held,
+        `${fx.name}: current ${current.p.ambiguous ? 'AMBIG' : 'PLACE'} ${current.delta ? poseSay(current.delta) : 'absent'}; ` +
+          `original search ${old.delta ? poseSay(old.delta) : 'absent'}; the ${POSE_TOLERANCE.translate}px/${POSE_TOLERANCE.rotateDeg}°/${POSE_TOLERANCE.scaleRatio * 100}% bar is unchanged`,
+        'a lower residual on another repeated part must not hide the intended fit; a seed reaching a coarse level alone does not guarantee the final translation bar',
+      );
+    }
+  }
+
+
+  {
+    const select = poseSearch.poseCoarseMinima;
+    let equal = typeof select === 'function', bounded = false, coveredOnly = false;
+    const rows: string[] = [];
+    if (typeof select === 'function') {
+      // Independent exhaustive oracle: choose minima, sort stably, run ALL NMS,
+      // remove covered accepted points, then take the requested prefix.
+      type Field = Parameters<typeof select>[0];
+      const oracle = (f: Field, radius: number, keep: number, support: number, covered: ReturnType<typeof select>) => {
+        const candidates: ReturnType<typeof select> = [];
+        for (let y = 0; y < f.rows; y++) for (let x = 0; x < f.cols; x++) {
+          const r = f.residual[y * f.cols + x];
+          if (!Number.isFinite(r)) continue;
+          let lower = false;
+          for (let yy = 0; yy < f.rows; yy++) for (let xx = 0; xx < f.cols; xx++) {
+            if (Math.max(Math.abs(x - xx), Math.abs(y - yy)) <= radius && Math.hypot((x - xx) * f.stride, (y - yy) * f.stride) <= support && f.residual[yy * f.cols + xx] < r) lower = true;
+          }
+          if (!lower) candidates.push({ cx: (x + .5) * f.stride, cy: (y + .5) * f.stride, rotDeg: f.rotDeg[y * f.cols + x], scale: f.scale, residual: r });
+        }
+        candidates.sort((a, b) => a.residual - b.residual);
+        const accepted: ReturnType<typeof select> = [];
+        let spacingChecks = 0;
+        for (const c of candidates) if (!accepted.some((a) => { spacingChecks++; return Math.hypot(a.cx - c.cx, a.cy - c.cy) <= Math.min(radius * f.stride, support); })) accepted.push(c);
+        return { prefix: accepted.filter((c) => !covered.some((a) => Math.hypot(a.cx - c.cx, a.cy - c.cy) <= support)).slice(0, keep), spacingChecks, accepted: accepted.length };
+      };
+      for (const [cols, size, support, flat] of [[12, 144, .25, true], [5, 15, 1, true], [5, 15, 1.5, false], [32, 1024, 1e6, true]] as const) {
+        const field: Field = { cols, rows: size / cols, stride: 1, scale: 1, residual: new Float64Array(size).fill(0), rotDeg: new Float64Array(size) };
+        if (!flat) for (let i = 0; i < size; i++) field.residual[i] = (i * 7 % 11) / 11;
+        const covered = [{ cx: cols === 32 ? 16.5 : .5, cy: cols === 32 ? 16.5 : .5, rotDeg: 0, scale: 1, residual: 0 }];
+        const observation = { accepted: 0, covered: 0, spacingChecks: 0 };
+        const radius = cols === 32 ? 1 : 4;
+        const got = select(field, radius, 5, support, covered, observation), expected = oracle(field, radius, 5, support, covered);
+        equal &&= JSON.stringify(got) === JSON.stringify(expected.prefix);
+        if (cols === 32) coveredOnly = got.length === 0 && observation.accepted === observation.covered && observation.accepted === expected.accepted && observation.spacingChecks <= size * 9 && expected.spacingChecks > size * 9;
+        if (support < field.stride) bounded = got.length === 5 && observation.accepted === 5 + covered.length && observation.accepted < size;
+        rows.push(`${cols}x${field.rows}/support${support}: ${got.length} novel from ${observation.accepted} accepted; spacing checks ${observation.spacingChecks}, exhaustive ${expected.spacingChecks}`);
+      }
+    }
+    say('PO40_THIN_AND_TIED_FIELDS_KEEP_THE_EXACT_NOVEL_PREFIX_WITH_BOUNDED_ACCEPTANCE', equal && bounded && coveredOnly, rows.join('; '), 'legacy-covered accepted points still suppress their neighbors; taking five before coverage filtering starves the budget, while collecting the whole plateau is quadratic');
+    let refused = false;
+    try { estimatePose({ imagesDir: fixture.parts, framePath: fixture.framePath, coarsePolicy: 'typo' as never }); }
+    catch (error) { refused = error instanceof poseSearch.PoseError && error.message.includes('coarsePolicy') && error.message.includes('typo') && error.message.includes('short-support') && error.message.includes('legacy-only'); }
+    const explicit = estimatePose({ imagesDir: fixture.parts, framePath: fixture.framePath, coarsePolicy: 'short-support' });
+    say('PO41_AN_UNKNOWN_RUNTIME_SEARCH_POLICY_IS_REFUSED_AND_OMITTING_IT_USES_THE_CURRENT_SEARCH', refused && JSON.stringify(explicit) === JSON.stringify(report), `unknown policy refused=${refused}; explicit current search matches default=${JSON.stringify(explicit) === JSON.stringify(report)}`, 'a misspelled JavaScript policy must not silently disable the repeated-part repair');
+  }
+
 
   return bad;
 }

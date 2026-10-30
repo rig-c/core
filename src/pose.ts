@@ -835,6 +835,8 @@ export interface PoseOptions {
    * stride fraction in force in `search.coarse.strideFraction`.
    */
   coarseGrid?: PoseCoarseGrid;
+  /** Historical-search control for instruments; the CLI uses short-support coverage. */
+  coarsePolicy?: 'legacy-only' | 'short-support';
 }
 
 /** A search candidate as the trace states it: where the part image's centre would land, frame pixels. */
@@ -900,6 +902,8 @@ export interface PoseTrace {
   levels: PoseTraceLevel[];
   /** Per part, every candidate that reached the report, with its every-pixel residual, best first. */
   measured: { part: string; candidates: PoseTraceCandidate[] }[];
+  /** The independent coverage lane; `levels` retains the original lane's pyramid. */
+  supplemental?: { part: string; levels: PoseTraceLevel[] }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1388,8 +1392,15 @@ function coarseCellResidual(level: Level, s: Samples, scale: number, rotDeg: num
  * exactly two such cells — and the accepted list then keeps them apart so the
  * refinement budget is not spent twice on one hill.
  */
-function localMinima(field: CoarseField, radius: number, keep: number): Candidate[] {
-  const found: Candidate[] = [];
+export function poseCoarseMinima(
+  field: CoarseField,
+  radius: number,
+  keep: number,
+  support = Infinity,
+  covered: readonly Candidate[] = [],
+  observation?: { accepted: number; covered: number; spacingChecks?: number },
+): Candidate[] {
+  const found: { candidate: Candidate; gx: number; gy: number }[] = [];
   for (let gy = 0; gy < field.rows; gy++) {
     for (let gx = 0; gx < field.cols; gx++) {
       const here = field.residual[gy * field.cols + gx];
@@ -1400,7 +1411,7 @@ function localMinima(field: CoarseField, radius: number, keep: number): Candidat
           const nx = gx + dx;
           const ny = gy + dy;
           if (nx < 0 || ny < 0 || nx >= field.cols || ny >= field.rows) continue;
-          if (field.residual[ny * field.cols + nx] < here) {
+          if (hypot2(dx * field.stride, dy * field.stride) <= support && field.residual[ny * field.cols + nx] < here) {
             minimal = false;
             break;
           }
@@ -1408,23 +1419,45 @@ function localMinima(field: CoarseField, radius: number, keep: number): Candidat
       }
       if (!minimal) continue;
       const cell = gy * field.cols + gx;
-      found.push({
+      found.push({ gx, gy, candidate: {
         cx: gx * field.stride + field.stride / 2,
         cy: gy * field.stride + field.stride / 2,
         rotDeg: field.rotDeg[cell],
         scale: field.scale,
         residual: here,
-      });
+      } });
     }
   }
-  found.sort((a, b) => a.residual - b.residual);
-  const accepted: Candidate[] = [];
-  for (const cand of found) {
-    if (accepted.length >= keep) break;
-    if (accepted.some((a) => hypot2(a.cx - cand.cx, a.cy - cand.cy) <= radius * field.stride)) continue;
-    accepted.push(cand);
+  found.sort((a, b) => a.candidate.residual - b.candidate.residual);
+  const spacing = Math.min(radius * field.stride, support);
+  const gridRadius = spacing / field.stride;
+  const bucketSpan = Math.max(1, Math.floor(gridRadius));
+  const reach = Math.ceil(gridRadius / bucketSpan);
+  const accepted = new Map<string, Candidate[]>();
+  const novel: Candidate[] = [];
+  for (const entry of found) {
+    if (novel.length >= keep) break;
+    const cand = entry.candidate;
+    const bx = Math.floor(entry.gx / bucketSpan), by = Math.floor(entry.gy / bucketSpan);
+    let overlaps = false;
+    for (let y = by - reach; y <= by + reach && !overlaps; y++) {
+      for (let x = bx - reach; x <= bx + reach && !overlaps; x++) {
+        for (const a of accepted.get(`${x}:${y}`) ?? []) {
+          if (observation !== undefined) observation.spacingChecks = (observation.spacingChecks ?? 0) + 1;
+          if (hypot2(a.cx - cand.cx, a.cy - cand.cy) <= spacing) { overlaps = true; break; }
+        }
+      }
+    }
+    if (overlaps) continue;
+    const key = `${bx}:${by}`, bucket = accepted.get(key) ?? [];
+    bucket.push(cand);
+    accepted.set(key, bucket);
+    if (observation !== undefined) observation.accepted++;
+    if (covered.some((b) => hypot2(cand.cx - b.cx, cand.cy - b.cy) <= support)) {
+      if (observation !== undefined) observation.covered++;
+    } else novel.push(cand);
   }
-  return accepted;
+  return novel;
 }
 
 /**
@@ -1859,6 +1892,9 @@ export function partFiles(imagesDir: string, exclude: string): string[] {
 // ---------------------------------------------------------------------------
 
 export function estimatePose(options: PoseOptions): PoseReport {
+  if (options.coarsePolicy !== undefined && options.coarsePolicy !== 'legacy-only' && options.coarsePolicy !== 'short-support') {
+    throw new PoseError(`coarsePolicy ${JSON.stringify(options.coarsePolicy)}: expected "short-support" or "legacy-only" — omit it for the current search`);
+  }
   const framePath = resolve(options.framePath);
   if (!existsSync(framePath)) throw new PoseError(`no pose frame at ${framePath}`);
   let frame: Plate;
@@ -1959,6 +1995,7 @@ export function estimatePose(options: PoseOptions): PoseReport {
         { min: scaleMin, max: scaleMax },
         rotationBounds,
         options.coarseGrid ?? COARSE_GRID,
+        options.coarsePolicy ?? 'short-support',
         options.trace,
       ),
     );
@@ -1977,6 +2014,7 @@ function placePart(
   scaleBounds: { min: number; max: number },
   rotationBounds: { min: number; max: number; wraps: boolean },
   coarseGrid: PoseCoarseGrid,
+  coarsePolicy: 'legacy-only' | 'short-support',
   trace?: PoseTrace,
 ): PosePart {
   const scaleMin = scaleBounds.min;
@@ -2114,11 +2152,23 @@ function placePart(
   const stride = Math.max(1, Math.round(spanAtCoarse * coarseGrid.strideFraction));
   const coarseSamples = samplesFor(coarse.reduction, COARSE_SAMPLES);
   let candidates: Candidate[] = [];
+  const supplementalSeeds: Candidate[] = [];
   let grid = { reduction: coarse.reduction, cols: 0, rows: 0, stride };
   for (const scale of scales) {
     const field = coarseScan(coarse, coarseSamples, scale, searchRotations, stride);
     grid = { reduction: coarse.reduction, cols: field.cols, rows: field.rows, stride };
-    candidates.push(...localMinima(field, coarseGrid.suppressionCells, coarseGrid.minimaPerScale));
+    const legacy = poseCoarseMinima(field, coarseGrid.suppressionCells, coarseGrid.minimaPerScale);
+    candidates.push(...legacy);
+    if (coarsePolicy === 'short-support') {
+      // An isotropic half-LONG-span neighborhood can suppress another position
+      // along a thin part. Its inscribed material disk supplies a rotation-free
+      // bound, in level pixels, derived from the actual rung scale (issue #1649).
+      const support = thickness * scale / (2 * coarse.reduction);
+      const extra = poseCoarseMinima(field, coarseGrid.suppressionCells, coarseGrid.minimaPerScale, support, legacy);
+      // Charge the independent budget AFTER excluding already represented
+      // positions; charging it first spends its slots on seeds then discarded.
+      supplementalSeeds.push(...extra);
+    }
   }
   base.coarse = grid;
   candidates.sort((a, b) => a.residual - b.residual);
@@ -2140,147 +2190,159 @@ function placePart(
   // that arm is one half of the two-identical-limbs answer the whole instrument
   // exists to report. Re-gridding the ladder at the first level with real detail
   // brought it back at +35.
-  const branchLevel = Math.max(0, coarseIndex - 1);
-  /** How many rotations survive the re-grid at the branch level, per position. */
-  const BRANCH_ROTATIONS = 3;
-  let rotStep = rotationFree ? 0 : COARSE_ROTATION_STEP / 2;
-  for (let li = coarseIndex; li >= 0; li--) {
-    const level = levels[li];
-    const plate = plates[li];
-    const smooth = li !== coarseIndex;
-    const branch = li === branchLevel;
-    const keep = li === coarseIndex ? scales.length * coarseGrid.minimaPerScale : REFINE_CANDIDATES;
-    const s = samplesFor(level.reduction, li === 0 ? POLISH_SAMPLES : REFINE_SAMPLES);
-    // The coarse pass only sampled every `stride` pixels, so entering the
-    // refinement the anchor can be half a stride out; the first polish gets a
-    // step big enough to cross that rather than a step that assumes a pixel.
-    const step = { translate: li === coarseIndex ? Math.max(1.5, stride) : 1.5, rotate: rotStep, scale: 0.08 };
-    const floor =
-      li === 0 ? { translate: 0.05, rotate: 0.1, scale: 0.001 } : { translate: 0.25, rotate: 0.5, scale: 0.01 };
-    const seeds: Candidate[] = [];
-    for (const start of candidates.slice(0, keep)) {
-      if (branch && !rotationFree) {
-        const grid: Candidate[] = [];
-        for (const rotDeg of searchRotations) {
-          const probe: Candidate = { ...start, rotDeg, residual: 0 };
-          probe.residual = residualAt(level, plate, s, probe, smooth);
-          grid.push(probe);
+  const refineLane = (initial: Candidate[], supplemental = false, levelTrace?: PoseTraceLevel[]): Candidate[] => {
+    let candidates = initial;
+    const branchLevel = Math.max(0, coarseIndex - 1);
+    /** How many rotations survive the re-grid at the branch level, per position. */
+    const BRANCH_ROTATIONS = 3;
+    let rotStep = rotationFree ? 0 : COARSE_ROTATION_STEP / 2;
+    for (let li = coarseIndex; li >= 0; li--) {
+      const level = levels[li];
+      const plate = plates[li];
+      const smooth = li !== coarseIndex;
+      const branch = li === branchLevel;
+      // Coarse scale scores are not comparable. Give the coverage pool its
+      // first detailed/rotation-regridded reading before ranking scales together.
+      const keep = li === coarseIndex || (supplemental && li === branchLevel) ? scales.length * coarseGrid.minimaPerScale : REFINE_CANDIDATES;
+      const s = samplesFor(level.reduction, li === 0 ? POLISH_SAMPLES : REFINE_SAMPLES);
+      // The coarse pass only sampled every `stride` pixels, so entering the
+      // refinement the anchor can be half a stride out; the first polish gets a
+      // step big enough to cross that rather than a step that assumes a pixel.
+      const step = { translate: li === coarseIndex ? Math.max(1.5, stride) : 1.5, rotate: rotStep, scale: 0.08 };
+      const floor =
+        li === 0 ? { translate: 0.05, rotate: 0.1, scale: 0.001 } : { translate: 0.25, rotate: 0.5, scale: 0.01 };
+      const seeds: Candidate[] = [];
+      for (const start of candidates.slice(0, keep)) {
+        if (branch && !rotationFree) {
+          const grid: Candidate[] = [];
+          for (const rotDeg of searchRotations) {
+            const probe: Candidate = { ...start, rotDeg, residual: 0 };
+            probe.residual = residualAt(level, plate, s, probe, smooth);
+            grid.push(probe);
+          }
+          grid.sort((a, b) => a.residual - b.residual);
+          // One position and one scale throughout, so this dedupe is a spread over
+          // rotation alone: an angle within 25 degrees of one already kept is the
+          // same basin under a slightly different name.
+          seeds.push(...dedupe(grid, 1, 25, Infinity).slice(0, BRANCH_ROTATIONS));
+          continue;
         }
-        grid.sort((a, b) => a.residual - b.residual);
-        // One position and one scale throughout, so this dedupe is a spread over
-        // rotation alone: an angle within 25 degrees of one already kept is the
-        // same basin under a slightly different name.
-        seeds.push(...dedupe(grid, 1, 25, Infinity).slice(0, BRANCH_ROTATIONS));
-        continue;
+        seeds.push(start);
       }
-      seeds.push(start);
-    }
-    const paths = seeds.map((): { start: number; steps: PoseTraceStep[] } => ({ start: 0, steps: [] }));
-    candidates = seeds.map((seed, i) =>
-      polish(level, plate, s, seed, step, floor, smooth, scaleBounds, rotationBounds, li === 0 ? POLISH_SCALE_ESCAPES : [], trace === undefined ? undefined : paths[i]),
-    );
-    const polished = candidates.slice();
-    candidates.sort((a, b) => a.residual - b.residual);
-    // ⚠️ Eight branches that walked to one optimum are one candidate, not eight —
-    // and the radius has to scale with the PART rather than be a pixel count.
-    // Narrowing by residual alone lets near-copies of the best hill fill the
-    // budget and crowd the SECOND hill out, which is exactly the answer this
-    // instrument exists to keep: with a fixed one-pixel radius the fixture lost
-    // one of its two identical arms.
-    candidates = dedupe(candidates, Math.max(1, (0.2 * span * scaleReference) / level.reduction), 5, 1.03);
-    if (trace !== undefined) {
-      const ou = part.width / 2 - anchorX;
-      const ov = part.height / 2 - anchorY;
-      const said = (c: Candidate): PoseTraceCandidate => {
-        const cos = Math.cos(c.rotDeg * DEG) * c.scale;
-        const sin = Math.sin(c.rotDeg * DEG) * c.scale;
-        return {
-          x: c.cx * level.reduction + ou * cos - ov * sin,
-          y: c.cy * level.reduction + ou * sin + ov * cos,
-          rotationDeg: normaliseDegrees(c.rotDeg),
-          scale: c.scale,
-          residual: c.residual,
-        };
-      };
-      let probeResidual: number | null = null;
-      if (trace.probe !== undefined) {
-        const q = trace.probe;
-        const cos = Math.cos(q.rotationDeg * DEG) * q.scale;
-        const sin = Math.sin(q.rotationDeg * DEG) * q.scale;
-        const at: Candidate = {
-          cx: (q.x - (ou * cos - ov * sin)) / level.reduction,
-          cy: (q.y - (ou * sin + ov * cos)) / level.reduction,
-          rotDeg: q.rotationDeg,
-          scale: q.scale,
-          residual: 0,
-        };
-        probeResidual = residualAt(level, plate, s, at, smooth);
-      }
-      trace.levels.push({
-        part: name,
-        level: li,
-        reduction: level.reduction,
-        keep,
-        seeds: seeds.map(said),
-        starts: paths.map((p) => p.start),
-        paths: paths.map((p) => p.steps),
-        polished: polished.map(said),
-        out: candidates.map(said),
-        probeResidual,
-        coarseRotations:
-          li === coarseIndex
-            ? {
-                ladder: searchRotations.slice(),
-                residuals: seeds.map((seed) =>
-                  searchRotations.map((rotDeg) => coarseCellResidual(level, coarseSamples, seed.scale, rotDeg, seed.cx, seed.cy)),
-                ),
-              }
-            : null,
-      });
-    }
-    if (li > 0) {
-      candidates = candidates.map((c) => ({ ...c, cx: c.cx * 2, cy: c.cy * 2 }));
-      // A rotation-free part keeps its step at zero all the way down, so the
-      // polish never touches an angle that means nothing and the report's 0° is
-      // the placeholder it says it is rather than a wandered-to number.
-      if (!rotationFree) rotStep = Math.max(1, rotStep / 2);
-    }
-  }
-
-  // The one rotation family the translation scan cannot see: a part that is its
-  // own mirror after a quarter or a half turn sits in the SAME place at more than
-  // one angle, so the field records only whichever won. Probe them explicitly.
-  //
-  // 🚨 Only the turns the window contains, and this is the other half of #719's
-  // measurement. A quarter turn off is a SEED, not a ladder rung — so under
-  // `--rotation -5,5` it entered the answer from outside a window the report was
-  // calling the search, and the candidate who ran the exam read `rot=91.2°`
-  // under `rotation -5°–5°`. A caller who bounds the rotation has said the part
-  // is not a quarter turn over; the honest response is not to look there rather
-  // than to look and report it.
-  if (!rotationFree && candidates.length > 0) {
-    const primary = candidates[0];
-    const s = samplesFor(1, POLISH_SAMPLES);
-    for (const turn of [90, 180, 270]) {
-      const turned = primary.rotDeg + turn;
-      if (!rotationBounds.wraps && (turned < rotationBounds.min - 1e-9 || turned > rotationBounds.max + 1e-9)) continue;
-      candidates.push(
-        polish(
-          levels[0],
-          plates[0],
-          s,
-          { ...primary, rotDeg: turned },
-          { translate: 1.5, rotate: 4, scale: 0.04 },
-          { translate: 0.05, rotate: 0.1, scale: 0.001 },
-          true,
-          scaleBounds,
-          rotationBounds,
-          [],
-        ),
+      const paths = seeds.map((): { start: number; steps: PoseTraceStep[] } => ({ start: 0, steps: [] }));
+      candidates = seeds.map((seed, i) =>
+        polish(level, plate, s, seed, step, floor, smooth, scaleBounds, rotationBounds, li === 0 ? POLISH_SCALE_ESCAPES : [], trace === undefined ? undefined : paths[i]),
       );
+      const polished = candidates.slice();
+      candidates.sort((a, b) => a.residual - b.residual);
+      // ⚠️ Eight branches that walked to one optimum are one candidate, not eight —
+      // and the radius has to scale with the PART rather than be a pixel count.
+      // Narrowing by residual alone lets near-copies of the best hill fill the
+      // budget and crowd the SECOND hill out, which is exactly the answer this
+      // instrument exists to keep: with a fixed one-pixel radius the fixture lost
+      // one of its two identical arms.
+      candidates = dedupe(candidates, Math.max(1, (0.2 * span * scaleReference) / level.reduction), 5, 1.03);
+      if (trace !== undefined && levelTrace !== undefined) {
+        const ou = part.width / 2 - anchorX;
+        const ov = part.height / 2 - anchorY;
+        const said = (c: Candidate): PoseTraceCandidate => {
+          const cos = Math.cos(c.rotDeg * DEG) * c.scale;
+          const sin = Math.sin(c.rotDeg * DEG) * c.scale;
+          return {
+            x: c.cx * level.reduction + ou * cos - ov * sin,
+            y: c.cy * level.reduction + ou * sin + ov * cos,
+            rotationDeg: normaliseDegrees(c.rotDeg),
+            scale: c.scale,
+            residual: c.residual,
+          };
+        };
+        let probeResidual: number | null = null;
+        if (trace.probe !== undefined) {
+          const q = trace.probe;
+          const cos = Math.cos(q.rotationDeg * DEG) * q.scale;
+          const sin = Math.sin(q.rotationDeg * DEG) * q.scale;
+          const at: Candidate = {
+            cx: (q.x - (ou * cos - ov * sin)) / level.reduction,
+            cy: (q.y - (ou * sin + ov * cos)) / level.reduction,
+            rotDeg: q.rotationDeg,
+            scale: q.scale,
+            residual: 0,
+          };
+          probeResidual = residualAt(level, plate, s, at, smooth);
+        }
+        levelTrace.push({
+          part: name,
+          level: li,
+          reduction: level.reduction,
+          keep,
+          seeds: seeds.map(said),
+          starts: paths.map((p) => p.start),
+          paths: paths.map((p) => p.steps),
+          polished: polished.map(said),
+          out: candidates.map(said),
+          probeResidual,
+          coarseRotations:
+            li === coarseIndex
+              ? {
+                  ladder: searchRotations.slice(),
+                  residuals: seeds.map((seed) =>
+                    searchRotations.map((rotDeg) => coarseCellResidual(level, coarseSamples, seed.scale, rotDeg, seed.cx, seed.cy)),
+                  ),
+                }
+              : null,
+        });
+      }
+      if (li > 0) {
+        candidates = candidates.map((c) => ({ ...c, cx: c.cx * 2, cy: c.cy * 2 }));
+        // A rotation-free part keeps its step at zero all the way down, so the
+        // polish never touches an angle that means nothing and the report's 0° is
+        // the placeholder it says it is rather than a wandered-to number.
+        if (!rotationFree) rotStep = Math.max(1, rotStep / 2);
+      }
     }
-    candidates.sort((a, b) => a.residual - b.residual);
-  }
+
+    // The one rotation family the translation scan cannot see: a part that is its
+    // own mirror after a quarter or a half turn sits in the SAME place at more than
+    // one angle, so the field records only whichever won. Probe them explicitly.
+    //
+    // 🚨 Only the turns the window contains, and this is the other half of #719's
+    // measurement. A quarter turn off is a SEED, not a ladder rung — so under
+    // `--rotation -5,5` it entered the answer from outside a window the report was
+    // calling the search, and the candidate who ran the exam read `rot=91.2°`
+    // under `rotation -5°–5°`. A caller who bounds the rotation has said the part
+    // is not a quarter turn over; the honest response is not to look there rather
+    // than to look and report it.
+    if (!rotationFree && candidates.length > 0) {
+      const primary = candidates[0];
+      const s = samplesFor(1, POLISH_SAMPLES);
+      for (const turn of [90, 180, 270]) {
+        const turned = primary.rotDeg + turn;
+        if (!rotationBounds.wraps && (turned < rotationBounds.min - 1e-9 || turned > rotationBounds.max + 1e-9)) continue;
+        candidates.push(
+          polish(
+            levels[0],
+            plates[0],
+            s,
+            { ...primary, rotDeg: turned },
+            { translate: 1.5, rotate: 4, scale: 0.04 },
+            { translate: 0.05, rotate: 0.1, scale: 0.001 },
+            true,
+            scaleBounds,
+            rotationBounds,
+            [],
+          ),
+        );
+      }
+      candidates.sort((a, b) => a.residual - b.residual);
+    }
+
+    return candidates;
+  };
+  const baselineCandidates = refineLane(candidates, false, trace?.levels);
+  supplementalSeeds.sort((a, b) => a.residual - b.residual);
+  const extraTrace: PoseTraceLevel[] | undefined = trace === undefined ? undefined : [];
+  if (trace !== undefined && extraTrace !== undefined) (trace.supplemental ??= []).push({ part: name, levels: extraTrace });
+  candidates = [...baselineCandidates, ...refineLane(supplementalSeeds, true, extraTrace)];
 
   // Measured at full resolution over every pixel, then de-duplicated: two
   // candidates that walked to the same optimum are one answer, not two.

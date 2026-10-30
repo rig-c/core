@@ -818,20 +818,22 @@ rigc pose
                    found on a 20x25 anchor grid, step 4 at 2x reduction
   PLACE  flag.png  x=  104.7  y=  156.1  rot=   84.3°  scale=0.955  residual=0.0135  unexplained=  0%
                    found on a 40x50 anchor grid, step 2 at 2x reduction
-  AMBIG  post.png  x=   79.9  y=  149.0  rot=   -0.1°  scale=0.971  residual=0.0593  unexplained= 16%
+  AMBIG  post.png  x=   80.0  y=  148.6  rot=   -0.1°  scale=0.982  residual=0.0587  unexplained= 16%
                    found on a 14x17 anchor grid, step 6 at 2x reduction
-                   alt 2: x=   79.0  y=  141.7  rot=   -0.5°  scale=0.691  residual=0.0687  unexplained= 25%
-                   ambiguous: part is 14x96 px (span 93.2 frame px, opaque 1) with texture 0.0146, detail 1.406; 43 candidate(s), best 0.0593, next 0.0687, spread 0.0095 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; either the frame holds more than one place this part fits, or every candidate missed the true one — a narrower --scale or --rotation window around what you know of the part tells the two apart
+                   alt 2: x=   78.7  y=  164.0  rot=   -0.6°  scale=0.573  residual=0.0612  unexplained= 19%
+                   alt 3: x=   79.0  y=  141.7  rot=   -0.5°  scale=0.691  residual=0.0687  unexplained= 25%
+                   alt 4: x=   78.4  y=  135.5  rot=   -0.5°  scale=0.500  residual=0.0702  unexplained= 23%
+                   ambiguous: part is 14x96 px (span 94.3 frame px, opaque 1) with texture 0.0146, detail 1.406; 50 candidate(s), best 0.0587, next 0.0612, spread 0.0025 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; either the frame holds more than one place this part fits, or every candidate missed the true one — a narrower --scale or --rotation window around what you know of the part tells the two apart
 ```
 
-⚠️ **The post came back `AMBIG`: a best at scale 0.971 and an alternate at 0.691, 7.3 px
-higher, trailing it by a spread of 0.0095.** That is §2.2's caveat in the open. The post
+⚠️ **The post came back `AMBIG`: a best at scale 0.982 and its next alternate at 0.573,
+15.4 px lower, trailing it by a spread of 0.0025.** That is §2.2's caveat in the open. The post
 is a long part with most of its area in one colour, so a shrunken copy sitting inside the
 real post explains those pixels nearly as well, and the report's own `ambiguous:` line
 says size and texture do not account for how close the two come. The report cannot say
-which one is true, and it says so: it names both and asks for a narrower window. The
+which one is true, and it says so: it names the alternatives and asks for a narrower window. The
 picture can. The arm and the flag read 0.970 and 0.955, so the picture is at the art's
-own resolution, and a post at 0.69 would be drawn at about 0.7 of the size of everything
+own resolution, and a post at 0.573 would be drawn at about 0.6 of the size of everything
 bolted to it. ⇒ Narrow, and say so:
 
 ```bash
@@ -861,11 +863,18 @@ rigc pose
   ..    search  scale 0.85–1.2 in 2 step(s) · rotation -180°–180° in 24 step(s) of 15° · refuse above residual 0.25
   PLACE  arm.png   x=  102.5  y=   94.8  rot=  -18.3°  scale=0.974  residual=0.0305  unexplained=  4%
                    found on a 20x25 anchor grid, step 4 at 2x reduction
-  PLACE  flag.png  x=  137.4  y=   86.0  rot=   -6.6°  scale=0.956  residual=0.0134  unexplained=  0%
+  PLACE  flag.png  x=  137.4  y=   86.0  rot=   -6.4°  scale=0.958  residual=0.0134  unexplained=  0%
                    found on a 40x50 anchor grid, step 2 at 2x reduction
   PLACE  post.png  x=   80.0  y=  148.0  rot=    0.0°  scale=0.995  residual=0.0394  unexplained=  9%
                    found on a 14x17 anchor grid, step 6 at 2x reduction
 ```
+
+The worked derivation and recipe below keep their recorded rounded authoring inputs:
+pose A as printed here, and pose B with the flag at screen rotation −6.6° and scale
+0.956. The current rerun above reads −6.4° and 0.958 for that flag. The 0.2° rotation
+and 0.002 scale differences are changes in the estimator's reading; the fixed inputs
+used to derive this worked rig and its motion are stated here so that the recipe does
+not silently change with a rerun.
 
 Three things to read out of that pair, none of which is a score:
 
@@ -887,7 +896,8 @@ Three things to read out of that pair, none of which is a score:
 
 ### 3. Convert, and derive the rig
 
-`cropToSpineY(y, 200) = 200 − y` and `screenToSpineDegrees(d) = −d`, both from
+For those recorded authoring inputs, `cropToSpineY(y, 200) = 200 − y` and
+`screenToSpineDegrees(d) = −d`, both from
 [`src/transform.ts`](../src/transform.ts) (§2.2 — do not open-code either):
 
 | | pose A, Spine world | pose B, Spine world |
@@ -1042,8 +1052,8 @@ which is which is worth being able to point at:
 
 | Key | Where it came from |
 | --- | --- |
-| arm `t: 0` = −61.9, flag `t: 0` = −22.2 | **given** — pose A, converted. Untouched, per §3.6 |
-| arm `t: 0.55` = 18.3, flag `t: 0.55` = −11.7 | **given** — pose B. The flag's is `6.6 − 18.3`: both world rotations converted first, then differenced, because a child's track carries a **local** rotation under a rotated parent |
+| arm `t: 0` = −61.9, flag `t: 0` = −22.2 | **given** — the recorded pose A reading, converted. Untouched, per §3.6 |
+| arm `t: 0.55` = 18.3, flag `t: 0.55` = −11.7 | **given** — the recorded pose B reading. The flag's is `6.6 − 18.3`: both world rotations converted first, then differenced, because a child's track carries a **local** rotation under a rotated parent |
 | arm `t: 0.07` = −66.4 | §3.6 — 4.5° against an 80° excursion (5.6 %), at 13 % of the duration |
 | arm `t: 0.32` = 24.7 | §3.8 — 6.4° past the end value (8 %), at 58 % of the duration |
 | flag `t: 0.09`, `t: 0.47` | §3.7 — the flag's extreme lands at 85 % of the duration against the arm's 58 %, an offset of **+27 %**, the middle of its row's band, and it drags the other way first. Not the top of the band: at 35 % (`t: 0.51`) the crossing and the settle below would share 0.04 s, and the 24 fps render would still show the flag at its extreme one frame before the last |

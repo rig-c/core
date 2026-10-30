@@ -52,6 +52,24 @@ export function readmeFaults(text: string, cap = README_WORD_CAP): string[] {
   for (const match of prose.join('\n').matchAll(/\b(?:measured|read)\s+on\s+20\d*/giu)) {
     faults.push(`README_DATED_MEASUREMENT: README.md contains ${JSON.stringify(match[0])}`);
   }
+  // Render real Markdown first: reference links, formatting and code examples
+  // then have the same meaning as on the landing page. HTML captions use <a>
+  // too; image-only badges have no text and do not compete with prose labels.
+  const seen = new Set<string>();
+  let label = '';
+  new HTMLRewriter().on('a[href]', {
+    element(element) {
+      label = '';
+      element.onEndTag(() => {
+        const name = label.replace(/\s+/gu, ' ').trim();
+        if (name === '') return;
+        if (/^(?:reference|here|docs)$/iu.test(name)) faults.push(`README_LINK_TEXT_GENERIC: README.md has uninformative link text ${JSON.stringify(name)}`);
+        if (seen.has(name)) faults.push(`README_LINK_TEXT_DUPLICATE: README.md repeats link text ${JSON.stringify(name)}`);
+        seen.add(name);
+      });
+    },
+    text(chunk) { label += chunk.text; },
+  }).transform(Bun.markdown.html(text));
   return faults;
 }
 
@@ -61,5 +79,5 @@ if (import.meta.main) {
   const faults = readmeFaults(text);
   for (const fault of faults) console.error(fault);
   if (faults.length > 0) process.exit(1);
-  console.log(`README_BUDGET: ${readmeWords(text)}/${README_WORD_CAP} words; headings and measurement checks PASS`);
+  console.log(`README_BUDGET: ${readmeWords(text)}/${README_WORD_CAP} words; headings, measurement and link checks PASS`);
 }

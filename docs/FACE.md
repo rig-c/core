@@ -1947,7 +1947,9 @@ turning, blinking and looking — and the one general lesson that might carry in
 that work is §7's: **allocate the channels before the first key, because Spine
 blends and does not add.**
 
-### A measured alpha aperture
+<a id="a-measured-alpha-aperture"></a>
+
+### Depth-driven rigging: a measured alpha aperture
 
 A named socket plate can supply an `alphaClip` clipping attachment (AUTHORING,
 **Alpha-derived clipping**). This also accepts a generated grid/contour source

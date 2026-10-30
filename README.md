@@ -51,6 +51,22 @@ Everything in that table needs Bun and this package — `preview` and `vote` als
 `@esotericsoftware/spine-core` installed beside it (see below) — and no clone, no
 reference art, no art pipeline, no server.
 
+### Depth-driven rigging
+
+Explicit depth, which a drawing alone does not state, makes facial features
+shift by different amounts during a small head turn: [`gallery/portrait`](https://github.com/rig-c/core/tree/main/gallery/portrait)
+uses per-part depths, while [`gallery/look`](https://github.com/rig-c/core/tree/main/gallery/look)
+samples a depth map at the mesh vertices.
+With [`@rig-c/parts`' depth fields](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#per-layer-depth-sheets-773),
+See-through's per-layer sheets are bound explicitly with `near` and `zScale`,
+then consumed by head-turn roles in `turn.roles`.
+The [depth-yaw flow](docs/FACE.md#a-measured-alpha-aperture) shows how a turning
+surface and its alpha clipping aperture move together.
+The [value-driven turn](docs/FACE.md#the-turn-as-a-value-rather-than-a-time) is a
+rig control; the consumer chooses when to move it, and
+[getting-started](https://github.com/rig-c/getting-started) is the painting-to-rig
+walkthrough.
+
 ### Alpha-derived clipping
 
 Alpha-derived clipping takes a named source slot/skin/attachment plus explicit
@@ -59,7 +75,8 @@ Region, authored/resolved linked mesh and generated grid/contour depth sources u
 ordinary weighted clipping, with the existing validation gate before emission.
 See [AUTHORING: Alpha-derived clipping](docs/AUTHORING.md#alpha-derived-clipping)
 for source-motion limits, fit reports and named refusals, and
-[the face guide](docs/FACE.md#a-measured-alpha-aperture) for the depth-yaw flow.
+[the face guide](docs/FACE.md#a-measured-alpha-aperture) for the depth-yaw flow
+used in depth-driven rigging.
 
 ## What rigc is, and what it is not
 

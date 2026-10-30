@@ -26,7 +26,7 @@ name. Both remain published alongside it with the same product files.
 
 <p align="center"><em>Fourteen part PNGs drawn from scratch for this repo, one rig spec, one motion spec — the assembly,
 the breathing and the wave are all rigc-compiled Spine animations, rendered with
-<code>rigc render</code>. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-demo@2x.gif">2x version</a> (1200x810) sits beside it.</em></p>
+<code>rigc render</code>. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-demo@2x.gif">2x assembly film</a> (1200x810) sits beside it.</em></p>
 
 Loose part PNGs and two small JSON files in; **Spine 4.3 skeleton data out** — a
 `skeleton.json` and a `skeleton.atlas` that load in any Spine runtime and **import
@@ -44,7 +44,7 @@ installed.
 | a compiled rig and a question about its geometry | `rigc inspect` | one picture of its bones, axes, mesh edges and hulls, one bone's weights, the triangles folded over, the draw order, a world grid or a declared axis over the art — at the setup pose, one time or a sheet of several, zoomed to a bone or a slot, or beside a second build on one transform — and a legend that puts every mark back in world units |
 | a compiled rig | `rigc preview` | one self-contained `.html` that plays it in Spine's own web player |
 | two to four compiled rigs | `rigc vote` | one ballot page a human picks from, and the answer checked into a ledger |
-| a picture of a key pose | `rigc pose` | where each loose part PNG sits in it, in spec coordinates — the movement between two poses is then yours to key ([docs/MOTION.md](docs/MOTION.md)) |
+| a picture of a key pose | `rigc pose` | where each loose part PNG sits in it, in spec coordinates — the movement between two poses is then yours to key ([the motion recipe](docs/MOTION.md)) |
 | the same picture, and a rig | `rigc chainfit` | the parts `pose` refuses because something is drawn over them — read through the candidate's own draw order and hierarchy, with the share of each part the answer was measured on |
 
 Everything in that table needs Bun and this package — `preview` and `vote` also
@@ -54,8 +54,8 @@ reference art, no art pipeline, no server.
 ### Depth-driven rigging
 
 Explicit depth, which a drawing alone does not state, makes facial features
-shift by different amounts during a small head turn: [`gallery/portrait`](https://github.com/rig-c/core/tree/main/gallery/portrait)
-uses per-part depths, while [`gallery/look`](https://github.com/rig-c/core/tree/main/gallery/look)
+shift by different amounts during a small head turn: [the portrait depth example](https://github.com/rig-c/core/tree/main/gallery/portrait)
+uses per-part depths, while [the mesh-depth look example](https://github.com/rig-c/core/tree/main/gallery/look)
 samples a depth map at the mesh vertices.
 With [`@rig-c/parts`' depth fields](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#per-layer-depth-sheets-773),
 See-through's per-layer sheets are bound explicitly with `near` and `zScale`,
@@ -106,7 +106,7 @@ it cuts both ways:
 
 ### Licensing, stated plainly
 
-See [NOTICE.md](NOTICE.md) for licensing and third-party terms.
+See [the licensing notice](NOTICE.md) for licensing and third-party terms.
 
 The problem rigc is aimed at is narrow. An agent asked to author a rig has no way
 to tell whether it succeeded: Spine's JSON parser accepts a great deal of nonsense
@@ -190,7 +190,7 @@ reference frames this project renders from them, which **are** committed, each
 example's own `license.txt` beside them under the redistribution grant those files
 carry; the images stay **non-commercial only**. The reasoning is in
 [`bench/reference/README.md`](https://github.com/rig-c/core/blob/main/bench/reference/README.md)
-and the terms in [NOTICE.md](NOTICE.md). It needs a clone and `bun run
+and the terms in [the reference-image notice](NOTICE.md). It needs a clone and `bun run
 fetch-examples`, and says so by name when the corpus is absent. `check` is not one
 of them: it reads whatever frames you point it at, so it runs from the installed
 package on pictures of your own — which is what *Where to go next* below tells you
@@ -446,7 +446,7 @@ origin and tip in world units and in pixels, so a position read off the picture 
 straight back into the spec. [AUTHORING §13](docs/AUTHORING.md#13-asking-the-picture-a-question--rigc-inspect)
 maps each question to its view.
 
-**`render`** writes PNG frames and a contact sheet; **`preview`** writes a playable HTML file — see [AUTHORING §0](docs/AUTHORING.md#0-the-loop).
+**`render`** writes PNG frames and a contact sheet; **`preview`** writes a playable HTML file — see [the render and preview reference](docs/AUTHORING.md#0-the-loop).
 
 **7. Let someone choose.** Sooner or later you will have two builds that both pass
 the gate and no instrument that can separate them. `vote` puts them in one page
@@ -466,7 +466,7 @@ that does not belong to it. See
 
 **Where to go next.**
 
-- 📘 **[docs/AUTHORING.md](docs/AUTHORING.md)** is the real guide — both files
+- 📘 **[the authoring guide](docs/AUTHORING.md)** is the real guide — both files
   field by field, the emission rules, every named failure mapped to the file that
   has to change, and §8–§9 for reproducing a shot you were given as pictures. It
   ships inside the npm package too, at
@@ -490,11 +490,11 @@ that does not belong to it. See
   it, so a figure is read against that rather than against a number from a page;
   AUTHORING.md §9.2 says what the two halves of that bound are and why the floor
   is not zero.
-- [docs/LADDER.md](https://github.com/rig-c/core/blob/main/docs/LADDER.md) is the benchmark: the same job, from a brief
+- [the benchmark ladder](https://github.com/rig-c/core/blob/main/docs/LADDER.md) is the benchmark: the same job, from a brief
   and rendered frames, scored. [docs/PILOT.md](https://github.com/rig-c/core/blob/main/docs/PILOT.md) is how to run an
   agent through it and score what comes back.
 - 🤖 **Handing the authoring to an AI agent?**
-  [docs/PROMPTING.md](docs/PROMPTING.md) is the operator's page — the six prompt
+  [the prompting guide](docs/PROMPTING.md) is the operator's page — the six prompt
   clauses a measured pilot run paid for, and what you can leave unsaid.
 
 ## See what you built, and let someone choose
@@ -514,7 +514,7 @@ a rig compiles green, because green says nothing at all about the picture.
 conditions, <code>rigc pose</code> reads where every part sits in each picture, two
 candidate in-betweenings are compiled from the same pair — and a real
 <code>rigc vote</code> ballot picks the winner, because the movement between the poses
-is the one thing no instrument here will grade. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-keypose@2x.gif">2x version</a> (1200x810) sits beside it.</em></p>
+is the one thing no instrument here will grade. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-keypose@2x.gif">2x key-pose film</a> (1200x810) sits beside it.</em></p>
 
 Three properties of `vote` are worth stating, because they are what make its ledger
 usable by the next agent rather than by a reader: **a tie is a recorded outcome, not a
@@ -525,7 +525,7 @@ anywhere; and **every line carries a reason code** from a closed enumeration tha
 enforced, so *"tie, because this one is better"* is refused.
 
 🎞️ **Authoring the movement those pages show you** — key poses, in-betweening, and how
-to spread candidates so a ballot informs — is [docs/MOTION.md](docs/MOTION.md).
+to spread candidates so a ballot informs — is [the motion authoring guide](docs/MOTION.md).
 
 📐 **`rigc pose --images parts/ --frame poseA.png` runs the other way.** Every command
 above takes something you authored and tells you about it; this one takes a **picture
@@ -568,7 +568,7 @@ while <code>gaze</code> and <code>turn</code> return to rest, so the hand-offs m
 differing pixels — and the composing is the consumer's. Authorable on plain Spine 4.3, no
 plugin, no runtime patch; what the turn costs is authoring rather than runtime capability,
 and that cost is one stated expression per key. Compiled and rendered entirely by the
-published package. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-scene@2x.gif">2x version</a> (1200x810) sits beside it.</em></p>
+published package. A <a href="https://raw.githubusercontent.com/rig-c/core/main/assets/rigc-scene@2x.gif">2x portrait film</a> (1200x810) sits beside it.</em></p>
 
 🎞️ **How the three films on this page were made** is kept with them, one directory per
 film in [`films/`](https://github.com/rig-c/core/tree/main/films) — a `run.sh` that
@@ -582,32 +582,34 @@ material, like the gallery: a clone runs them.
 
 | Command | Does |
 | --- | --- |
-| `build` | Compile, gate and write the rig. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `validate` | Re-gate artifacts already on disk. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `repack` | Repack a build from its output. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `ingest` | Read a skeleton back into specs. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `split` | Separate disconnected mesh pieces. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `explain` | Print the compiled rig as a table. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `render` | Write PNG frames and a contact sheet. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `preview` | Write a playable HTML preview. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `vote` | Make a ballot and record its answer. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `pose` | Read part placements from a picture. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `chainfit` | Read occluded parts through a candidate rig. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `diff` | Compare two skeletons structurally. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `bonedist` | Measure per-bone world-transform distance. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `check` | Compare a candidate against reference pictures. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `bench` | Run a rung of the benchmark ladder. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `guide` | Read a named failure or guide section. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `skills install` | Install the packaged agent skills. [Reference](docs/AUTHORING.md#0-the-loop). |
-| `review` | Hand a build to the review package. [Reference](docs/AUTHORING.md#0-the-loop). |
+| `build` | Compile, gate and write the rig. [`build` in the CLI reference](docs/AUTHORING.md#cmd-build) |
+| `validate` | Re-gate artifacts already on disk. [`validate` in the CLI reference](docs/AUTHORING.md#cmd-validate) |
+| `repack` | Repack a build from its output. [`repack` in the CLI reference](docs/AUTHORING.md#cmd-repack) |
+| `ingest` | Read a skeleton back into specs. [`ingest` in the CLI reference](docs/AUTHORING.md#cmd-ingest) |
+| `split` | Separate disconnected mesh pieces. [`split` in the CLI reference](docs/AUTHORING.md#cmd-split) |
+| `explain` | Print the compiled rig as a table. [`explain` in the CLI reference](docs/AUTHORING.md#cmd-explain) |
+| `render` | Write PNG frames and a contact sheet. [`render` in the CLI reference](docs/AUTHORING.md#cmd-render) |
+| `preview` | Write a playable HTML preview. [`preview` in the CLI reference](docs/AUTHORING.md#cmd-preview) |
+| `vote` | Make a ballot and record its answer. [`vote` in the CLI reference](docs/AUTHORING.md#cmd-vote) |
+| `pose` | Read part placements from a picture. [`pose` in the CLI reference](docs/AUTHORING.md#cmd-pose) |
+| `chainfit` | Read occluded parts through a candidate rig. [`chainfit` in the CLI reference](docs/AUTHORING.md#cmd-chainfit) |
+| `diff` | Compare two skeletons structurally. [`diff` in the CLI reference](docs/AUTHORING.md#cmd-diff) |
+| `bonedist` | Measure per-bone world-transform distance. [`bonedist` in the CLI reference](docs/AUTHORING.md#cmd-bonedist) |
+| `check` | Compare a candidate against reference pictures. [`check` in the CLI reference](docs/AUTHORING.md#cmd-check) |
+| `bench` | Run a rung of the benchmark ladder. [`bench` in the CLI reference](docs/AUTHORING.md#cmd-bench) |
+| `guide` | Read a named failure or guide section. [`guide` in the CLI reference](docs/AUTHORING.md#cmd-guide) |
+| `skills install` | Install the packaged agent skills. [`skills install` in the CLI reference](docs/AUTHORING.md#cmd-skills-install) |
+| `review` | Hand a build to the review package. [`review` in the CLI reference](docs/AUTHORING.md#cmd-review) |
 
-### Starting from a skeleton you already have
+### Existing skeletons and the editor
 
-See [INGEST: Starting from a skeleton you already have](docs/INGEST.md#starting-from-a-skeleton-you-already-have) for the ingest-and-rebuild loop.
+<a id="starting-from-a-skeleton-you-already-have"></a>
+<a id="the-editor-round-trip--for-a-licence-holder-never-in-ci"></a>
 
-### The editor round trip — for a licence holder, never in CI
-
-See [INGEST: The editor round trip](docs/INGEST.md#the-editor-round-trip--for-a-licence-holder-never-in-ci) for the licensed-editor workflow.
+For a skeleton you already have, [the ingest-and-rebuild loop](docs/INGEST.md#starting-from-a-skeleton-you-already-have)
+turns a Spine 4.3 export into rig and motion specs, then checks that rebuilding them reproduces it.
+For a licence holder, [the editor round trip](docs/INGEST.md#the-editor-round-trip--for-a-licence-holder-never-in-ci)
+imports a build into the Spine editor and checks the export against that build with the gate, structural diff and rendered frames; it never runs in CI.
 
 ## Documentation
 
@@ -625,7 +627,7 @@ See [INGEST: The editor round trip](docs/INGEST.md#the-editor-round-trip--for-a-
 | 🧬 [GENERATIONS.md](https://github.com/rig-c/core/blob/main/docs/GENERATIONS.md) | **Spine data from another generation.** Why a 3.8–4.2 file read as 4.3 fails in silence, the policy that follows (detect from `skeleton.spine`, never guess, play on the matching runtime), what `A16` and `ingest` do with such a file, and the editor as the migration path. Repository material |
 | 📓 [CASES.md](https://github.com/rig-c/core/blob/main/docs/CASES.md) | **converting a Live2D model to Spine, and verifying the conversion.** The method — the source's own player headless, parts from its texture along the drawables, motion baked as deform keys, reference frames first, `check` — run once end to end on two Live2D sample models with no editor and no converter, and verified against the source's renderer and Spine's own runtime: the three instruments, the two rigc defects verifying it led to and v1.2.1 fixed, and where the method stops. Figures only — the models' licence keeps every asset out. Repository material |
 | 🗺️ [ROADMAP.md](https://github.com/rig-c/core/blob/main/ROADMAP.md) | where this is going, and where it has been. What 1.0 had to mean before the number was claimed, and what it was claimed on — conditions rather than a feature list, because direction here comes from what users hit |
-| 📐 [CLAUDE.md](https://github.com/rig-c/core/blob/main/CLAUDE.md) | **the doctrine** — why the validator's messages are the product, why nothing reaches disk before green, why no number is ever invented, and what a change has to keep. [CONTRIBUTING.md](https://github.com/rig-c/core/blob/main/CONTRIBUTING.md) calls it worth ten minutes before a first patch. Repository material |
+| 📐 [CLAUDE.md](https://github.com/rig-c/core/blob/main/CLAUDE.md) | **the doctrine** — why the validator's messages are the product, why nothing reaches disk before green, why no number is ever invented, and what a change has to keep. [the contribution guide](https://github.com/rig-c/core/blob/main/CONTRIBUTING.md) calls it worth ten minutes before a first patch. Repository material |
 
 [Dated survey](https://github.com/rig-c/core/blob/main/docs/SURVEY_2026-08-22.md).
 
@@ -649,7 +651,7 @@ attributability is **measured** to be capped below the bar reads down when every
 observable about it is independently verified strict. Every other rung and the
 graduation exam pass on the clause itself. Recompiling a stored candidate reproduces its
 record **to the digit within one gate**; across an instrument change the digits move,
-and [docs/LADDER.md](https://github.com/rig-c/core/blob/main/docs/LADDER.md) records
+and [the gate re-inspection ledger](https://github.com/rig-c/core/blob/main/docs/LADDER.md) records
 where. The standing figures quoted above are from its *gate-v2.4 re-inspection*, which
 is the current sweep.
 
@@ -668,13 +670,13 @@ a from-zero run is a tooling-progress measurement rather than a re-climb, which 
 why the certification above is scoped to tool + guide + protocol. One of those
 attempts states the residual in its own words: *"in motion it is not at editor
 quality."* All six, with their verdicts, are in
-[docs/LADDER.md](https://github.com/rig-c/core/blob/main/docs/LADDER.md).
+[the from-zero attempt records](https://github.com/rig-c/core/blob/main/docs/LADDER.md).
 
 The whole dossier — the yardstick, `diff` and `check` and what neither of them can
 see, every rung, the run viewer, the 50 assertions and the selftest behind them — is
 [docs/BENCHMARK.md](https://github.com/rig-c/core/blob/main/docs/BENCHMARK.md).
 Live rung status is
-[docs/LADDER.md](https://github.com/rig-c/core/blob/main/docs/LADDER.md).
+[recorded in the ladder ledger](https://github.com/rig-c/core/blob/main/docs/LADDER.md).
 
 ## Contributing
 

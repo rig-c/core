@@ -19,6 +19,8 @@ const plants: Array<[string, string, string]> = [
   ['table date', '| Result | 2026-10-30 |', 'README_TABLE_DATE'],
   ['table link date', '| [survey](docs/SURVEY_2026-10-30.md) | record |', 'README_TABLE_DATE'],
   ['empty document', '\n\t', 'README_EMPTY'],
+  ['duplicate link text', '[Build guide](first) and [Build guide](second)', 'README_LINK_TEXT_DUPLICATE'],
+  ['generic link text', '[ReFeReNcE](docs/AUTHORING.md#0-the-loop)', 'README_LINK_TEXT_GENERIC'],
 ];
 for (const [name, text, code] of plants) {
   test(`plant ${name} is refused by ${code}`, () => {
@@ -40,4 +42,23 @@ test('dates outside tables and fenced example headings are not landing-page clai
 
 test('a shorter embedded fence does not close a longer fence', () => {
   expect(readmeFaults('````md\n```\n## Example\n````\n## Commands\n')).toEqual([]);
+});
+
+// Use the same reader as the CLI; Markdown rendering supplies the visible text.
+test('distinct descriptive links, image badges and fenced examples are accepted', () => {
+  expect(readmeFaults('[Build guide](same) and [Render guide](same)\n' +
+    '<a href="one"><img src="badge.png" alt="version" /></a>\n' +
+    '```md\n[here](x) [here](x)\n```')).toEqual([]);
+});
+
+test('reference and HTML links share the visible-text duplicate check', () => {
+  const faults = readmeFaults('[`Build` guide][build]\n\n[build]: first\n\n<a href="second"><code>Build</code> guide</a>');
+  expect(faults.some((fault) => fault.startsWith('README_LINK_TEXT_DUPLICATE:'))).toBe(true);
+});
+
+test('generic labels are case-insensitive exact visible text, not descriptive phrases', () => {
+  for (const label of ['reference', 'HERE', 'Docs', '**Reference**', '`here`']) {
+    expect(readmeFaults(`[${label}](target)`).some((fault) => fault.startsWith('README_LINK_TEXT_GENERIC:'))).toBe(true);
+  }
+  expect(readmeFaults('[Reference frames](frames) and [Docs for rig authors](guide)')).toEqual([]);
 });

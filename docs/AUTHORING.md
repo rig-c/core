@@ -9186,7 +9186,7 @@ inside it, and a second copy of the leg on the same bone):
 bun cli.ts render --candidate path/to/spine --animation swing --seam skirt:leg,leg_front:leg [--skin …] [--fps 12]
 # rigc render
 # One seam line per pair, including no gap/no ghost or SKIP, followed by
-# exposure "<slot>" for each named member: frames, worst cell count and box.
+# exposure "<slot>" and joint contact: joined/separated/unavailable frames.
 ```
 
 The skirt swinging off the leg opens background between the leg's right edge and
@@ -9241,6 +9241,33 @@ table's vertices, and the atlas alpha:
   The rectangle controls derive eight real tear cells; a notched branch derives
   sixteen adjacent background cells excluded by this rule, including when both
   kinds occur in the same frame.
+- **jointContact** — a separate observation of **pair material connectivity**,
+  on that same half-opacity texel grid. It requires a setup band and exactly
+  one nonempty edge-connected material component for each named drawing, at
+  both setup and frame. `joined` means the two posed components overlap or
+  share a cell edge; `separated` means their union is disconnected. Sharing
+  only a corner is not edge contact. Every sampled frame is present, including
+  `unavailable` with a reason when a member is absent, the setup band is empty,
+  material is empty or has multiple islands, or a named slot draws multiple
+  fragments. No samples yields an empty list, not a successful observation.
+
+  **Raw gap measures swept support, not certified tearing.** An attached limb
+  can rotate well away from its parent and leave an external crescent of
+  background inside that support: `gap` can be positive while `jointContact`
+  is `joined`. Removing enough proximal material can leave initial overlap but
+  disconnect the same two drawings under the same attachment maps; that is
+  operational material separation, reported as `separated`. This uses no pivot
+  radius, anatomical assumption or new opacity threshold. The synthetic
+  rectangular controls use an independent endpoint set oracle and actual gated
+  builds rendered through both posers.
+
+  Contact does **not** infer anatomical joint intent. A joined pair can have a
+  local notch or hole, including a genuine local tear while other material
+  remains connected; contact cannot classify individual gap cells as harmless
+  background or tearing. A separated pair need not be artistically wrong and
+  can have zero raw gap outside the existing swept support. The grid cannot
+  resolve sub-cell contact. Other skeleton drawings and draw order do not
+  enter this pair-material observation. `unavailable` is never zero or PASS.
 - **ghost** — a cell one piece draws at the frame and the other does not, which
   the drawing piece, carrying it back, lands in the band, and which the other,
   carrying it back, finds neither drawing at the setup pose: the overlap swung
@@ -9336,6 +9363,7 @@ block carries the definitions above in words.
 | `pairs[].ghostA`, `pairs[].ghostB` | object | — | the same `{ frames, spans, worst }` shape for ghost cells drawn by `a` only and `b` only; an empty owner has `frames: []`, `spans: []`, `worst: null` |
 | `pairs[].gapOpen`, `pairs[].gapCovered` | object | — | the same `{ frames, spans, worst }` shape for gap cells with zero or positive rendered skeleton-composite alpha, respectively; an empty kind has `frames: []`, `spans: []`, `worst: null` |
 | `pairs[].exposureA`, `pairs[].exposureB` | object | — | `{ frames, spans, worst }` for the whole named slot’s positive-alpha cells on otherwise zero-alpha skeleton background; measured independently of the band, including SKIP pairs; not part of `opens` or `maxPx` |
+| `pairs[].jointContact.frames[]` | object | seconds for `time` | `{ index, time, status, reason }` for every sampled frame; `status` is `joined`, `separated` or `unavailable`; `reason` is `null` for measured contact and a named explanation for unavailable contact. Independent of raw gap/ghost, `opens` and `maxPx` |
 | `<kind>.frames[]` | hit[] | — | only the frames with a cell of that kind, in frame order |
 | `<kind>.spans[]` | array | — | `<kind>.frames` as runs of consecutive indices: `{ frames: [first, last], times: [first, last], maxPx }` — frame indices, seconds, px |
 | `<kind>.worst` | hit or `null` | — | the frame with the most cells, the earliest on a tie; `null` when none |
@@ -9361,6 +9389,18 @@ The seam remains a reading: no compiler assertion or CLI exit verdict changes.
 Clean stationary/shared-motion pair fields remain unchanged apart from exposure;
 the `reading` legend states the revised definitions. Historical measurements
 above pin their old reader and must not be treated as current measurements.
+
+The subsequent `jointContact` addition preserves **all** existing pair fields,
+raw gap/coverage/ghost/exposure numbers, `opens`, `maxPx` and their definitions.
+It appends one pair field, a legend entry and a contact clause to the printed
+line; `rigc-seam/1` is unchanged. Readers accepting additive keys can keep their
+existing policy. In particular, a consumer using raw `gapOpen` plus an owned
+ghost as its policy still uses those same numbers; adding contact does not
+change that verdict. Adopting material contact as a separate consumer policy
+requires an explicit choice. Readers comparing entire JSON objects or exact
+console lines must account for the added fields and clause. `stays closed` and
+`opens` in the existing clause continue to describe raw gap/ghost; use the
+separate contact clause for operational material separation.
 
 **Refused, nothing written:** a slot the skeleton does not have (with the slots it
 does), an entry without exactly one `:`, an empty entry or name, a slot paired with
@@ -12577,7 +12617,7 @@ pixel (`IN09`).
 | What does this bone move? | `--show art,mesh,weights:<bone> --dim` | the bone's weight over every region and mesh it moves, as a heat: a pixel whose centre lies in a triangle is painted the ramp's colour at the blend of its corners' weights — blue near 0, yellow at 0.5, red at 1 (the stops are in the legend) — and a weight of 0 is not painted, so the art shows where the bone does not reach. A region and an unweighted mesh are moved whole by their slot's bone. The weights are read off `skeleton.json`, the file both posers skin from; a bone that weights nothing paints nothing and the run says so on a line of its own |
 | Does this part's edge follow that bone? | `--show art,weights:<bone>,mesh --overlay-slot <part> --zoom slot:<part>` | the part's own triangles and the bone's weight over them alone, over the whole painting. Where slots stack — a neck under the face, the hair, a collar — every mesh crossing the box is drawn and the heat is the union of every slot the bone moves, so the part's edge has no pixel of its own until the others are left out. The legend's `meshes[]` gives the part's weight for the bone at every vertex, so "does the top row follow the head" is read as numbers as well as colour |
 | Is this rig's density where its motion is? | `--show art,density --dim` | each region and mesh filled by its **ratio** — its triangles per world unit² over the figure's — on one ramp, log-scaled and centred on 1×: grey is as dense as the figure, pink to magenta denser (4×, 16×), light to dark green sparser (1/4×, 1/16×), clamped past the end stops (the stops are in the legend). A part's area is its posed mesh's own, the sum of its triangles' areas at the pose drawn, not the image's box; a region is two triangles over its quad. Where parts overlap the pixel is the part drawn last, as in the art, so a part under others is read with `--overlay-slot <part>`. The figure's totals are always over every slot the pose shows — the filter picks what is drawn and listed, never what the figure is — and the legend's `density` gives each slot's attachment, kind, vertices, triangles, hull, area, triangles per area, ratio and the bones it is weighted to, in draw order. A measurement, not a verdict: no bar is drawn, and `A13_MESH_BUDGET` stays the one gate on counts |
-| Does a joint tear in this animation? | `render --seam <a>:<b> --animation <name>` (§8.8) | One line per pair: the frames where background opens inside the joint (gap) or the overlap band of one piece shows past its partner (ghost), with the worst frame's cell count and world box; `seam.json` carries every frame and its time, and the runs of frames. A pair whose drawings never overlap is a SKIP, said by name. A reading, not a verdict — the exit status never moves |
+| Does a pair lose material contact in this animation? | `render --seam <a>:<b> --animation <name>` (§8.8) | Raw swept-support gap and visible ghost counts, plus separate pair material contact: joined, separated or explicitly unavailable. Gap alone is not certified tearing; contact does not infer anatomical intent or rule out local notches. `seam.json` records the frames and times. A reading, not a verdict — the exit status never moves |
 | Which slot covers which in this animation? | `render --overlaps --animation <name>` (§8.9) | One `OVERLAP "<under>" under "<over>"` line per pair that moves: the frames it covers on, as runs, and the most pixels it covers and the frame of them; one line counting the layering the motion does not move. `overlaps.json` carries every frame's pairs with their pixel count and box, and `overlaps-f<NNNN>.png` draws each covered frame's contours, the covered part dashed. A reading, not a verdict — the draw-order key is the remedy |
 | Does anything fold in this animation? | `render --folds --animation <name>` (§8.3), then `inspect --show art,folds,mesh --animation <name> --at <the worst frame's time> --zoom folds` | `render --folds` prints one line per mesh with a triangle turned over against the setup pose: the frames, the worst frame's count, which triangles, their world box at that frame and their setup-pose area. The view fills those triangles at the pose drawn — every pixel whose centre a folded triangle holds — in the colour the legend's `folds` states, and the legend's `folds[]` names, per mesh, the folded triangles by index with the same box and area, and the setup pose's degenerate and inverted ones, which are never counted. A fold is usually a sliver a few units across, invisible in a picture of the whole mesh: `--zoom folds` frames the picture to the folded triangles' box. A thin sliver still needs pixels — raise `--max` when the fill is a line. A reading, not a verdict |
 | How is this part triangulated? | `--show art,mesh,hull --zoom slot:<slot>` | each mesh's triangle edges, and over them its hull — vertex 0 to 1 to … to `hull − 1` and back. Regions are not drawn: a region is not a mesh. The legend lists every vertex in world units and in pixels |

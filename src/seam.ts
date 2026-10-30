@@ -63,6 +63,13 @@
  * Shared transforms read closed. The outer-hull reach remains bounded: tears
  * outside the transported setup overlap are not certified absent by a zero.
  *
+ * `jointContact` separately observes material connectivity on that same grid.
+ * Initially overlapping, single-component drawings are joined if their posed
+ * union is edge-connected, separated otherwise. Missing bands or non-single
+ * components are unavailable. Joined does not rule out local holes or notches;
+ * separated does not infer artistic intent. Raw gap can include an external
+ * rotational crescent of a joined pair and is deliberately unchanged.
+ *
  * Pure: no clock, no randomness, no runtime. The pieces, the attachments and the
  * rest table are handed in by whichever poser drew the frames.
  */
@@ -159,6 +166,15 @@ export interface SeamKindReading {
   worst: SeamHit | null;
 }
 
+/** Connectivity of two initially overlapping single material components, at grid resolution. */
+export interface SeamContactFrame {
+  index: number;
+  time: number;
+  status: 'joined' | 'separated' | 'unavailable';
+  /** Non-null exactly when the observation is unavailable; never a measured zero. */
+  reason: string | null;
+}
+
 /** One pair's reading over one frame set. */
 export interface SeamPairReading {
   a: string;
@@ -186,6 +202,8 @@ export interface SeamPairReading {
   /** Positive-alpha cells contributed by the named slot where all OTHER slots have zero alpha. Independent of the band. */
   exposureA: SeamKindReading;
   exposureB: SeamKindReading;
+  /** Every sampled frame, including unavailable frames. Independent of raw gap/ghost and their summaries. */
+  jointContact: { frames: SeamContactFrame[] };
 }
 
 /** `seam.json`: one frame set's reading, every pair the flag names, in the flag's order. */
@@ -196,7 +214,7 @@ export interface SeamFile {
   skin?: string;
   fps: number;
   /** What the numbers mean, stated in the file so a reader does not need this module. */
-  reading: { read: string; cell: string; drawn: string; band: string; carried: string; gap: string; ghost: string; box: string; status: string; ghostA: string; ghostB: string; gapOpen: string; gapCovered: string; exposureA: string; exposureB: string };
+  reading: { read: string; cell: string; drawn: string; band: string; carried: string; gap: string; ghost: string; box: string; status: string; ghostA: string; ghostB: string; gapOpen: string; gapCovered: string; exposureA: string; exposureB: string; jointContact: string };
   pairs: SeamPairReading[];
 }
 
@@ -219,6 +237,8 @@ export interface SeamPlant {
   hiddenGhost?: boolean;
   /** Bridge unrelated overlap cells with the old global hull. */
   globalHull?: boolean;
+  /** Force a measured contact to one answer, ignoring the rendered material. */
+  contact?: 'joined' | 'separated';
   /** Wrong composite readings: half opacity, only the pair, or every gap forced to one kind. */
   gapCoverage?: 'half' | 'pair' | 'open' | 'covered';
   /** Report a pair with no band as read, rather than as a SKIP. */
@@ -473,8 +493,44 @@ function markHull(hull: ReadonlyArray<[number, number]>, grid: Grid, cells: Uint
   }
 }
 
+/** Count edge-connected components, stopping after the second: only exactly one is supported. */
+function components(cells: Uint8Array, width: number): number {
+  const seen = new Uint8Array(cells.length);
+  const queue = new Int32Array(cells.length);
+  let count = 0;
+  for (let k = 0; k < cells.length; k++) {
+    if (!cells[k] || seen[k]) continue;
+    if (++count === 2) return count;
+    let head = 0, tail = 1;
+    queue[0] = k; seen[k] = 1;
+    while (head < tail) {
+      const i = queue[head++];
+      const visit = (j: number): void => {
+        if (j >= 0 && j < cells.length && cells[j] && !seen[j]) { seen[j] = 1; queue[tail++] = j; }
+      };
+      if (i % width > 0) visit(i - 1);
+      if (i % width < width - 1) visit(i + 1);
+      visit(i - width); visit(i + width);
+    }
+  }
+  return count;
+}
+
+type Contact = Pick<SeamContactFrame, 'status' | 'reason'>;
+const unavailableContact = (reason: string): Contact => ({ status: 'unavailable', reason });
+
+/** Four neighbours mean a shared cell edge; diagonals alone do not connect material. No distance parameter. */
+function contactOf(restA: Uint8Array, restB: Uint8Array, drawnA: Uint8Array, drawnB: Uint8Array, width: number, plant: SeamPlant): Contact {
+  for (const [name, cells] of [['a setup', restA], ['b setup', restB], ['a frame', drawnA], ['b frame', drawnB]] as const) {
+    const n = components(cells, width);
+    if (n !== 1) return unavailableContact(`${name}: ${n === 0 ? 'no' : 'multiple'} edge-connected half-opacity material components; exactly one is required`);
+  }
+  const union = drawnA.map((v, k) => v || drawnB[k]);
+  return { status: plant.contact ?? (components(union, width) === 1 ? 'joined' : 'separated'), reason: null };
+}
+
 /** One frame's counts, or `null` when the two drawings share no cell at the setup pose. See the module comment. */
-function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, visibility: readonly Uint8Array[]): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells } | null {
+function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, visibility: readonly Uint8Array[]): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells; contact: Contact } | null {
   const { width, height } = grid.viewport;
   const restA = restPiece(A);
   const restB = restPiece(B);
@@ -520,6 +576,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   const hull = hullOf(carried);
   const drawnA = drawnCells(A.piece, A.page, grid.viewport);
   const drawnB = drawnCells(B.piece, B.page, grid.viewport);
+  const contact = contactOf(bandA, bandB, drawnA, drawnB, width, plant);
   const [visibleA, visibleB] = visibility;
   const posedIdsA = triangleIds(A.triangles, A.piece.world, grid);
   const posedIdsB = triangleIds(B.triangles, B.piece.world, grid);
@@ -536,7 +593,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   const gapCovered: Cells = { px: 0, box: null };
   let alphaCells: Uint8Array | null = null;
   const take = (into: Cells, qx: number, qy: number): void => takeCell(into, qx, qy, cell);
-  if (plant.never) return { gap, ghost, ghostA, ghostB, gapOpen, gapCovered };
+  if (plant.never) return { gap, ghost, ghostA, ghostB, gapOpen, gapCovered, contact };
   const inBand = (p: [number, number] | null): boolean => p !== null && p[0] >= bx0 - cell / 2 && p[0] <= bx1 + cell / 2 && p[1] >= by0 - cell / 2 && p[1] <= by1 + cell / 2;
   for (let py = 0; py < height; py++) {
     for (let px = 0; px < width; px++) {
@@ -570,7 +627,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
       }
     }
   }
-  return { gap, ghost, ghostA, ghostB, gapOpen, gapCovered };
+  return { gap, ghost, ghostA, ghostB, gapOpen, gapCovered, contact };
 }
 
 const restKey = (slot: string, attachment: string): string => `${slot}\u0000${attachment}`;
@@ -634,9 +691,12 @@ export function seamsOf(
     const openGaps: SeamHit[] = [];
     const coveredGaps: SeamHit[] = [];
     const exposuresA: SeamHit[] = [], exposuresB: SeamHit[] = [];
+    const contacts: SeamContactFrame[] = [];
     for (const frame of frames) {
       const A = sideOf(frame, a);
       const B = sideOf(frame, b);
+      const contact = (reading: Contact): void => { contacts.push({ index: frame.index, time: frame.time, ...reading }); };
+      if (A === null || B === null) contact(unavailableContact('both named slots must draw on this frame'));
       const sides = [A, B].filter((side): side is Side => side !== null);
       if (sides.length === 0) continue;
       const sizes = sides.map((side) => texelSize(side.piece, side.rest, side.page));
@@ -652,7 +712,9 @@ export function seamsOf(
       drawn++;
       const cell = exposureCell;
       const read = readFrame(A, B, cell, plant, frame, pages, exposureGrid, exposure.map((m) => m.visible));
-      if (read === null) continue;
+      if (read === null) { contact(unavailableContact('no shared half-opacity cell at the setup pose; no band to identify a joint')); continue; }
+      const fragmented = [a, b].some(slot => frame.pieces.filter(p => p.slot === slot).length !== 1);
+      contact(fragmented ? unavailableContact('each named slot must draw exactly one fragment for material contact') : read.contact);
       banded++;
       for (const [cells, into] of [[read.gap, gaps], [read.ghost, ghosts], [read.ghostA, ghostsA], [read.ghostB, ghostsB], [read.gapOpen, openGaps], [read.gapCovered, coveredGaps]] as const) {
         if (cells.px > 0 && cells.box !== null) into.push({ index: frame.index, time: frame.time, px: cells.px, cell, area: cells.px * cell * cell, box: cells.box });
@@ -663,7 +725,7 @@ export function seamsOf(
     const opens = [...new Set([...gaps, ...ghosts].map((f) => f.index))].sort((x, y) => x - y);
     const maxPx = Math.max(0, ...gaps.map((f) => f.px), ...ghosts.map((f) => f.px));
     const status = banded === 0 && !plant.skipAsRead ? 'skip' : 'read';
-    return { a, b, drawn, banded, status, opens, maxPx, gap, ghost, ghostA: kindOf(ghostsA), ghostB: kindOf(ghostsB), gapOpen: kindOf(openGaps), gapCovered: kindOf(coveredGaps), exposureA: kindOf(exposuresA), exposureB: kindOf(exposuresB) };
+    return { a, b, drawn, banded, status, opens, maxPx, gap, ghost, ghostA: kindOf(ghostsA), ghostB: kindOf(ghostsB), gapOpen: kindOf(openGaps), gapCovered: kindOf(coveredGaps), exposureA: kindOf(exposuresA), exposureB: kindOf(exposuresB), jointContact: { frames: contacts } };
   });
 }
 
@@ -685,6 +747,7 @@ export const SEAM_READING: SeamFile['reading'] = {
   exposureA: 'positive-rendered-alpha cells from named slot a where removing every fragment of that slot leaves alpha 0 from all other skeleton slots, regardless of draw order; measured over the whole drawing even without a seam band or partner; same hit, span and worst units as gap',
   exposureB: 'the same background exposure for named slot b; swapping the pair exchanges exposureA and exposureB; exposure does not enter opens or maxPx and is not a change-from-setup measurement',
   gapCovered: 'the gap cells whose centre has positive rendered alpha from any skeleton drawing, including the pair; alpha 1..127 covers too — this is not the pair\'s half-opacity test, and no presentation background enters',
+  jointContact: 'every sampled frame: joined or separated only when a setup band exists and each named drawing has exactly one edge-connected half-opacity material component at setup and frame; joined means their frame union is edge-connected (overlap or shared cell edge), separated means it is not; diagonal contact alone is separated. Otherwise unavailable with a reason, including multiple fragments of a named slot. Uses the existing origin-aligned texel grid, alpha and attachment maps, independent of other slots and draw order. Raw gap measures swept support, not certified tearing. Contact is pair material connectivity, not anatomical joint intent; joined does not rule out local holes/notches. No statement about sub-cell contact; raw gap/ghost, opens/maxPx and exit status are unchanged',
 };
 
 /** The file for one frame set. */
@@ -730,5 +793,12 @@ function seamSummary(animation: string | null, fps: number, pair: SeamPairReadin
 
 /** The seam summary plus whole-drawing background exposures, including on SKIP pairs. */
 export function seamLine(animation: string | null, fps: number, pair: SeamPairReading): string {
-  return `${seamSummary(animation, fps, pair)}; ${kindText(`exposure ${JSON.stringify(pair.a)}`, pair.exposureA)}; ${kindText(`exposure ${JSON.stringify(pair.b)}`, pair.exposureB)}`;
+  const contacts = pair.jointContact.frames;
+  const contactText = contacts.length === 0 ? 'unavailable: no sampled frames' : null;
+  const summary = (status: SeamContactFrame['status']): string => {
+    const frames = contacts.filter(f => f.status === status);
+    return `${status} on ${frames.length} frame(s) [${indexRuns(frames.map(f => f.index))}]`;
+  };
+  const reasons = [...new Set(contacts.flatMap(f => f.reason === null ? [] : [f.reason]))];
+  return `${seamSummary(animation, fps, pair)}; ${kindText(`exposure ${JSON.stringify(pair.a)}`, pair.exposureA)}; ${kindText(`exposure ${JSON.stringify(pair.b)}`, pair.exposureB)}; joint contact: ${contactText ?? `${summary('joined')}, ${summary('separated')}, ${summary('unavailable')}`}${reasons.length ? ` (${reasons.join('; ')})` : ''}`;
 }

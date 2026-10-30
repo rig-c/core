@@ -55,7 +55,7 @@ export function seamCellControls(): SeamCellControl[] {
   const clean = read([a, rect('b', 2)]), reverse = read([a, b], undefined, undefined, true);
   const empty = { frames: [], spans: [], worst: null };
   const expected = { a: 'a', b: 'b', drawn: 1, banded: 1, status: 'read', opens: [], maxPx: 0, gap: empty, ghost: empty, ghostA: empty, ghostB: empty, gapOpen: empty, gapCovered: empty };
-  const old = Object.fromEntries(Object.entries(clean).filter(([k]) => !k.startsWith('exposure')));
+  const old = Object.fromEntries(Object.entries(clean).filter(([k]) => !k.startsWith('exposure') && k !== 'jointContact'));
   add('SE35_CLEAN_OLD_FIELDS_AND_NAMED_REVERSAL', { cleanMax: [clean.maxPx, 0], reversedA: [px(reverse, 'exposureA'), 16], reversedGhostA: [px(reverse, 'ghostA'), 8] }, JSON.stringify(old) !== JSON.stringify(expected) ? ['clean old fields changed'] : []);
   const holePages = new Map([['a', plate(4)], ['b', plate(4)], ['cover', plate(2, 4, (x) => x === 0)], ['solid', plate(2)]]);
   const windowed: Piece = { ...cover, uvWindow: { u0: 0, v0: 0, u1: 0.5, v1: 1 } };

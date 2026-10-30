@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.82.1](https://github.com/rig-c/core/compare/v2.82.0...v2.82.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **docs:** cut the README to deciding and a first result, under a CI word cap ([#1651](https://github.com/rig-c/core/issues/1651)) ([9678c3b](https://github.com/rig-c/core/commit/9678c3ba2b57c6135256a17771bd64019f64b257)), closes [#1648](https://github.com/rig-c/core/issues/1648)
+* **docs:** name depth-driven rigging once and say where it lives ([#1647](https://github.com/rig-c/core/issues/1647)) ([2faa63b](https://github.com/rig-c/core/commit/2faa63b81bdeba200314bac5315831bc42a98b64)), closes [#1646](https://github.com/rig-c/core/issues/1646)
+
 ## [2.82.0](https://github.com/rig-c/core/compare/v2.81.1...v2.82.0) (2026-10-29)
 
 

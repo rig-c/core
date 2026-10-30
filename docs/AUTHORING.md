@@ -12026,7 +12026,7 @@ ambiguous one ends with a sentence saying which reading its figures support:
 
 - **below the floor** — a 40x28 part of one flat colour, cut from a plain block it fits anywhere inside:
 
-  > part is 40x28 px (span 40 frame px, opaque 1) with texture 0, detail 0; 17 candidate(s), best 0.0000, next 0.0000, spread 0.0000 — below the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up): pose placed 7% of the measured parts this plain, so this part is too plain for pose to tell its placements apart; that says nothing about whether the cut is right
+  > part is 40x28 px (span 40 frame px, opaque 1) with texture 0, detail 0; 34 candidate(s), best 0.0000, next 0.0000, spread 0.0000 — below the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up): pose placed 7% of the measured parts this plain, so this part is too plain for pose to tell its placements apart; that says nothing about whether the cut is right
 
 - **above the floor** — a 200x150 black-and-white checker the frame does not hold:
 
@@ -12034,7 +12034,7 @@ ambiguous one ends with a sentence saying which reading its figures support:
 
 - **above the floor, one size in two places** — two copies of an 18x34 checker 0.6 of its span and 6° apart, the shape a left/right pair cut from one drawing reads as:
 
-  > part is 18x34 px (span 36.2 frame px, opaque 1) with texture 0.0221, detail 0.752; 14 candidate(s), best 0.0160, next 0.0162, spread 0.0002 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; every placement in the margin is at the best's scale (within 0.30%, bar 2%) and in another place (the nearest 0.62 span(s) away, bar 0.45), which is the part — or a near-copy, such as a left/right pair cut from one drawing — drawn more than once: read the placements as an unordered set and order it across frames (MOTION.md §2.2 🔀); a --rotation window that excludes one place chooses the answer rather than measuring it
+  > part is 18x34 px (span 36.2 frame px, opaque 1) with texture 0.0221, detail 0.752; 40 candidate(s), best 0.0160, next 0.0162, spread 0.0002 — above the measured floor (AUTHORING §11.5: detail 0.5, measured from 24 px up), so size and texture do not explain this; every placement in the margin is at the best's scale (within 0.30%, bar 2%) and in another place (the nearest 0.62 span(s) away, bar 0.45), which is the part — or a near-copy, such as a left/right pair cut from one drawing — drawn more than once: read the placements as an unordered set and order it across frames (MOTION.md §2.2 🔀); a --rotation window that excludes one place chooses the answer rather than measuring it
 
 Read the figures, not only the verdict. *Below* says plainness alone explains the
 failure: the cut may be right, and `pose` cannot tell. *Above* says it does not,
@@ -12123,6 +12123,22 @@ holding it did not — at a quarter-span stride a thin gun or a gapped fist fall
 two anchors — and only 3 had it ranked under the old cutoff of three. The finer grid
 took the grid from 185 to 227 trials found and those misses from 65 to 14, for about
 10–14% more CPU over the grid (615 s of user time before it, 678 s and 704 s on two runs after).
+
+For repeated parts, an independent coverage lane also keeps up to five **new**
+places per rung. It uses the same fields and stride, but bounds suppression by
+half the material box's **short** side at that rung's scale: a long thin part's
+half-length cannot erase a different nearby position. Positions already covered
+by the original lane do not consume that extra budget. The coverage lane keeps
+its coarse pool through the first finer, rotation-regridded level before comparing
+scales together; only then does it narrow to the usual refinement budget. Both
+completed pools use the same full-resolution objective, dedupe and ambiguity
+margin. More coverage can expose an ambiguity; it does not prove that every
+visible copy, or every subpixel placement, will be recovered. Public repeated-part
+controls hold the final reported position, rotation and scale, not merely a coarse
+seed. The programmatic `coarsePolicy: 'legacy-only'` seam reproduces the original
+search for those negative controls; the CLI uses short-support coverage. An unknown
+runtime `coarsePolicy` is refused by name with the supplied value and both accepted
+policies; omit it to use the current search.
 
 The refinement then polishes each place down the pyramid, and at full resolution a
 polish that has stopped tries its scale **up by half a coarse rung** (2^(1/6)), re-fits

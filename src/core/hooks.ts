@@ -104,6 +104,8 @@ export type DialOverride = { bone: string; field: DialBoneField; value: number }
 
 /** A dial pose, and its two readings (the header's *A dial*). */
 export interface CoreDialPose extends CoreSurveyPose {
+  /** Complete posed slot order, including slots without a shown attachment. */
+  drawOrder: readonly string[];
   /** The slider's property read off its bone, or `null` on a bone-less slider. */
   read: number | null;
   applied: number;
@@ -167,8 +169,8 @@ export function poseDial(doc: CompiledDocument, override: DialOverride, slider: 
   const view = overridden(doc, override);
   const record = sliderRecordOf(view, slider);
   const posed = poseSetup(view, RAW_PLANT, freshStepContext());
-  const missing = posed.absent.filter(([b]) => b === 'setup.bones' || b === 'setup.slots');
-  if (missing.length > 0 || posed.world === null || posed.setup.slots === null) throw new CoreInputError(`the dial pose leaves ${missing.map(([b, w]) => `${b} out (${w})`).join('; ') || 'the bones out'}`);
+  const missing = posed.absent.filter(([b]) => b === 'setup.bones' || b === 'setup.slots' || b === 'setup.drawOrder');
+  if (missing.length > 0 || posed.world === null || posed.setup.slots === null || posed.setup.drawOrder === null) throw new CoreInputError(`the dial pose leaves ${missing.map(([b, w]) => `${b} out (${w})`).join('; ') || 'the bones out'}`);
   if (posed.shown === null) throw new CoreInputError('the dial pose leaves the shown records out (a timeline keys a placeholder several skins fill)');
   // The solver's last state, for the reading: the same pass `poseSetup` ran, with its `settled` sink.
   const active = activeBones(view);
@@ -187,7 +189,7 @@ export function poseDial(doc: CompiledDocument, override: DialOverride, slider: 
   }
   const read = record.bone === null ? null : sourceValue(settled, { source: record.bone, localSource: record.local, offsets: ZERO_OFFSETS }, record.property);
   const ran = applied.find((a) => a.name === slider);
-  return { doc: view, world: posed.world, slots: posed.setup.slots, shown: posed.shown, read, applied: ran === undefined ? record.time : ran.time };
+  return { doc: view, world: posed.world, slots: posed.setup.slots, shown: posed.shown, drawOrder: posed.setup.drawOrder, read, applied: ran === undefined ? record.time : ran.time };
 }
 
 /** `skin/slot/placeholder` — the identity a deform timeline keys a record under (`timelineIdentity`). */

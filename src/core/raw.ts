@@ -1,3 +1,4 @@
+import { poseDial, type DialOverride } from './hooks.ts';
 /**
  * The core's raw entry (issue #966, step 3b of issue #380): one pose, or one
  * animation walked at the caller's own steps, returned as the doubles the
@@ -474,6 +475,18 @@ function rawDrawn(doc: CompiledDocument, shown: readonly ShownGeometry[], world:
  */
 export function poseRawSetup(doc: CompiledDocument, plant: CorePlant = {}): RawPose {
   return setupPoseIn(doc, plant, RAW_MODE);
+}
+
+/** A value-driven reset pose, using the same dial override as the independent deform survey. */
+export function poseRawDial(doc: CompiledDocument, override: DialOverride, slider: string, plant: CorePlant = {}): { pose: RawPose; read: number | null; applied: number } {
+  const result = poseDial(doc, override, slider);
+  const { world, shown } = result;
+  const drawOrder = [...result.drawOrder];
+  const drawn = rawDrawn(result.doc, shown, world, drawOrder, plant);
+  return { read: result.read, applied: result.applied, pose: {
+    trackTime: 0, animationTime: 0, bones: rawBones(result.doc, world), slots: [...result.slots], drawOrder,
+    ...drawn, events: [], shown: [...shown],
+  } };
 }
 
 /** A table key to read, with an optional skin-view override; omitted skin keeps the supplied view. */

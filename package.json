@@ -22,15 +22,18 @@
     "./runtime": "./src/runtime/index.ts",
     "./cli": "./cli.ts",
     "./package.json": "./package.json",
-    "./*.ts": "./*.ts",
-    "./*.mjs": "./*.mjs",
-    "./*.cjs": "./*.cjs",
-    "./*.json": "./*.json",
-    "./*.md": "./*.md",
     "./LICENSE": "./LICENSE",
     "./bin/rigc": "./bin/rigc.cjs",
     "./tools/png_probe": "./tools/png_probe.mjs",
-    "./*": "./*.ts"
+    "./deformgen": "./src/deformgen.ts",
+    "./environment": "./src/environment.ts",
+    "./motion": "./src/motion.ts",
+    "./passthrough": "./src/passthrough.ts",
+    "./stop": "./src/stop.ts",
+    "./meshrasters": "./src/meshrasters.ts",
+    "./seam": "./src/seam.ts",
+    "./folds": "./src/folds.ts",
+    "./model": "./src/model.ts"
   },
   "engines": {
     "bun": ">=1.4.0"

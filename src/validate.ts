@@ -2009,7 +2009,7 @@ function once<T>(supply: () => T): () => T {
 }
 
 export function validate(input: ValidateInput): ValidateReport {
-  // A former name reads as its profile (issue #1277): the policy switch below and the report both use the resolved one.
+  // Refuse unknown and removed profiles before choosing policy or writing a report (issue #1668).
   const profile = resolveProfile(input.profile, 'validate');
   /** True when this profile's rulebook includes the policy layer. */
   const policy = profile === 'rig-play';

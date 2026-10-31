@@ -41,6 +41,7 @@ export type {
   BoneSnapshot,
   AttachmentPose,
   AttachmentRest,
+  GeometryFile,
   Piece,
   PieceCommon,
   PieceTexture,

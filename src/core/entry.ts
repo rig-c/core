@@ -47,5 +47,6 @@ export type { DrawnRegion, UvPage, UvRegion, UvSource } from './uvs.ts';
 export { clipThrough, clipShapeOf, convexWhy, REGION_UVS, REGION_TRIANGLES } from './clipping.ts';
 export type { ClipShape, ClipResult } from './clipping.ts';
 export { eventsFired } from './events.ts';
-export { bezierPolyline, BEZIER_PIECES } from './animation.ts';
+export { bezierPolyline, BEZIER_PIECES, IRR_OFFSET } from './animation.ts';
 export type { ModelPage, ModelPageRegion } from '../model.ts';
+export { RUNTIME_PI } from './world.ts';

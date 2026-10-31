@@ -26,11 +26,10 @@ import {
   CLI_DEFAULT_PROFILE,
   type GateHere,
   type PackPageFigures,
-  profileAliasLine,
   VALIDATE_PROFILES,
 } from '../assertions/report.ts';
 import type { VerdictLists } from '../assertions/harness.ts';
-import { PROFILE_ALIASES, type AssertionProfile } from '../assertions/kinds.ts';
+import type { AssertionProfile } from '../assertions/kinds.ts';
 import { MAX_CANDIDATES, MIN_CANDIDATES } from '../ballot.ts';
 import { BONEDIST_SPEC, IDENTITY_CORRESPONDENCE } from '../correspondence.ts';
 import { ANCHOR_MAX_RESIDUAL, ANCHOR_MAX_UNEXPLAINED, DEFAULT_HINGE_MAX, DEFAULT_HINGE_MIN, DEFAULT_MIN_LEVER_PX, DEFAULT_MIN_VISIBLE, DEFAULT_PASSES } from '../chainfit.ts';
@@ -2245,13 +2244,6 @@ export function usageText(docs: readonly CommandDoc[], checkout: string, rules: 
 export function readProfile(flags: Record<string, string>): AssertionProfile {
   const raw = flags.profile;
   if (raw === undefined) return CLI_DEFAULT_PROFILE;
-  // A former name resolves here and nowhere else (issue #1277): past this line
-  // the alias does not exist, so it cannot select a rule set of its own.
-  const aliased = Object.hasOwn(PROFILE_ALIASES, raw) ? PROFILE_ALIASES[raw] : undefined;
-  if (aliased !== undefined) {
-    console.error(profileAliasLine(raw, aliased));
-    return aliased;
-  }
   const found = VALIDATE_PROFILES.find((p) => p === raw);
   if (!found) throw new UsageError(`--profile ${JSON.stringify(raw)}; known profiles: ${VALIDATE_PROFILES.join(', ')}`);
   return found;

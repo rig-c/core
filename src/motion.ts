@@ -819,3 +819,6 @@ function parseMotionSpecInto(raw: unknown, where: string, visits: readonly Shape
 
   return raw as unknown as MotionSpec;
 }
+
+/** Named type used by consumer motion readers (issue #1668). */
+export type { MotionSpec } from './types.ts';

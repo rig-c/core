@@ -673,7 +673,7 @@ import {
 import { pngProblem, readPngHeader, readPngInfo } from './src/png.ts';
 import type { CompiledImage, CompileResult, SpineAnimation, SpineBone, SpineRegionAttachment, SpineSkeletonJson, SpineSlot } from './src/types.ts';
 import { skeletonDataFromText, stretchSingularValues, surveyDeformKeys, unreachableWhy } from './src/deformmeasure.ts';
-import { BUILD_REPORT_SPEC, profileAliasLine } from './src/assertions/report.ts';
+import { BUILD_REPORT_SPEC } from './src/assertions/report.ts';
 import {
   ASSERTION_NAMES,
   assertionCountForProfile,
@@ -710,7 +710,7 @@ import {
 import { MODEL_SIDE_CODES, MODEL_SUPPLY, MOVED_ASSERTIONS, validateModel, type ModelReport, type ModelSupply } from './src/assertions/model/index.ts';
 import { SKIP_NO_STAGE_BOX } from './src/assertions/facts/stage_box.ts';
 import { A00_MODEL_READ, A00_MODEL_REGIONS_ON_PAGES, MODEL_PARSE_KIND } from './src/assertions/model/parse.ts';
-import { ASSERTION_KIND, kindRunsUnder, PROFILE_ALIASES, type AssertionKind, type AssertionProfile } from './src/assertions/kinds.ts';
+import { ASSERTION_KIND, kindRunsUnder, type AssertionKind, type AssertionProfile } from './src/assertions/kinds.ts';
 import { fileOrderedEntries, modelSkinEntries } from './src/assertions/model/skin_entries.ts';
 import { modelMeshFacts } from './src/assertions/model/mesh_attachments.ts';
 import { modelPolygonFacts } from './src/assertions/model/vertex_polygons.ts';
@@ -68004,163 +68004,62 @@ function runCliSuite(): number {
         'every rule it always was, not a weakened copy',
     );
 
-    // --- issues #1277 and #1586: the profile is `rig-play`, and its former name is an alias until the next major ---
-    //
-    // ⭐ The deprecation line is stated here as text, not read from `profileAliasLine`: a
-    // control that built its expectation with the printer would go on passing whatever
-    // the printer said. The printer and `docs/AUTHORING.md`'s `--profile` row are compared
-    // to it as well, so the three places cannot drift (#1586).
-    const DEPRECATION = 'rigc: --profile spine-html is deprecated and reads as --profile rig-play, the same rules; it is accepted until the next major release — pass --profile rig-play';
-    const [former, target] = Object.entries(PROFILE_ALIASES)[0] ?? ['(no alias)', 'spine'];
-    const aliased = runCli(args(['--profile', former]));
-    const aliasErr = aliased.stderr.split('\n');
-    const authoringProfileRow =
-      readFileSync(join(import.meta.dir, 'docs', 'AUTHORING.md'), 'utf8')
-        .split('\n')
-        .find((line) => line.startsWith('| `--profile` |')) ?? '';
-    const releasingQueued =
-      readFileSync(join(import.meta.dir, 'RELEASING.md'), 'utf8').split(/^## Queued for 3\.0\.0\b/m)[1] ?? '';
-    const checkNoticeCopies = (printerLine: string, stderrLine: string, guideRow: string, queuedSection: string): string[] => {
-      const faults: string[] = [];
-      if (printerLine !== DEPRECATION) faults.push(`profileAliasLine !== DEPRECATION (${JSON.stringify(printerLine)})`);
-      if (stderrLine !== DEPRECATION) faults.push(`stderr[0] !== DEPRECATION (${JSON.stringify(stderrLine)})`);
-      if (!guideRow.includes(`\`${DEPRECATION}\``)) faults.push('AUTHORING.md `--profile` row does not quote DEPRECATION verbatim');
-      if (!guideRow.includes('until the next major release') || guideRow.includes('next minor release')) {
-        faults.push('AUTHORING.md `--profile` row does not state "until the next major release"');
-      }
-      if (!queuedSection.includes('not on a schedule')) faults.push('RELEASING.md Queued for 3.0.0 does not state "not on a schedule"');
-      if (!queuedSection.includes('./*.ts') || !queuedSection.includes('#1212')) {
-        faults.push('RELEASING.md Queued for 3.0.0 does not list the `./*.ts` courtesy keys (#1212)');
-      }
-      if (!queuedSection.includes('--profile spine-html') || !queuedSection.includes('#1277') || !queuedSection.includes('#1405') || !queuedSection.includes('#1586')) {
-        faults.push('RELEASING.md Queued for 3.0.0 does not list `--profile spine-html` (#1277 / #1405 / #1586)');
-      }
-      return faults;
-    };
-    const noticeFaults = checkNoticeCopies(profileAliasLine(former, target), aliasErr[0] ?? '', authoringProfileRow, releasingQueued);
-    const plantedAuthoringDrift = checkNoticeCopies(
-      profileAliasLine(former, target),
-      aliasErr[0] ?? '',
-      authoringProfileRow.replaceAll('until the next major release', 'until the next minor release'),
-      releasingQueued,
-    );
+    // Issue #1668: 3.0 removes the former profile, without changing either rulebook.
+    const former = 'spine-html';
+    const removed = runCli(args(['--profile', former]));
     say(
-      'CLI110_THE_FORMER_PROFILE_NAME_READS_AS_RIG_PLAY_AND_SAYS_SO_ON_ITS_FIRST_STDERR_LINE',
-      Object.keys(PROFILE_ALIASES).length === 1 &&
-        target === 'rig-play' &&
-        noticeFaults.length === 0 &&
-        plantedAuthoringDrift.length === 2 &&
-        aliased.status === opted.status &&
-        aliased.stdout === opted.stdout &&
-        aliasErr.slice(1).join('\n') === opted.stderr &&
-        !opted.stderr.includes('deprecated'),
-      `--profile ${former}: exit ${String(aliased.status)} (rig-play: ${String(opted.status)}), first stderr line ` +
-        `${JSON.stringify(aliasErr[0])}, notice copies (report.ts / selftest.ts / AUTHORING.md + RELEASING.md Queued for 3.0.0): ` +
-        `${noticeFaults.length === 0 ? 'all match' : noticeFaults.join('; ')} (planted AUTHORING drift: ${plantedAuthoringDrift.length} fault(s)), ` +
-        `stdout ${aliased.stdout === opted.stdout ? 'identical to' : 'DIFFERENT from'} --profile rig-play's, ` +
-        `the rest of stderr ${aliasErr.slice(1).join('\n') === opted.stderr ? 'identical' : 'DIFFERENT'}; ` +
-        `--profile rig-play prints ${opted.stderr.includes('deprecated') ? 'A' : 'no'} deprecation line`,
-      "a consumer's scripts carry the old flag, so it has to keep selecting the same rules until the next major release and say, " +
-        'on the stream a report does not use, which name to pass instead (#1277, #1586)',
+      'CLI110_THE_REMOVED_PROFILE_IS_REFUSED_BY_NAME',
+      removed.status === 2 && removed.stdout === '' &&
+        removed.stderr.includes('--profile "spine-html"; known profiles: spine, rig-play') &&
+        !removed.stderr.includes('deprecated'),
+      `exit ${String(removed.status)}, stderr ${JSON.stringify(removed.stderr.split('\n')[0])}`,
+      'the major removes the alias; silently falling back would run a rulebook the caller did not ask for (#1668)',
     );
-
     const typo = runCli(args(['--profile', 'spine-htlm']));
     say(
       'CLI111_AN_UNKNOWN_PROFILE_IS_REFUSED_BY_NAME_AND_LISTS_THE_PROFILES',
-      typo.status === 2 &&
-        typo.stderr.includes('--profile "spine-htlm"; known profiles: spine, rig-play') &&
-        !typo.stderr.includes('deprecated') &&
-        typo.stdout === '',
+      typo.status === 2 && typo.stdout === '' &&
+        typo.stderr.includes('--profile "spine-htlm"; known profiles: spine, rig-play'),
       `exit ${String(typo.status)}, stderr ${JSON.stringify(typo.stderr.split('\n')[0])}`,
-      'an alias table is one more place a near-miss could be read as a name; a typo of the old name is still a typo',
+      'a near miss must remain a usage error',
     );
-
-    // The rule set, derived from the registry twice: by the expression the profile
-    // was keyed on before the rename (`kind === 'validity' || profile === <former>`,
-    // evaluated with the former name) and by `kindRunsUnder` over the profile the
-    // alias resolves to. 🌱 The plant drops one rule from the new set, and the
-    // comparison has to name exactly that rule — a check that cannot see one rule
-    // leave is not checking membership.
-    const before = ASSERTION_NAMES.filter((name) => {
-      const kind: AssertionKind = ASSERTION_KIND[name];
-      return kind === 'validity' || former === 'spine-html';
-    });
+    // Independent rulebook: the old opt-in ran every validity, renderer and archetype rule.
+    // Drop one renderer rule as a negative control for exact membership.
+    const before = ASSERTION_NAMES.filter((name) => ['validity', 'renderer', 'archetype'].includes(ASSERTION_KIND[name]));
+    const direct = ASSERTION_NAMES.filter((name) => kindRunsUnder(ASSERTION_KIND[name], 'rig-play'));
     const membershipDiff = (a: readonly string[], b: readonly string[]): string[] => [
       ...a.filter((name) => !b.includes(name)).map((name) => `only before: ${name}`),
       ...b.filter((name) => !a.includes(name)).map((name) => `only after: ${name}`),
     ];
-    const resolvedProfile: AssertionProfile = PROFILE_ALIASES[former] ?? 'spine';
-    const resolved = ASSERTION_NAMES.filter((name) => kindRunsUnder(ASSERTION_KIND[name], resolvedProfile));
-    const direct = ASSERTION_NAMES.filter((name) => kindRunsUnder(ASSERTION_KIND[name], 'rig-play'));
     const dropped = ASSERTION_NAMES.filter((name) => ASSERTION_KIND[name] === 'renderer').slice(-1)[0] ?? '(no renderer rule)';
-    const planted = membershipDiff(before, resolved.filter((name) => name !== dropped));
-    const real = membershipDiff(before, resolved);
+    const planted = membershipDiff(before, direct.filter((name) => name !== dropped));
     say(
       'CLI112_RIG_PLAY_RUNS_EXACTLY_THE_RULES_THE_FORMER_PROFILE_RAN',
-      real.length === 0 &&
-        membershipDiff(resolved, direct).length === 0 &&
-        before.length === ASSERTION_NAMES.length &&
-        planted.length === 1 &&
-        planted[0] === `only before: ${dropped}`,
-      `before ${before.length} rule(s), rig-play ${direct.length}, through the alias ${resolved.length}, differing ` +
-        `${real.length ? real.join('; ') : 'none'}; planted (${dropped} dropped from rig-play): ${planted.join('; ') || 'NOT SEEN'}`,
-      'the rename moves no membership — retiring a rule from the profile is a card of its own (#1404), ' +
-        'and a rename that quietly dropped one would read as green',
+      before.length === ASSERTION_NAMES.length && membershipDiff(before, direct).length === 0 &&
+        planted.length === 1 && planted[0] === `only before: ${dropped}`,
+      `before ${before.length} rules, rig-play ${direct.length}; planted: ${planted.join('; ')}`,
+      'removing a spelling does not retire an assertion or weaken the replacement profile',
     );
-
-    // Past the CLI a former name still reads as its profile: `validate.ts` is
-    // reachable through the `./*` courtesy keys, a JS caller passing the former
-    // name got the opt-in rules on the release before this one, and a minor does
-    // not throw on it while the alias exists. Silently — the CLI is what prints
-    // the deprecation. An unknown name is still refused by name. The build is a
-    // green default build of the same probe rig, into a directory of its own, and
-    // both suppliers judge it under each name.
     const resolvedOut = join(dirs.dir, 'cli113-out');
     const greenBuild = runCli(['build', '--rig', dirs.rigPath, '--motion', motionPath, '--images', dirs.dir, '--out', resolvedOut]);
-    const readOut = (file: string): string => (existsSync(join(resolvedOut, file)) ? readFileSync(join(resolvedOut, file), 'utf8') : '');
-    const reportsUnder = (profile: string): string => {
-      try {
-        const spineSide = validateOverSpine({
-          skeletonText: readOut('skeleton.json'),
-          atlasText: readOut('skeleton.atlas'),
-          atlasDir: resolvedOut,
-          modelText: readOut('skeleton.model.json'),
-          profile: profile as AssertionProfile,
-        });
-        const modelSide = validateModel({ modelText: readOut('skeleton.model.json'), atlasDir: resolvedOut, profile: profile as AssertionProfile });
-        return JSON.stringify([spineSide, modelSide]);
-      } catch (err) {
-        return `REFUSED ${(err as Error).message}`;
+    const readOut = (file: string): string => existsSync(join(resolvedOut, file)) ? readFileSync(join(resolvedOut, file), 'utf8') : '';
+    const faults: string[] = [];
+    for (const profile of [former, 'nonesuch']) {
+      for (const supplier of ['validate', 'the model side']) {
+        let refusal = '';
+        try {
+          if (supplier === 'validate') validateOverSpine({ skeletonText: readOut('skeleton.json'), atlasText: readOut('skeleton.atlas'), atlasDir: resolvedOut, modelText: readOut('skeleton.model.json'), profile: profile as AssertionProfile });
+          else validateModel({ modelText: readOut('skeleton.model.json'), atlasDir: resolvedOut, profile: profile as AssertionProfile });
+        } catch (err) { refusal = (err as Error).message; }
+        const expected = `${supplier}: profile ${JSON.stringify(profile)} is not a profile; the profiles are "spine" and "rig-play"`;
+        if (refusal !== expected) faults.push(`${supplier} under ${profile}: ${JSON.stringify(refusal)}`);
       }
-    };
-    const underTarget = reportsUnder('rig-play');
-    const underFormer = reportsUnder(former);
-    const underSpine = reportsUnder('spine');
-    const unknownRefused = reportsUnder('nonesuch');
-    // 🌱 The plant removes the resolution: the former name handed to the kind
-    // rule as it is runs the validity rules alone — exactly the silence the
-    // resolution exists to prevent, and what the case would see without it.
-    const unresolved = ASSERTION_NAMES.filter((name) => kindRunsUnder(ASSERTION_KIND[name], former as AssertionProfile));
-    const validityOnly = ASSERTION_NAMES.filter((name) => ASSERTION_KIND[name] === 'validity');
-    const formerPolicyCount = (JSON.parse(underFormer.startsWith('REFUSED') ? '[]' : underFormer) as Array<{ profileSkipped: unknown[] }>)
-      .map((r) => r.profileSkipped.length);
+    }
     say(
-      'CLI113_A_FORMER_PROFILE_NAME_PAST_THE_CLI_READS_AS_ITS_PROFILE_AND_AN_UNKNOWN_ONE_IS_REFUSED_BY_NAME',
-      greenBuild.status === 0 &&
-        !underTarget.startsWith('REFUSED') &&
-        underFormer === underTarget &&
-        underSpine !== underTarget &&
-        formerPolicyCount.length === 2 &&
-        formerPolicyCount.every((n) => n === 0) &&
-        unknownRefused === 'REFUSED validate: profile "nonesuch" is not a profile; the profiles are "spine" and "rig-play"' &&
-        unresolved.length === validityOnly.length &&
-        unresolved.length < ASSERTION_NAMES.length,
-      `green build exit ${String(greenBuild.status)}; validate() and the model side under "${former}" ` +
-        `${underFormer === underTarget ? 'equal' : 'DIFFER from'} their reports under "rig-play", ${formerPolicyCount.join(' and ')} PROF line(s), ` +
-        `and ${underSpine !== underTarget ? 'differ' : 'DO NOT differ'} from "spine"'s; unknown: ${JSON.stringify(unknownRefused)}; ` +
-        `planted (resolution removed): "${former}" runs ${unresolved.length} of ${ASSERTION_NAMES.length} rules — the ${validityOnly.length} validity ones`,
-      'the kind rule reads any name but rig-play as validity-only, so a former name that reached it unresolved would run a ' +
-        'weaker gate in silence; a courtesy-key caller of the release before keeps its rules until the next major release (#1277, #1586)',
+      'CLI113_REMOVED_AND_UNKNOWN_PROFILES_ARE_REFUSED_BY_BOTH_SUPPLIERS',
+      greenBuild.status === 0 && faults.length === 0,
+      `control build exit ${String(greenBuild.status)}; ${faults.length ? faults.join('; ') : 'both suppliers refuse both names by name'}`,
+      'a caller past the CLI must not bypass profile validation and silently get the validity rules alone',
     );
   }
 

@@ -12792,6 +12792,57 @@ for `declared` and the run says so on a line of its own.
 - **Not a second poser.** Everything it draws is a pose `render` would have drawn at
   the same frame; where it disagrees with `render --geometry`, it is wrong (`IN04`).
 
+### Texture scale — warning-only region reading
+
+```bash
+rigc texture-scale --candidate build/ --json texture-scale.json
+```
+
+`REGION_TEXTURE_MINIFIED` names each drawn region attachment whose **smallest
+sampled draw scale is below 0.5 world units per stored texture pixel**, with its
+slot, attachment, atlas region/page/index, stored texture width and height, and
+the animation and time of that sample (`animation: null`, `time: 0` for setup).
+The strict threshold applies to the measured value: a nominal authored 0.5 can
+read just below 0.5 after runtime transforms and floating-point storage.
+It is a warning, never an assertion or a build refusal. This separate reading
+changes no build, atlas or rendered frame. Scale 1.0 and exactly 0.5 stay silent.
+
+The scale is the smallest singular value of the texture-pixel → world 2×2
+map read from posed region corners and their page UVs. It includes attachment
+size/scale, parent transforms, constraints, rotation, reflection, anisotropy,
+shear, trimming and atlas rotation. Raw bone scale alone cannot give this value.
+The consumer's camera, device pixels and viewport scaling are outside it.
+
+Setup is always read, then every animation under `--skin <name>` (without it,
+no skin is set). `--fps <n>` defaults to 60. The sorted sample schedule combines
+that grid, each timeline's float32 key times, key-interval midpoints and the
+animation endpoint. Physics is stepped along this schedule, using the render
+clock. The JSON (`rigc-texture-scale/1`) records the exact schedule, threshold,
+rate, skin, count of distinct drawn region attachments and `warnings`.
+`--json` must be outside the candidate directory (symlinks are resolved). An
+existing file is replaced only when it is already a `rigc-texture-scale/1`
+report; a source artifact is refused before posing and left byte-identical.
+Text and JSON report the **minimum among these samples**, not a continuous
+minimum: interpolated transforms, shear and constraints can reach narrower
+extrema between them. Increase the rate to investigate; silence is not proof
+that no unsampled extreme exists. A tie keeps the first observation, setup first.
+
+Only selected, active region attachments with positive combined alpha,
+nonempty clipped geometry and a source rectangle containing alpha are read.
+Meshes, unselected attachments, alpha-zero regions and wholly clipped regions
+are excluded. This is a geometric draw reading; it does not test occlusion by
+later slots or whether the visible clipped portion samples only transparent
+texels. The threshold identifies potential minification without mipmaps; it
+does not assert visible dither for every source texture.
+
+**Remedies:** area-downsample the source texture and preserve the region's world
+width and height (and its placement) when rebuilding, or enable mipmaps in the
+consumer. For example, a 730×400 texture drawn at 0.167 can be area-downsampled
+to 122×67 while retaining world dimensions 121.91×66.8; the new draw scale is
+about 1.0. This removes high-frequency aliasing in the planted fixture, not a
+guarantee about arbitrary artwork or every consumer filter. rigc never resizes
+art automatically and this reading changes no atlas mipmap settings.
+
 ## 14. Read a named mesh at setup
 
 `rig-c/core` promises `readSetupMesh(view, target)` and the types

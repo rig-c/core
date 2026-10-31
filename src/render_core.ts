@@ -557,7 +557,9 @@ function pieces(
     const atlasRegion = draw.texture ? input.region(found.region) : null;
     if (draw.texture && atlasRegion === null) throw new CoreInputError(`slot "${d.slot}": atlas region "${found.region}" is not in the atlas`);
     const texture = atlasRegion === null ? undefined : artUvsOf(d, atlasRegion);
-    const common = { tint: tintOf(d), dark: darkOf(d), slot: d.slot, page: found.found.page.name };
+    const common = { tint: tintOf(d), dark: darkOf(d), slot: d.slot, page: found.found.page.name,
+      ...(draw.regionInfo && d.kind === 'region' ? { regionInfo: { attachment: d.attachment, region: found.region, index: input.region(found.region)?.index ?? -1, width: found.found.region.width, height: found.found.region.height } } : {}),
+    };
     const world = [...d.vertices];
     const piece: Piece =
       d.kind === 'mesh'
@@ -782,7 +784,7 @@ export function corePoser(
       const pose = poseRawSetup(input.doc, { through, ...observe });
       return corePosed(input, pose, through, [], values);
     },
-    animation: (name, skin, fps, count, visit, environment, channels) => {
+    animation: (name, skin, fps, count, visit, environment, channels, times) => {
       let values: ChannelValue[] | undefined;
       const observe = channels ? { readLocals: (bones: readonly import('./model.ts').ModelBone[], sliders: readonly import('./core/constraints_slider.ts').SliderApplication[]) => { values = localChannels(bones, sliders); } } : {};
       const input = inputOf(skin);
@@ -802,7 +804,7 @@ export function corePoser(
         if (ctx.time > 0 && ctx.states.get(r.name)?.lastTime === ctx.time) steppedNow.add(r.name);
         return moved;
       };
-      walk(input.doc, name, new Array<number>(count).fill(step), { through, physicsStep, ...observe }, (pose, i) => {
+      walk(input.doc, name, times === undefined ? new Array<number>(count).fill(step) : times.slice(1).map((t, i) => t - times[i]), { through, physicsStep, ...observe }, (pose, i) => {
         const stepped = [...steppedNow].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
         steppedNow.clear();
         if (drawFailed.length > 0) return;

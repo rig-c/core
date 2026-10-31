@@ -324,6 +324,8 @@ export interface PinnedViewport {
 
 /** What every drawable has in common, whatever shape it is. */
 export interface PieceCommon {
+  /** Opt-in atlas identity for texture-scale; absent on ordinary renders. */
+  regionInfo?: { attachment: string; region: string; index: number; width: number; height: number };
   /**
    * World-space vertex positions, `x, y` per vertex.
    *
@@ -1101,6 +1103,8 @@ function coreFacts(skeletonText: string, atlasText: string | null, poser: Poser,
 
 /** What a sampler hands a posed frame's draw walk — `PoseOptions` with the subset already resolved. */
 export interface DrawOptions {
+  /** Texture-scale only: atlas identity and stored texture size on whole regions. */
+  regionInfo?: boolean;
   /** The slots drawn, resolved against the posed skeleton (`slotSubsetOf`); `undefined` draws every slot. */
   subset: SlotSubset | undefined;
   /** Every attachment whole, no clip applied — the framing box's reading. */
@@ -1159,8 +1163,11 @@ export interface Poser {
    * `i` from 0 to `count`, the pose at `i/fps`. The caller has checked `name`.
    * `environment(i)`, when given, is the change to the world the physics
    * answers set before the step that poses frame `i` (issue #1416).
+   * Optional `times` replaces the uniform grid with increasing absolute times
+   * starting at 0 (count = times.length - 1), stepped by adjacent differences.
+   * Used by texture-scale to include key times; ordinary renders are unchanged.
    */
-  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean): void;
+  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean, times?: readonly number[]): void;
   /** The rest table for the (slot, attachment) pairs `shown` holds — see `AttachmentRest`. */
   rest(skin: string | undefined, shown: readonly AttachmentPose[][]): AttachmentRest[];
 }

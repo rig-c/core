@@ -1801,6 +1801,18 @@ export const COMMANDS: CommandDoc[] = [
     },
   },
   {
+    name: 'texture-scale',
+    runtime: false,
+    spineFormat: false,
+    usage: ['rigc texture-scale --candidate <dir | skeleton.json> [--skin <name>] [--fps 60] [--poser core|spine] [--json <out>]'],
+    flags: ['candidate', 'atlas', 'skin', 'fps', 'poser', 'json'],
+    overrides: {
+      fps: { meaning: 'sample setup and every animation at this rate (default 60), also including float32 key times, key-interval midpoints and endpoints; reports sampled minima, never continuous extrema' },
+      json: { meaning: 'write the report outside the candidate directory; an existing file is replaced only if it is a rigc-texture-scale/1 report' },
+    },
+    notes: ['REGION_TEXTURE_MINIFIED is a warning only: smallest singular value of texture-pixel to world map < 0.5. Names the region, texture size and sampled minimum with animation/time. Skips unselected, transparent and fully clipped regions; no occlusion or consumer camera test. Never changes a build. See docs/AUTHORING.md, Texture scale.'],
+  },
+  {
     name: 'inspect',
     runtime: false,
     spineFormat: false,

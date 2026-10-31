@@ -75,9 +75,8 @@ export interface VerdictHarness extends VerdictLists {
  * the table lacks — `validate` for the gate, so its message is the one it was.
  */
 export function verdictHarness(profile: AssertionProfile, kinds: Readonly<Record<string, AssertionKind>>, who: string): VerdictHarness {
-  // A former name resolves to its profile and anything outside the pair is
-  // refused by name — `resolveProfile` says why. The entries resolve before
-  // they get here, so this is the floor for a caller of the harness itself.
+  // Anything outside the two profiles is refused by name. Entries check before
+  // they get here too; this is the floor for a caller of the harness itself.
   profile = resolveProfile(profile, who);
   const failures: Failure[] = [];
   const passed: string[] = [];

@@ -13,17 +13,6 @@ import { failLine } from '../guide.ts';
 export const VALIDATE_PROFILES: readonly AssertionProfile[] = ['spine', 'rig-play'];
 
 /**
- * The line `--profile <alias>` prints on stderr before the command runs: the
- * old name, the profile it reads as, and the flag to pass instead (issue
- * #1277). Stderr so a report on stdout reads the same whichever name the
- * caller typed; the report itself names the profile that judged it, which is
- * the target and never the alias.
- */
-export function profileAliasLine(alias: string, target: AssertionProfile): string {
-  return `rigc: --profile ${alias} is deprecated and reads as --profile ${target}, the same rules; it is accepted until the next major release — pass --profile ${target}`;
-}
-
-/**
  * What the CLI uses when `--profile` is absent — and ONLY the CLI. This is not
  * `validate()`'s default; that function has none (`ValidateProfile` in
  * `src/validate.ts` says why).

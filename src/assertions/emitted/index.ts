@@ -129,7 +129,7 @@ export function roundTripOnlyCodes(): string[] {
 
 /** The restated rules over one build's emitted texts, in `validate()`'s report shape. */
 export function validateEmittedText(given: EmittedTextInput): VerdictLists & { profile: AssertionProfile } {
-  // A former profile name reads as its profile (issue #1277), for the rules and the report alike.
+  // Refuse unknown and removed profiles before choosing policy or writing a report (issue #1668).
   const input: EmittedTextInput = { ...given, profile: resolveProfile(given.profile, 'the emitted text') };
   const known = new Set(EMITTED_TEXT_RULES.map((r) => r.code));
   const unrun = roundTripOnlyCodes().filter((code) => !known.has(code));

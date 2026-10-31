@@ -21,7 +21,7 @@
  *
  * 🔒 **Nothing under this repository is on the fixture's path at run time.** The
  * rig spec, the motion spec and the plate generator below are authored as text
- * into the install directory, and the generator imports `rig-c/tools/plate.ts`
+ * into the install directory, and the generator imports `rig-c/plate`
  * as a BARE specifier, so it resolves inside the install or not at all —
  * `SMOKE_FIXTURE_CAME_FROM_THE_PACKAGE` prints the path it resolved to and
  * refuses one that is not under the install. The only thing that crosses from the
@@ -32,7 +32,7 @@
  * was checked, so every case but the first two rebuilds the tarball from a
  * PATCHED COPY of the extracted package — an allowlist entry removed, a module
  * removed, a dependency added back, the skills removed, the `exports` map
- * removed, its deep paths removed, a named entry removed (one plant per entry
+ * removed, a forbidden export pattern added, a named entry removed (one plant per entry
  * since #1212), one observed symbol renamed, the parser's error class forked
  * from the one its entry exports, the core entry's build made to refuse, one byte of that build's
  * output moved, a node builtin imported inside `rig-c/core`'s closure (#1275) — and INVERTS the verdict: such a case is green only when the smoke
@@ -152,7 +152,7 @@ const PLATE_SOURCE = `import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { Plate, type RGBA } from '${NAME}/tools/plate.ts';
+import { Plate, type RGBA } from '${NAME}/plate';
 
 // \`fileURLToPath\` and not \`new URL(...).pathname\`: a URL's path is
 // percent-encoded, so the gallery's own idiom writes into a directory literally
@@ -196,7 +196,7 @@ flag.disc(38, 20, 15, WARM);
 flag.rect(18, 5, 20, 30, WARM);
 flag.writePng(join(OUT, 'flag.png'));
 
-console.log('RESOLVED ' + import.meta.resolve('${NAME}/tools/plate.ts'));
+console.log('RESOLVED ' + import.meta.resolve('${NAME}/plate'));
 console.log('PLATES ' + OUT);
 `;
 
@@ -306,24 +306,36 @@ const REQUIRED_ASSERTIONS: Array<[string, string]> = [
  * The surface a dependant may import (issue #859): each `exports` key rigc
  * names, and the file it has to land on in the install. RELEASING.md *The
  * import surface* is where this is stated as a promise; this is where it is
- * checked, and `drop-deep-exports` cuts the map down to exactly these keys.
+ * checked, including exact file and executable entries (issue #1668).
  */
 const NAMED_EXPORTS: Record<string, string> = {
-  './plate': 'tools/plate.ts',
-  './font5x7': 'tools/font5x7.ts',
-  './transform': 'src/transform.ts',
-  './render': 'src/render.ts',
-  './render-shared': 'src/render_read.ts',
-  './png': 'src/png.ts',
-  './compile': 'src/compile.ts',
-  './rig': 'src/rig.ts',
-  './mesh': 'src/mesh.ts',
-  './errors': 'src/errors.ts',
-  './meshcompare': 'src/meshcompare.ts',
-  './core': 'src/core/entry.ts',
-  './runtime': 'src/runtime/index.ts',
-  './cli': 'cli.ts',
-  './package.json': 'package.json',
+  "./plate": "tools/plate.ts",
+  "./font5x7": "tools/font5x7.ts",
+  "./transform": "src/transform.ts",
+  "./render": "src/render.ts",
+  "./render-shared": "src/render_read.ts",
+  "./png": "src/png.ts",
+  "./compile": "src/compile.ts",
+  "./rig": "src/rig.ts",
+  "./mesh": "src/mesh.ts",
+  "./errors": "src/errors.ts",
+  "./meshcompare": "src/meshcompare.ts",
+  "./core": "src/core/entry.ts",
+  "./runtime": "src/runtime/index.ts",
+  "./cli": "cli.ts",
+  "./package.json": "package.json",
+  "./LICENSE": "LICENSE",
+  "./bin/rigc": "bin/rigc.cjs",
+  "./tools/png_probe": "tools/png_probe.mjs",
+  "./deformgen": "src/deformgen.ts",
+  "./environment": "src/environment.ts",
+  "./motion": "src/motion.ts",
+  "./passthrough": "src/passthrough.ts",
+  "./stop": "src/stop.ts",
+  "./meshrasters": "src/meshrasters.ts",
+  "./seam": "src/seam.ts",
+  "./folds": "src/folds.ts",
+  "./model": "src/model.ts"
 };
 
 /** What a symbol has to be when the install hands it over: callable, or present and not callable. */
@@ -473,6 +485,21 @@ const REQUESTED_IN_1591 = 'rig-play in-place poser (play#200), requested on issu
 const AGREED_IN_1450 = 'parts#378 segments preflight, agreed on issue #1450';
 
 const OBSERVED_SYMBOLS: ObservedEntry[] = [
+  // Consumer main audit before the 3.0 removals (issue #1668).
+  {"entry": "./rig", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"RIG_BONE_INHERIT": "constant"}, "types": ["RigBoneInherit", "RigStop"]},
+  {"entry": "./core", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"IRR_OFFSET": "constant", "RUNTIME_PI": "constant"}, "types": []},
+  {"entry": "./render-shared", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {}, "types": ["GeometryFile"]},
+  {"entry": "./deformgen", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"evaluateDeformTransform": "function"}, "types": ["DeformTransform"]},
+  {"entry": "./environment", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"ENVIRONMENT_SPEC": "constant", "EnvironmentError": "function", "environmentResponse": "function", "readEnvironmentSchedule": "function"}, "types": []},
+  {"entry": "./motion", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"parseMotionSpec": "function"}, "types": ["MotionSpec"]},
+  {"entry": "./passthrough", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"DRAWN_ALPHA": "constant"}, "types": []},
+  {"entry": "./stop", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"expandStops": "function"}, "types": []},
+  {"entry": "./meshrasters", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"artRastersOf": "function", "stepRastersOf": "function"}, "types": []},
+  {"entry": "./seam", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"seamsOf": "function"}, "types": ["SeamFile"]},
+  {"entry": "./folds", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {}, "types": ["FoldsFile"]},
+  {"entry": "./model", "observed": "pose main test, issue #1668", "needsRuntime": false, "values": {"modelDocument": "function"}, "types": []},
+  {"entry": "./tools/png_probe", "observed": "retained exact PNG helper, issue #1668", "needsRuntime": false, "values": {"decodePng": "function", "differs": "function"}, "types": []},
+
   {
     entry: './runtime', observed: REQUESTED_IN_1591, needsRuntime: false,
     experimental: 'stage 0 of issue #1591; not promised until the runtime poser stabilises',
@@ -753,11 +780,11 @@ for (const row of OBSERVED_SYMBOLS) {
 
 /**
  * The deep paths a dependant was observed importing before the map existed —
- * rig-parts, on 2026-09-27 — which the pattern courtesy has to keep.
- * They are also inside the every-shipped-path sweep below; they are named here
- * so that the failure a dependant would hit is the one this prints.
+ * rig-parts, on 2026-09-27 — now refused by the 3.0 exact map.
+ * They are also inside the private-path refusal sweep below; they are named here
+ * so reopening them is seen by the negative control.
  */
-const OBSERVED_DEEP_PATHS: Record<string, string> = {
+const PRIVATE_DEEP_PATHS: Record<string, string> = {
   [`${NAME}/tools/plate.ts`]: 'tools/plate.ts',
   [`${NAME}/tools/font5x7.ts`]: 'tools/font5x7.ts',
   [`${NAME}/src/transform.ts`]: 'src/transform.ts',
@@ -847,9 +874,26 @@ if (process.argv[2] === 'without-runtime') {
   process.exit(bad.length === 0 ? 0 : 1);
 }
 
-// 1. Every named entry, and every deep path a dependant was seen using.
+// 1. Every exact entry, and no unlisted entry (issue #1668).
 for (const [key, file] of Object.entries(plan.named)) lands('${NAME}' + key.slice(1), file);
-for (const [spec, file] of Object.entries(plan.deep)) lands(spec, file);
+const installedMap = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).exports || {};
+for (const key of new Set([...Object.keys(installedMap), ...Object.keys(plan.named)])) {
+  if (!(key in plan.named) || installedMap[key] !== './' + plan.named[key]) said('${NAME}' + key.slice(1), 'SMOKE_EXACT_EXPORT_MAP: unexpected or missing export ' + key);
+}
+const refuses = (spec) => {
+  try {
+    import.meta.resolve(spec);
+    said(spec, 'SMOKE_PRIVATE_PATH_NOT_EXPORTED: private path resolved');
+    return false;
+  } catch (e) {
+    if (!String(e && e.message).includes('${NAME}') || !['ERR_PACKAGE_PATH_NOT_EXPORTED', 'MODULE_NOT_FOUND', 'ERR_MODULE_NOT_FOUND'].includes(e.code)) {
+      said(spec, 'private path failed without its name and a module-resolution error: ' + String(e));
+      return false;
+    }
+    return true;
+  }
+};
+for (const spec of Object.keys(plan.deep)) refuses(spec);
 
 // 2. One symbol through each route. The expected values are facts of the
 // format or of the definition, never a measurement of this package: the IEND
@@ -857,7 +901,7 @@ for (const [spec, file] of Object.entries(plan.deep)) lands(spec, file);
 // height minus y by definition.
 const IEND = [0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82];
 const plates = [];
-for (const spec of ['${NAME}/plate', '${NAME}/tools/plate.ts']) {
+for (const spec of ['${NAME}/plate']) {
   const m = await load(spec);
   if (m === null) continue;
   plates.push(m);
@@ -868,11 +912,8 @@ for (const spec of ['${NAME}/plate', '${NAME}/tools/plate.ts']) {
   const back = Array.from(m.decodePng(png).data);
   if (back.join(',') !== '1,2,3,4') said(spec, 'encodePng then decodePng of one RGBA pixel 1,2,3,4 came back ' + back.join(','));
 }
-if (plates.length === 2 && plates[0].pngChunk !== plates[1].pngChunk) {
-  said('${NAME}/plate', 'is a different module instance from ${NAME}/tools/plate.ts, so one file is loaded twice');
-}
 const Plate = plates[0] ? plates[0].Plate : null;
-for (const spec of ['${NAME}/font5x7', '${NAME}/tools/font5x7.ts']) {
+for (const spec of ['${NAME}/font5x7']) {
   const m = await load(spec);
   if (m === null || Plate === null) continue;
   const w = m.textWidth('RIGC', 1);
@@ -890,7 +931,7 @@ for (const spec of ['${NAME}/font5x7', '${NAME}/tools/font5x7.ts']) {
     said(spec, 'drawText("RIGC") onto a ' + w + 'x' + m.GLYPH_H + ' plate plotted ' + lit + ' pixel(s), ' + outside + ' outside it, ' + opaque + ' opaque; a lit, in-bounds, one-to-one drawing was required');
   }
 }
-for (const spec of ['${NAME}/transform', '${NAME}/src/transform.ts']) {
+for (const spec of ['${NAME}/transform']) {
   const m = await load(spec);
   if (m === null) continue;
   const y = m.cropToSpineY(10, 64);
@@ -903,12 +944,26 @@ const version = pkg && pkg.default ? pkg.default.version : undefined;
 if (pkg !== null && (pkg.default === undefined || pkg.default.name !== '${NAME}')) said('${NAME}/package.json', 'does not import as a JSON module named ${NAME}');
 // The CLI is RESOLVED and spawned rather than imported: importing it runs it,
 // and spawning the resolved file is what a dependant that gates through rigc does.
-for (const spec of ['${NAME}/cli', '${NAME}/cli.ts']) {
+for (const spec of ['${NAME}/cli']) {
   const file = where(spec);
   if (!file.startsWith(ROOT)) continue;
   const ran = spawnSync(process.execPath, [file, '--version'], { encoding: 'utf8' });
   const out = (ran.stdout || '').trim();
   if (ran.status !== 0 || out !== version) said(spec, 'bun <resolved> --version exited ' + ran.status + ' printing ' + JSON.stringify(out) + ' and ' + JSON.stringify(version) + ' was required');
+}
+
+// Exact document and executable entries retained by #1668: read or spawn them.
+const licence = where('${NAME}/LICENSE');
+if (!licence.startsWith(ROOT) || !readFileSync(licence, 'utf8').includes('MIT License')) said('${NAME}/LICENSE', 'the installed MIT licence text was required');
+const launcher = where('${NAME}/bin/rigc');
+if (launcher.startsWith(ROOT)) {
+  const ran = spawnSync('node', [launcher, '--version'], { encoding: 'utf8' });
+  if (ran.status !== 0 || (ran.stdout || '').trim() !== version) said('${NAME}/bin/rigc', 'resolved launcher --version failed: ' + (ran.stderr || ''));
+}
+const probe = await load('${NAME}/tools/png_probe');
+if (probe !== null && plates[0]) {
+  const pixel = probe.decodePng(Buffer.from(plates[0].encodePng(1, 1, new Uint8Array([1, 2, 3, 4]))));
+  if (pixel.width !== 1 || pixel.height !== 1 || pixel.data.join(',') !== '1,2,3,4') said('${NAME}/tools/png_probe', 'decodePng did not read the generated RGBA pixel');
 }
 
 // 2b. Every symbol a dependant was observed importing (issue #1167), through
@@ -1106,21 +1161,16 @@ if (meshM !== null && Plate !== null && ['buildSegmentsLattice', 'segmentDistanc
   });
 }
 
-// 3. Every path the tarball carries, spelled in full — and, for a module, with
-// its extension left off, which is how Bun resolved it before the map existed.
-let full = 0;
-let bare = 0;
-let bareTried = 0;
+// 3. Every shipped path outside the exact map must be inaccessible by package subpath.
+let privatePaths = 0;
+let privateBare = 0;
 for (const path of plan.paths) {
-  if (lands('${NAME}/' + path, path)) full += 1;
+  if (!Object.hasOwn(plan.named, './' + path) && refuses('${NAME}/' + path)) privatePaths += 1;
   const m = /^(.*)\\.(ts|mjs|cjs)$/.exec(path);
-  if (m !== null) {
-    bareTried += 1;
-    if (lands('${NAME}/' + m[1], path)) bare += 1;
-  }
+  if (m !== null && !Object.hasOwn(plan.named, './' + m[1]) && refuses('${NAME}/' + m[1])) privateBare += 1;
 }
 for (const line of bad) console.log('EXPORT_BAD ' + line);
-console.log('EXPORT_COUNTS named ' + Object.keys(plan.named).length + ', observed symbols ' + held + '/' + listed + ' held across ' + entries.length + ' entries, ' + calls + ' call(s) checked from the install, observed deep paths ' + Object.keys(plan.deep).length + ', shipped paths ' + full + '/' + plan.paths.length + ' in full and ' + bare + '/' + bareTried + ' modules without their extension');
+console.log('EXPORT_COUNTS named ' + Object.keys(plan.named).length + ', observed symbols ' + held + '/' + listed + ' held across ' + entries.length + ' entries, ' + calls + ' call(s) checked from the install, private full paths refused ' + privatePaths + ', private extensionless paths refused ' + privateBare);
 process.exit(bad.length === 0 ? 0 : 1);
 `;
 
@@ -1826,7 +1876,7 @@ type Plant =
   | 'drop-core-entry'
   | 'drop-skills'
   | 'drop-exports'
-  | 'drop-deep-exports'
+  | 'add-export-pattern'
   | 'drop-named-entry'
   | 'drop-rig-entry'
   | 'drop-mesh-entry'
@@ -1968,10 +2018,10 @@ const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]
     steps: ['exports'],
     what: `\`exports\` removed from \`package.json\` (issue #859), which is the package v1.2.3 shipped: every deep path still resolves, so what goes missing is the named surface, and a dependant importing \`${NAME}/plate\` is the one who finds out`,
   },
-  'drop-deep-exports': {
+  'add-export-pattern': {
     names: [`${NAME}/tools/plate.ts`],
     steps: ['exports'],
-    what: `\`exports\` cut down to its named entries (issue #859), which is the map without its pattern courtesy: \`${NAME}/tools/plate.ts\`, a deep path a dependant was observed importing, stops resolving, and so does the fixture that imports it`,
+    what: `a forbidden ./*.ts export pattern added to the packed map (issue #1668): the private path ${NAME}/tools/plate.ts starts resolving, and the refusal sweep must name it`,
   },
   'drop-named-entry': {
     names: [`${NAME}${DROPPED_ENTRIES['drop-named-entry'].slice(1)}`],
@@ -2086,8 +2136,8 @@ function tarballFor(
   } else if (plant === 'drop-exports') {
     delete pkg.exports;
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-  } else if (plant === 'drop-deep-exports') {
-    pkg.exports = Object.fromEntries(Object.entries(pkg.exports ?? {}).filter(([key]) => key in NAMED_EXPORTS));
+  } else if (plant === 'add-export-pattern') {
+    pkg.exports = { ...pkg.exports, './*.ts': './*.ts' };
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
   } else if (isDropPlant(plant)) {
     pkg.exports = Object.fromEntries(Object.entries(pkg.exports ?? {}).filter(([key]) => key !== DROPPED_ENTRIES[plant]));
@@ -2230,7 +2280,7 @@ function tarballFor(
     } else {
       evidence = `the packed ${CORE_BUILD_MODULE} registers the core entry's build as \`${CORE_BUILD_PLANTS[plant].trim()}\``;
     }
-  } else if (plant === 'drop-exports' || plant === 'drop-deep-exports') {
+  } else if (plant === 'drop-exports' || plant === 'add-export-pattern') {
     const shipped = run('tar', ['-xzOf', second, 'package/package.json'], work);
     const map = shipped.status === 0 ? (JSON.parse(shipped.out) as { exports?: Record<string, string> }).exports : undefined;
     const keys = map === undefined ? [] : Object.keys(map);
@@ -2239,7 +2289,7 @@ function tarballFor(
       shipped.status === 0 &&
       (plant === 'drop-exports'
         ? map === undefined
-        : keys.length > 0 && keys.length < treeKeys.length && keys.every((key) => key in NAMED_EXPORTS));
+        : keys.length === treeKeys.length + 1 && map?.['./*.ts'] === './*.ts' && treeKeys.every((key) => map?.[key] === './' + NAMED_EXPORTS[key]));
     if (!planted) {
       faults.push(
         `SMOKE_PLANT_APPLIED: the packed package.json maps ${map === undefined ? 'no exports' : `exports ${keys.join(', ')}`} where the tree maps ${treeKeys.length} key(s), so the plant "${plant}" planted nothing and a red below would be somebody else's fault`,
@@ -2421,7 +2471,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
     if (!asPath.startsWith(join(home, 'node_modules'))) {
       fault(
         'fixture',
-        `SMOKE_FIXTURE_CAME_FROM_THE_PACKAGE: the generator resolved '${NAME}/tools/plate.ts' to ${asPath || '(nothing)'}, which is not under ${join(home, 'node_modules')} — so the plates were not made by the installed package`,
+        `SMOKE_FIXTURE_CAME_FROM_THE_PACKAGE: the generator resolved '${NAME}/plate' to ${asPath || '(nothing)'}, which is not under ${join(home, 'node_modules')} — so the plates were not made by the installed package`,
       );
     } else {
       notes.push(`the plate codec resolved to ${asPath.slice(home.length + 1)}`);
@@ -2629,7 +2679,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   // never reads `exports` — which is why it is here and not in the selftest.
   writeFileSync(
     join(home, 'exports_probe.json'),
-    `${JSON.stringify({ named: NAMED_EXPORTS, symbols: OBSERVED_SYMBOLS, runtime: RUNTIME, rig: RIG_SPEC, deep: OBSERVED_DEEP_PATHS, paths: built.paths }, null, 2)}\n`,
+    `${JSON.stringify({ named: NAMED_EXPORTS, symbols: OBSERVED_SYMBOLS, runtime: RUNTIME, rig: RIG_SPEC, deep: PRIVATE_DEEP_PATHS, paths: built.paths }, null, 2)}\n`,
   );
   writeFileSync(join(home, 'exports_probe.mjs'), EXPORTS_PROBE_SOURCE);
   const exportsRan = run('bun', [join(home, 'exports_probe.mjs')], home);
@@ -2935,7 +2985,7 @@ exit codes:
      here says the package is broken
 
 cases:
-  clean          a correct package installs WITHOUT spine-core and its rigc runs the core entry, whose build has to exit 0 and write its files; with spine-core installed beside it the same rigc builds through the round trip, writing the same bytes as the core entry's build of the same fixture, resolves every \`exports\` entry and every shipped path, reads every observed symbol through its entry and calls the ones a dependant was seen calling; with spine-core taken away again it imports every observed entry as stated, compares meshes of that build through ${NAME}/meshcompare, poses its setup pose through ${NAME}/core and through a vite browser bundle of that entry holding no node module, renders and checks that build, refuses \`rigc review\` by name (REVIEW_NOT_INSTALLED, the project untouched) until the review package that refusal names is installed and then runs \`rigc review check\` on that build, links its skills, and the bin shim names Bun when bun is absent
+  clean          a correct package installs WITHOUT spine-core and its rigc runs the core entry, whose build has to exit 0 and write its files; with spine-core installed beside it the same rigc builds through the round trip, writing the same bytes as the core entry's build of the same fixture, reaches every exact \`exports\` key and refuses every other shipped subpath, reads every observed symbol through its entry and calls the ones a dependant was seen calling; with spine-core taken away again it imports every observed entry as stated, compares meshes of that build through ${NAME}/meshcompare, poses its setup pose through ${NAME}/core and through a vite browser bundle of that entry holding no node module, renders and checks that build, refuses \`rigc review\` by name (REVIEW_NOT_INSTALLED, the project untouched) until the review package that refusal names is installed and then runs \`rigc review check\` on that build, links its skills, and the bin shim names Bun when bun is absent
   unusual-path   the same, installed at an absolute path with spaces and non-ASCII in it
   drop-plate     tools/plate.ts out of \`files\`  — the smoke has to go RED naming it
   drop-src-module  src/validate.ts out of the packed tree — the smoke has to go RED naming it
@@ -2943,7 +2993,7 @@ cases:
   drop-core-entry  cli_core.ts out of \`files\` — the install's \`rigc --version\` has to go RED naming it
   drop-skills      \`skills\` out of \`files\` — \`rigc skills install\` has to go RED naming it
   drop-exports     \`exports\` out of package.json — importing ${NAME}/plate has to go RED naming it
-  drop-deep-exports  \`exports\` cut to its named entries — the deep path ${NAME}/tools/plate.ts has to go RED naming it
+  add-export-pattern  a forbidden ./*.ts export pattern added — the private path ${NAME}/tools/plate.ts has to go RED naming it
   drop-named-entry   ${DROPPED_ENTRIES['drop-named-entry']} out of \`exports\` — importing ${NAME}${DROPPED_ENTRIES['drop-named-entry'].slice(1)} has to go RED naming it
   drop-rig-entry     ${DROPPED_ENTRIES['drop-rig-entry']} out of \`exports\` — importing ${NAME}${DROPPED_ENTRIES['drop-rig-entry'].slice(1)} has to go RED naming it, with the runtime and without it, and nothing else
   drop-mesh-entry    ${DROPPED_ENTRIES['drop-mesh-entry']} out of \`exports\` — importing ${NAME}${DROPPED_ENTRIES['drop-mesh-entry'].slice(1)} has to go RED naming it, with the runtime and without it, and nothing else
@@ -3097,7 +3147,7 @@ function main(): number {
     { name: 'drop-core-entry', source, installer, plant: 'drop-core-entry', dirName: 'planted-core-entry' },
     { name: 'drop-skills', source, installer, plant: 'drop-skills', dirName: 'planted-skills' },
     { name: 'drop-exports', source, installer, plant: 'drop-exports', dirName: 'planted-exports' },
-    { name: 'drop-deep-exports', source, installer, plant: 'drop-deep-exports', dirName: 'planted-deep-exports' },
+    { name: 'add-export-pattern', source, installer, plant: 'add-export-pattern', dirName: 'planted-deep-exports' },
     { name: 'drop-named-entry', source, installer, plant: 'drop-named-entry', dirName: 'planted-named-entry' },
     { name: 'drop-rig-entry', source, installer, plant: 'drop-rig-entry', dirName: 'planted-rig-entry' },
     { name: 'drop-mesh-entry', source, installer, plant: 'drop-mesh-entry', dirName: 'planted-mesh-entry' },

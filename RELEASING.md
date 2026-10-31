@@ -749,6 +749,18 @@ an install of an alias carries the same map, so `spine-rigc/plate` and
 | `rig-c/runtime` | [#1591](https://github.com/rig-c/core/issues/1591), requested for play#200 — **experimental, not promised until it stabilises** | nothing |
 | `rig-c/cli` | [#859](https://github.com/rig-c/core/issues/859) | resolved and spawned rather than imported; which entry it runs is the table in *What an install has* above |
 | `rig-c/package.json` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
+| `rig-c/deformgen` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/environment` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/motion` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/passthrough` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/stop` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/meshrasters` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/seam` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/folds` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/model` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/LICENSE` | retained exact document key, #1668 | read as text |
+| `rig-c/bin/rigc` | retained exact launcher key, #1668 | resolved and spawned with Node and Bun |
+| `rig-c/tools/png_probe` | retained exact PNG helper key, #1668 | nothing |
 
 The CLI observation surface is promised by agreement for parts#839 before its
 adoption (#1642):
@@ -809,9 +821,7 @@ A later observation of the same entry is its own row, as the rule above says:
 rig-parts's automatic mesh mode (its `c03dd8a`, PR #131) was read calling
 `reduceMesh` with the types `SourceMesh` and `RefinementRegion` from
 `rig-c/mesh`, which the agreed row had not recorded — found by rigc#1238's
-D1 over the installed package, recorded by #1241. Every other import that
-package makes goes through the `./*.ts` courtesy keys, which the surface
-paragraph above already says are not promised.
+D1 over the installed package, recorded by #1241. At that observation the other path imports used the `./*.ts` courtesy; 3.0 removes it. The migration table below records the current consumer audit.
 
 🤝 **Agreed rows are promised before observation**
 ([#1224](https://github.com/rig-c/core/issues/1224)). Through
@@ -1073,7 +1083,7 @@ supplied separately for each call.
 ([#1275](https://github.com/rig-c/core/issues/1275)). rig-play, the
 successor of spine-html, poses `skeleton.model.json` with rigc's own core and
 links no Spine runtime; it was seen importing the core's files through the
-`./*.ts` courtesy, which promises nothing, and `rig-c/render` — the one named
+`./*.ts` courtesy (removed in 3.0), and `rig-c/render` — the one named
 entry that poses — needs the runtime. So `rig-c/core` names the poser:
 `src/core/entry.ts`, a module that only re-exports, so the core's files keep
 their names and the entry moves with them. Observed in rig-play, issue #1275
@@ -1334,7 +1344,7 @@ What is **not** promised, so nobody reads more into an entry than is there:
   dependant's own type check, and since #1212 that check is run against the
   candidate before a release is approved (*Cutting a release*, step 4) — by
   hand, for the one dependant it names.
-- **The paths behind the patterns** — below.
+- **Unlisted package subpaths** — refused since 3.0; use the migration table below.
 
 `rig-c/render` loads `@esotericsoftware/spine-core` when it is imported,
 and since 2.0.0 the package declares the runtime as a devDependency only
@@ -1347,37 +1357,60 @@ imports every listed entry once more after taking the runtime away, and holds
 each to the column above — an entry that stops needing the runtime is as red
 as one that starts.
 
-⏳ Every other key is a **courtesy**, and says so by being a pattern: up to
-`v1.2.3` the package had no map, so any shipped file resolved by its path, and
-under Bun a module also resolved with its extension left off. The patterns
-keep both spellings of every shipped path working, so a dependant that
-deep-imports `rig-c/tools/plate.ts` does not meet `Cannot find module`.
-**Moving an unnamed file is not a breaking change**; the courtesy is what makes
-it survivable, not a promise that the path is stable. This section once said
-the patterns could go in `2.0.0`; `2.0.0` kept them and they are still in the
-map at 2.x. Removing them breaks every import by path, so it is a major's
-decision: not in any 2.x release, and the major that removes them says so in
-its notes.
+**3.0 resolves exact named keys only** ([#1668](https://github.com/rig-c/core/issues/1668)).
+The patterns `./*`, `./*.ts`, `./*.mjs`, `./*.cjs`, `./*.json` and `./*.md`
+are removed. A file being shipped is not permission to import its package subpath.
+For example, replace `@rig-c/core/tools/plate.ts` with `@rig-c/core/plate`;
+`@rig-c/core/src/rig.ts` with `@rig-c/core/rig`. The same map applies to every
+package alias. There is still no root `.` entry. Files already named exactly
+remain named; removing one would be another breaking change outside this card.
 
-📦 **For a dependant: import by entry, not by path.** `rig-c/plate`, not
-`rig-c/tools/plate.ts` — the two load the same module today, but the entry
-is the contract and moves with the file, while the path spelling is the
-courtesy and stops resolving the day the file moves. Since #1212 every module
-the observed dependant imports has an entry — `rig`, `mesh` and `errors` were
-the last three it reached through `./*.ts` — so it needs the courtesy for
-none of them; its switch was type-checked and built against a candidate of
-that change to the same bytes, and is that dependant's to land.
+The pre-removal main audit read all ten consumer repositories at pinned commits.
+Parts main (`38e5f574a88b2e6753a982b0ee0952dbf273a12e`) had 59 deep import or
+re-export statements over 20 paths; pose main
+(`6e7f4de51cc93cd80bfdfcdf875073f413cd05a2`) had one, in a test. The other eight
+had no bare package-subpath imports. Source, tests and tools all count;
+documentation and historical receipts were inventoried separately. Examples,
+play and trailer also have filesystem imports or reads into installed core
+files; these bypass `exports`, remain unaffected by this map change, and do
+not justify preserving a package-subpath wildcard. Each newly named route below has a measured use:
 
-⚠️ `"./*": "./*"` alone was tried and rejected: under Bun it resolves a path
-spelled in full and **1 of the 42** shipped modules spelled without its
-extension, where the package with no map resolved all 42. Bun does not try an
-array of targets either, so the fallback is spelled per extension instead.
-`bun run smoke` resolves every shipped path both ways from the install. Its
-battery removes the map and its patterns, drops each protected named entry,
-renames a listed symbol, forks the parser's error class from its entry's,
-stubs the renderer read sampler while keeping it callable, and puts a node
-import in the core's closure, which only the browser bundle can see. The
-battery in `scripts/install_smoke.ts` is the checked list.
+| Former path after the package name | Named replacement | Measured need / disposition |
+| --- | --- | --- |
+| `/tools/plate.ts`, `/tools/font5x7.ts` | `/plate`, `/font5x7` | parts PNG codec, APNG and drawing tools; existing entries |
+| `/src/transform.ts`, `/src/png.ts`, `/src/rig.ts`, `/src/errors.ts`, `/src/compile.ts` | `/transform`, `/png`, `/rig`, `/errors`, `/compile` | parts coordinate and header helpers, parsers and error identity; existing entries; record `RIG_BONE_INHERIT` and its types |
+| `/src/render.ts` | `/render` | parts selftest samples; existing eager runtime requirement retained |
+| `/src/render_shared.ts` | `/render-shared` | parts contact and acceptance tools; record the `GeometryFile` type beside the existing reads |
+| `/src/core/world.ts`, `/src/core/animation.ts` | `/core` | parts rig rotation uses `RUNTIME_PI`; its test uses `IRR_OFFSET`; re-export those same constants, not copies |
+| `/src/deformgen.ts` | `/deformgen` | parts turn and coverage use `evaluateDeformTransform`, `DeformTransform` |
+| `/src/environment.ts` | `/environment` | parts check and tests use `ENVIRONMENT_SPEC`, `EnvironmentError`, `environmentResponse`, `readEnvironmentSchedule` |
+| `/src/motion.ts`, `/src/types.ts` | `/motion` | parts depth/neck/limb tools use `parseMotionSpec`, `MotionSpec`; expose the type here rather than naming every format type |
+| `/src/passthrough.ts` | `/passthrough` | parts turn coverage and overlap use `DRAWN_ALPHA` |
+| `/src/stop.ts` | `/stop` | parts check, remesh and tests use `expandStops` |
+| `/src/meshrasters.ts` | `/meshrasters` | parts policy surveys use `artRastersOf`, `stepRastersOf` |
+| `/src/seam.ts` | `/seam` | parts contact and acceptance tools use `seamsOf`, `SeamFile` |
+| `/src/folds.ts` | `/folds` | parts acceptance tool uses the `FoldsFile` type |
+| `/src/model.ts` | `/model` | pose's walk-height test uses `modelDocument`; the existing serialization function is unchanged |
+| `/package.json` | `/package.json` retained | existing metadata API; consumers resolve compiler version and runtime requirements through it |
+| `/LICENSE` | `/LICENSE` retained | existing exact document key, read as MIT text by the installed smoke; removing it is outside the six-pattern removal |
+| `/bin/rigc`, `/tools/png_probe` | same exact keys retained | existing launcher and PNG helper entries; smoke spawns the launcher and decodes a pixel through the helper; neither needs a pattern |
+
+The nine added module entries need no Spine runtime installed beside the package.
+The smoke records the measured values and types in `OBSERVED_SYMBOLS`, imports
+every module, reads the licence and JSON metadata, and resolves/spawns both CLI
+entries. Its installed map must equal the exact key table, so a new exact key
+cannot silently miss the probe. Every other shipped subpath, with and without a
+module extension, must fail resolution by name. The `add-export-pattern` plant
+restores `./*.ts` only in a disposable packed copy and must make that refusal
+sweep go red; the fixture itself now imports `/plate`. The remaining named-entry,
+symbol, error-identity, renderer-read and browser-closure plants remain in the battery.
+
+The CLI profile migration is independent of imports: replace `--profile spine-html`
+with `--profile rig-play`. The removed spelling is a usage error (exit 2), listing
+`spine, rig-play`; gate suppliers also refuse the removed spelling by name.
+The replacement keeps every assertion and its membership. Consumer-owned aliases
+that normalize to `rig-play` before calling core still work; old core alias-success
+tests must change.
 
 ### Whether the tarball runs
 
@@ -1706,9 +1739,11 @@ the repository secret `RELEASE_PLEASE_TOKEN`, and the workflow picks it up
 (`secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN`). The cost is a
 credential to rotate.
 
-## Queued for 3.0.0
+## Removed in 3.0.0
 
-A major is cut when this list is worth cutting, not on a schedule.
+1. The six courtesy export patterns are removed ([#1212](https://github.com/rig-c/core/issues/1212), [#1668](https://github.com/rig-c/core/issues/1668)); import the exact named replacement in [The import surface](#the-import-surface).
+2. The `--profile spine-html` alias and `PROFILE_ALIASES` are removed ([#1277](https://github.com/rig-c/core/issues/1277), [#1405](https://github.com/rig-c/core/pull/1405), [#1586](https://github.com/rig-c/core/issues/1586)); pass `--profile rig-play` for the same rules.
 
-1. **Removing the `./*.ts` courtesy keys from `exports`** ([#1212](https://github.com/rig-c/core/issues/1212), [The import surface](#the-import-surface)) — removing the pattern keys (`./*`, `./*.ts`, `./*.mjs`, `./*.cjs`, `./*.json`, `./*.md`) breaks every deep import by path, so it is reserved for a major rather than any `2.x` release.
-2. **Removing the `--profile spine-html` alias** ([#1277](https://github.com/rig-c/core/issues/1277) / [#1405](https://github.com/rig-c/core/pull/1405) / [#1586](https://github.com/rig-c/core/issues/1586)) — removing a CLI `--profile` value (and `PROFILE_ALIASES` entry) that consumer scripts pass is a breaking change; `2.x` accepts it as `--profile rig-play` and prints the deprecation line on stderr until the next major release.
+## Queued for the next major
+
+Empty. A major is cut when this list is worth cutting, not on a schedule.

@@ -386,7 +386,7 @@ function rigFigures(stats: Record<string, number | string>, read: ReadDocument |
  * pass one.
  */
 export function validateModel(given: ModelValidateInput, plant: Partial<ModelSupply> = {}): ModelReport {
-  // A former profile name reads as its profile (issue #1277), for the policy switches and the report alike.
+  // Refuse unknown and removed profiles before choosing policy or writing a report (issue #1668).
   const input: ModelValidateInput = { ...given, profile: resolveProfile(given.profile, 'the model side') };
   const supply: ModelSupply = { ...MODEL_SUPPLY, ...plant };
   const h = verdictHarness(input.profile, { ...ASSERTION_KIND, ...MODEL_PARSE_KIND }, 'the model side');

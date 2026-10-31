@@ -266,7 +266,7 @@ controls run in CI. Do not raise the cap to accommodate a feature paragraph.
 - **`exports` in `package.json` is the second allowlist**: `files` says what
   ships, `exports` says what a dependant may import, and RELEASING.md *The
   import surface* says which entries are API, which symbols of them are
-  promised, and which keys are a courtesy until a major. `bun run smoke` is
+  promised; since 3.0 only exact named keys resolve. `bun run smoke` is
   what reads it, from an install.
 - Spine data generations — `docs/GENERATIONS.md` is the policy (detect from
   `skeleton.spine`, never guess, play on the matching runtime, the editor is the

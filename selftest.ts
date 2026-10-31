@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import * as poseSearch from './src/pose.ts';
 import { runExtremesSuite } from './selftest_extremes.ts';
+import { runTextureScaleSuite } from './selftest_texture_scale.ts';
 import { alphaClipInputs, writeAlphaClipFixture, apertureDepthLevel, ALPHA_CLIP_FIXTURE } from './fixtures/alpha_clip.ts';
 import { buildAlphaClipProof, proveAlphaClipBuild, clipRoundingWorld, ALPHA_CLIP_BOUNDS } from './tools/alpha_clip_proof.ts';
 import { refuseClipCrossing, refuseClipDegeneracy, clipCarriers } from './src/alpha_clip.ts';
@@ -148346,6 +148347,7 @@ function main(): void {
   tally.of('pass-through', runPassThroughSuite);
   tally.of('seam', runSeamSuite);
   tally.of('extremes', () => runExtremesSuite(reportCase));
+  tally.of('texture-scale', () => runTextureScaleSuite(reportCase));
   tally.of('whirl', runWhirlSuite);
   tally.of('render-viewport', runRenderViewportSuite);
   tally.of('angle-range', runAngleRangeSuite);

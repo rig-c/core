@@ -503,7 +503,7 @@ export function spinePoser(data: SkeletonData): Poser {
     slots: data.slots.map((slot) => ({ name: slot.name, bone: slot.boneData.name })),
     subset: (opts, skin) => slotSubsetOf(data, opts, skin),
     setup: (skin) => spinePosed(setupPosed(data, skin)),
-    animation: (name, skin, fps, count, visit, environment) => {
+    animation: (name, skin, fps, count, visit, environment, _channels, times) => {
       const skeleton = skeletonUnderSkin(data, skin);
       const state = new AnimationState(new AnimationStateData(data));
       // Not looping: the last frame sits at the animation's duration, and a looping
@@ -516,10 +516,11 @@ export function spinePoser(data: SkeletonData): Poser {
       const posed = spinePosed(skeleton);
       for (let i = 0; i <= count; i++) {
         if (i > 0) {
-          state.update(step);
+          const delta = times === undefined ? step : times[i] - times[i - 1];
+          state.update(delta);
           state.apply(skeleton);
           setSkeletonEnvironment(skeleton, environment?.(i));
-          skeleton.update(clock);
+          skeleton.update(times === undefined ? clock : physicsClockStep(delta));
           skeleton.updateWorldTransform(Physics.update);
         } else {
           state.apply(skeleton);
@@ -723,7 +724,7 @@ function drawPieces(skeleton: Skeleton, draw: DrawOptions): Piece[] {
       continue;
     }
     const drawn = subset === undefined || named === undefined || named.has(slot.data.name) === (subset.mode === 'slots');
-    const piece = drawn ? pieceOf(skeleton, slot, draw.texture, clipper) : null;
+    const piece = drawn ? pieceOf(skeleton, slot, draw.texture, clipper, draw.regionInfo) : null;
     if (piece !== null) pieces.push(piece);
     clipper?.clipEnd(slot);
   }
@@ -743,6 +744,7 @@ function pieceOf(
   slot: Slot,
   withTexture: boolean,
   clipper: SkeletonClipping | null,
+  withRegionInfo = false,
 ): Piece | null {
   const pose = slot.appliedPose;
   const attachment = pose.attachment;
@@ -765,7 +767,9 @@ function pieceOf(
   const darkPose = pose.darkColor;
   const dark: [number, number, number] | undefined =
     darkPose === null ? undefined : [darkPose.r, darkPose.g, darkPose.b];
-  const common = { tint, dark, slot: slot.data.name, page: region.page.name };
+  const common = { tint, dark, slot: slot.data.name, page: region.page.name,
+    ...(withRegionInfo && !isMesh ? { regionInfo: { attachment: attachment.name, region: region.name, index: region.index, width: region.width, height: region.height } } : {}),
+  };
   const texture = withTexture ? artUvsOf(attachment, region) : undefined;
   const uvs = attachment.sequence.getUVs(index);
 

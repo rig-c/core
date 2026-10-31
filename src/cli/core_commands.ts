@@ -1,3 +1,4 @@
+import { textureScaleReading, textureScaleLines, TEXTURE_SCALE_FPS } from '../texture_scale.ts';
 import { extremesOf, extremesText, extremesPlate, extremesLine, extremesRefusal } from '../extremes.ts';
 /**
  * The bodies of the commands that reach nothing of spine-core — `explain`,
@@ -53,7 +54,7 @@ import { writeWhole } from './write_whole.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
 import { ATLAS_ABSENT, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 
@@ -1252,6 +1253,40 @@ export function physicsLine(stepped: readonly string[], declared: readonly strin
   if (idle.length === 0) return head;
   const why = frames === 1 ? 'a single pose takes no step' : 'inactive, or a mix of 0, on every frame';
   return `${head} — ${idle.length} of the ${declared.length} declared took none: ${idle.map((n) => JSON.stringify(n)).join(', ')} (${why})`;
+}
+
+/** Warning-only reading, independent of build and of raster output. */
+export function cmdTextureScale(flags: Record<string, string>): void {
+  const accepted = ['candidate', 'atlas', 'skin', 'fps', 'poser', 'json', 'help'];
+  const stray = Object.keys(flags).filter(k => !accepted.includes(k));
+  if (stray.length > 0) throw new UsageError(`texture-scale takes no --${stray.join(', --')}; use texture-scale --help`);
+  if (flags.candidate === undefined) throw new UsageError('texture-scale needs --candidate <dir | skeleton.json>');
+  const fps = readPositiveNumber(flags, 'fps', TEXTURE_SCALE_FPS, 1);
+  const { skeletonPath, atlasPath, atlasText } = resolveDrawable(flags.candidate, flags.atlas);
+  if (flags.json !== undefined) {
+    const target = realpathAhead(flags.json);
+    const within = relative(realpathSync(dirname(skeletonPath)), target);
+    if (within === '' || (within !== '..' && !within.startsWith(`..${sep}`) && !isAbsolute(within))) {
+      throw new UsageError('--json must name a report outside the candidate directory; texture-scale never writes into a build');
+    }
+    if (existsSync(target)) {
+      let isReport = false;
+      if (statSync(target).isFile()) {
+        try { isReport = (JSON.parse(readFileSync(target, 'utf8')) as { spec?: unknown }).spec === 'rigc-texture-scale/1'; } catch { /* An existing non-report is never replaced. */ }
+      }
+      if (!isReport) throw new UsageError('--json target exists and is not a rigc-texture-scale/1 report; name a new file outside the candidate directory');
+    }
+  }
+  const skeletonText = readSkeletonText(skeletonPath);
+  const candidate = loadCandidate({ skeletonText, atlasText, atlasDir: dirname(atlasPath), label: skeletonPath },
+    { skeleton: skeletonPath, atlas: atlasPath }, posersAsked(flags));
+  readPoserFlag(flags);
+  const skin = readSkinFlag(flags, [...candidate.facts.skins]);
+  refuseUnchosen(candidate.choice);
+  const read = throughPoser(candidate.choice, poser => textureScaleReading(poser, candidate.pages, skeletonText, fps, skin));
+  console.log(`poser: ${read.note}`);
+  for (const line of textureScaleLines(read.value.report)) console.log(line);
+  if (flags.json !== undefined) writeJson(flags.json, read.value.report);
 }
 
 /** Where `inspect` writes when `--out` is not given, and the name it takes inside a directory `--out` names. */
@@ -2679,6 +2714,7 @@ export const CORE_COMMAND_RUNS: Readonly<Record<string, CommandRun>> = {
   check: ({ flags }) => cmdCheck(flags),
   render: ({ flags }) => cmdRender(flags),
   inspect: ({ flags }) => cmdInspect(flags),
+  'texture-scale': ({ flags }) => cmdTextureScale(flags),
   pose: ({ flags }) => cmdPose(flags),
   chainfit: ({ flags }) => cmdChainFit(flags),
   guide: ({ flags, positional }) => cmdGuide(flags, positional),

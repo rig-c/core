@@ -588,7 +588,7 @@ material, like the gallery: a clone runs them.
 | `ingest` | Read a skeleton back into specs. [`ingest` in the CLI reference](docs/AUTHORING.md#cmd-ingest) |
 | `split` | Separate disconnected mesh pieces. [`split` in the CLI reference](docs/AUTHORING.md#cmd-split) |
 | `explain` | Print the compiled rig as a table. [`explain` in the CLI reference](docs/AUTHORING.md#cmd-explain) |
-| `render` | Write PNG frames and a contact sheet. [`render` in the CLI reference](docs/AUTHORING.md#cmd-render) |
+| `render` | Write PNG frames and a contact sheet, or a named dial’s geometry-only parallax reading. [`render` in the CLI reference](docs/AUTHORING.md#cmd-render) |
 | `preview` | Write a playable HTML preview. [`preview` in the CLI reference](docs/AUTHORING.md#cmd-preview) |
 | `vote` | Make a ballot and record its answer. [`vote` in the CLI reference](docs/AUTHORING.md#cmd-vote) |
 | `pose` | Read part placements from a picture. [`pose` in the CLI reference](docs/AUTHORING.md#cmd-pose) |

@@ -1066,6 +1066,7 @@ const FLAG_MEANINGS: Record<string, string> = {
     'Each frame with a moving pair also gets an outline plate, overlaps-f<NNNN>.png: every slot in a moving pair as its contour in its own ' +
     'colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the ' +
     "author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Not with --slot/--hide",
+  parallax: 'read one named slider dial through the core poser on 9 evenly spaced values: parallax.json plus setup/extreme/diff/affine-residual heat-map parallax.png; geometry only, no assertion or pass threshold. A separate dial render mode; takes no animation, fps, other diagnostics, sheet, subset, environment or viewport flags',
   'extremes-only': 'write only extremes.json and readable extremes.png per set, with the same posed grid and bytes as --extremes; no ordinary frame PNGs, contact.png or frames.json. Implies --extremes; takes no --sheet, --sheet-format, --page-edges, --geometry, --folds, --pass-through, --seam, --overlaps or --angle-range',
   extremes: 'also write extremes.json and a native six-panel extremes.png per set: setup, geometry-pair min/max and premultiplied RGBA diffs, with a legend. Per-channel extrema are recorded separately and valid channels survive geometry/image SKIPs; channel refusals are named separately. Still geometry reports SKIP; a reading, not a gate. Attachment identity/count changes record a named SKIP without changing render exit; supports --slot/--hide on both posers',
   seam:
@@ -1297,6 +1298,7 @@ const FLAG_VALUES: Record<string, string> = {
   'pass-through': '<cloth>:<leg>[,<cloth>:<leg>…]',
   seam: '<slot>:<slot>[,<slot>:<slot>…]',
   'angle-range': '<bone>:<relative-to>[,…]',
+  parallax: '<dial>',
   'sheet-format': 'json-hash',
   'viewport-from': '<frames.json|dir>',
   reference: '<dir|skeleton.json>',
@@ -1763,12 +1765,13 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --environment <schedule.json>   (the wind and gravity the physics answers, in time)',
       'rigc render … --pass-through <cloth>:<leg>[,…]   (the frames where a cloth drawn over a leg passes through it)',
       'rigc render … --seam <slot>:<slot>[,…]   (joint gaps, visible ghosts and each named slot’s background exposure)',
+      'rigc render … --parallax <dial>   (geometry reading on the named dial, model/core only)',
       'rigc render … --overlaps   (which slot each frame drew over which, by name, with an outline plate)',
       'rigc render … --angle-range <bone>:<relative-to>[,…]   (how far a bone turns against another, per animation)',
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
       'rigc render … --sheet [--sheet-format json-hash] [--page-edges pot|free]   (deterministic sprite sheets + JSON hash table + sheet-manifest.json per set)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'parallax', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'poser', 'out'],
     overrides: {
       'page-edges': {
         meaning:

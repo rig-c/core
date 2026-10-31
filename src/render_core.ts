@@ -1,3 +1,4 @@
+import type { DialOverride } from './core/hooks.ts';
 import { localChannels, deformChannels, identifyAttachment } from './render_channels.ts';
 import type { ChannelValue } from './render_shared.ts';
 /**
@@ -102,7 +103,7 @@ import { atlasRegionLookup, parseAtlasText } from './atlas.ts';
 import { pagesOfAtlas, spineFileSha256, type ModelPage } from './model.ts';
 import { clipThrough, type ClipShape, type ShapeClipper } from './core/clipping.ts';
 import { activeBones, CoreInputError, readModel, sourceOfDoc, underNoSkin, underSkin, type CompiledDocument, type CoreSlotRow } from './core/index.ts';
-import { PHYSICS_CLOCK_LEAD, physicsClockStep, poseRawAnimationEach, poseRawSetup, type RawDrawn, type RawPose, type StepEnvironment } from './core/raw.ts';
+import { PHYSICS_CLOCK_LEAD, physicsClockStep, poseRawAnimationEach, poseRawDial, poseRawSetup, type RawDrawn, type RawPose, type StepEnvironment } from './core/raw.ts';
 import type { TimelinePlant } from './core/animation.ts';
 import { stepPhysics, type PhysicsStepper } from './core/constraints_physics.ts';
 import { CORE_DEFAULT_SKIN, lookupSkins } from './core/skins.ts';
@@ -733,7 +734,7 @@ export function corePoser(
   skeleton?: { path: string; bytes: Uint8Array },
   through: ShapeClipper = clipThrough,
   plants: CorePoserPlants = {},
-): Poser {
+): Poser & { dial(name: string, override: DialOverride, skin?: string): { posed: Posed; read: number | null; applied: number } } {
   const doc = readModel(modelText, where);
   // The document poses the rig it was built with; the Spine file beside it must be that build's (issue #968).
   if (skeleton !== undefined) {
@@ -775,6 +776,11 @@ export function corePoser(
     bones: doc.bones.map((b) => ({ name: b.name, parent: b.parent ?? null })),
     slots: doc.slots.map((s) => ({ name: s.name, bone: s.bone })),
     subset: (opts, skin) => subsetOver(roster, opts, skin),
+    dial: (name, override, skin) => {
+      const input = inputOf(skin);
+      const result = poseRawDial(input.doc, override, name, { through });
+      return { posed: corePosed(input, result.pose, through, []), read: result.read, applied: result.applied };
+    },
     setup: (skin, channels) => {
       const input = inputOf(skin);
       let values: ChannelValue[] | undefined;

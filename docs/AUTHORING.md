@@ -378,6 +378,7 @@ What the flags mean:
 | `--show`, `--dim`, `--at`, `--zoom` | `inspect` only — what it draws, whether the art is faded, which times of `--animation` it poses and the bone, slot or folds it frames to; §13 says each, with the refusals |
 | `--geometry` | `render` only: also write a `geometry.json` into each frame directory — per frame, every bone's world transform and every slot's region or mesh vertices in world units after skinning, plus each attachment's rest geometry and topology, on the frames' own grid and viewport. Every other file is byte for byte what the render writes without it. Refused with `--slot`/`--hide`, because the geometry is the whole pose whatever is drawn — **§8.2** |
 | `--extremes-only` | `render` only: imply `--extremes`, but write only `extremes.json` and readable `extremes.png` with the same bytes. Pose the same grid; rasterize only the setup/min/max pictures used by the plate. No ordinary frame PNGs, contact sheet or `frames.json`. Takes no `--sheet`, `--sheet-format`, `--page-edges`, `--geometry`, `--folds`, `--pass-through`, `--seam`, `--overlaps` or `--angle-range`; drop the named flag or use `--extremes` instead — **§8.11** |
+| `--parallax` | `render` only: a named slider dial, through the core poser. Write `parallax.json` and a readable `parallax.png` into `--out` on a fixed 9-value grid. This is a separate dial render mode, with `--skin`, `--max`, `--candidate`, `--atlas` and `--poser core`; it takes no animation, fps, subset, other diagnostic, sheet, environment or viewport flag. A missing dial is refused by name; unavailable fits report SKIP, never a pass — **§8.12** |
 | `--extremes` | `render` only: add `extremes.json` and an `EXTREMES` line per set; a moving set with comparable geometry and readable images also gets a native six-panel `extremes.png`: setup, geometry-pair min/max and three premultiplied RGBA diffs with a legend. Per-channel extrema are independent of that geometry pair; valid channels survive geometry/image SKIPs, and channel refusals are named separately. Still or uncomparable geometry is a named SKIP, with no invented pair or PNG; observation failures do not change a successful render's exit status. Supports `--slot`/`--hide` on both posers, on the whole rig's viewport. Without the flag, no extremes observations are added — **§8.11** |
 | `--folds` | `render` only: also read which mesh triangles **fold** — turn over against the setup pose — and write a `folds.json` into each frame directory: per mesh, the frames with a folded triangle, the worst frame's count and which triangles, by index, with their world box and setup-pose area. One printed line per mesh that folds; a triangle degenerate or inverted at the setup pose is said once and never counted. A reading, not a gate. Every other file is byte for byte what the render writes without it, `geometry.json` included. Refused with `--slot`/`--hide`, for `--geometry`'s reason — **§8.3** |
 | `--pass-through` | `render` only: `<cloth>:<leg>[,<cloth>:<leg>…]` — also read where each cloth slot **passes through** its leg slot, and write a `pass-through.json` into each frame directory: the frames where the cloth draws over the leg and its drawn side lies inside the leg's drawn outline by 2 steps or more, each with the depth and the world box. One printed line per pair, and one per frame that passes through. The first name must draw over the second for a frame to be read — the declared order, never both. A reading, not a gate. Every other file is byte for byte what the render writes without it. An unknown slot, a slot that draws on no frame, a malformed list and a pair named twice are refused by name, and so is `--slot`/`--hide` beside it — **§8.5** |
@@ -9733,6 +9734,78 @@ channels. Channel failures are reported separately as described above.
 Without `--extremes` the existing frames and files are unchanged. The flag adds
 its observations alongside them. A SKIP removes a stale `extremes.png` for that
 set so an earlier pair cannot masquerade as the current reading.
+
+### 8.12 Geometry of a value-driven turn — `render --parallax <dial>`
+
+```sh
+bun cli_core.ts render --candidate gallery/look/build --parallax yaw --max 640 --out parallax/
+```
+
+This reads a **slider constraint name**, not its animation or driving bone name.
+It writes `parallax.json` (`rigc-parallax/1`) and, when the images and extremes
+are readable, `parallax.png` at the output root. Use a dedicated output directory;
+no ordinary frames or `frames.json` are written in this mode. An unavailable
+picture removes an earlier `parallax.png` and leaves a named JSON SKIP. Ordinary
+render without the flag keeps its files and posing path unchanged.
+
+On current compiled models, depth coherence and near/far travel always report
+SKIP: this adapter supplies neither per-vertex depth nor a world projection axis.
+Geometry residuals and layer spread are still read from the posed vertices.
+
+Only a rigc build with a matching `skeleton.model.json`, posed by the core, is
+accepted; a Spine export, mismatched model or `--poser spine` is refused. Keep the
+model beside the build, or rebuild it. A missing slider is refused by name with
+the available slider names. `--animation`, `--fps`, subset, other diagnostics,
+sheet, environment and viewport flags are refused together rather than ignored.
+`--skin` selects the same skin as ordinary render; `--max` sizes the picture.
+
+The setup pose and nine evenly spaced dial values are independent reset poses,
+not a track playing the lookup animation. Other inputs stay at setup; all
+constraints are applied, and other sliders may respond to the driven bone or its
+constraint chain. Physics is reset at every value. A bone-driven dial uses `from..max` when the model states
+`max`; without it the last animation time is inverted through the mapping. A
+bone-less slider uses `0..duration`, in seconds. The grid is numerically ascending even for a negative mapping; the declared
+endpoints remain in `sampling.range`. The JSON states the exact grid,
+requested values, actual applied times, drive field and setup value. The core's
+existing dial override preserves the bones' setup values for additive/nonadditive
+blends. Local properties are driven directly; a world property is solved through
+a responsive local field and verified against the actual property and mapped
+time. Unreachable values (including world rotation wrapping), inactive sliders
+or a zero/nonfinite range are named; no successful drive is invented.
+
+Every **sample is fitted separately** from setup positions to that sample's
+positions. Fitting displacements as though they were positions, or pooling
+different dial values into one map, is a different question and is not done.
+
+| JSON reading | Definition and unavailable cases |
+| --- | --- |
+| `samples[].meshes[].affine` | Forward geometric least squares, normalized with independent centroids and isotropic RMS scales, solved by reorthogonalized QR. World residual RMS divided by world RMS setup-to-sample motion over the same vertices. |
+| `homography` | A normalized inhomogeneous linear initializer and an affine initializer, each refined for up to 80 damped geometric least-squares iterations. Report the smallest finite **forward geometric** residual found, not the algebraic initializer objective. This is a local numerical fit, **not a certified global optimum**. |
+| `layers.spread` | One affine fit over the whole comparable rig, regions and meshes including stationary layers. Compute each layer's mean residual vector, then the unweighted RMS distance of those vectors from their mean, in world px. `ratio` divides by the whole fit's RMS motion. One layer is insufficient. Dense meshes influence the whole fit more; the spread itself weights layers equally. |
+| `depth` | Signed Spearman with average ranks between declared per-vertex depth and setup-to-sample motion projected onto a declared world turn axis. Opposite extrema can reverse the sign. Constant depth or constant projected motion has undefined correlation. Near/far travel means RMS travel of vertices at the maximum/minimum declared depth divided by absolute dial distance from setup, in world px per dial unit. A generic slider declares no turn axis. Current compiled models retain depth summaries and provenance, **not vertex depth samples**, so these quantities are explicitly SKIP; neither a summary range nor motion is used to reconstruct depth. |
+
+Meshes appearing without setup correspondence are named SKIPs, not omitted.
+No vertices, unequal vertex counts, missing attachments, singular maps, deficient
+fit rank and nonfinite coordinates report named SKIPs. A stationary or unresolved
+RMS-motion denominator reports SKIP with a null ratio. Affine fits with at most
+three correspondences and homographies with at most four are saturated, so their
+ratios are unavailable: four nondegenerate points can fit arbitrary motion, and
+zero there cannot test paper. Numeric tolerance is a resolution check, never a
+quality threshold. `READ` means a measurement was obtained; there is no PASS.
+
+The picture has six panels at one fitted pixel scale: setup, dial minimum, dial
+maximum, premultiplied RGBA absolute max/min difference, and two affine-residual
+heat maps at original mesh vertices. Blue is zero, red is the largest world
+residual across those two maps, with that value in the legend; unavailable
+vertices stay dark. An empty or unreadable picture never supplies a score.
+
+**This cannot certify volume.** A rigid flat sheet under orthographic projection
+is affine; a perspective sheet is projective. But sloped depth can also be affine,
+and an articulated collection of flat surfaces need not share a map. Nonlinear
+2D warps can produce large residuals without depth. The reading measures geometry,
+not draw order, colour, occlusion, tears, ghost lines or rendered optical flow.
+Compare the two fits, the per-sample curves and an explicit control before
+attributing residual to relief. No assertion, pass mark or build gate is added.
 
 ## 9. Checking against the frames — `rigc check`
 

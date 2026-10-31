@@ -1,3 +1,4 @@
+import { sampleParallax, parallaxPlate } from '../parallax_render.ts';
 import { extremesOf, extremesText, extremesPlate, extremesLine, extremesRefusal } from '../extremes.ts';
 /**
  * The bodies of the commands that reach nothing of spine-core — `explain`,
@@ -775,6 +776,36 @@ export function cmdRender(flags: Record<string, string>): void {
     { skeleton: skeletonPath, atlas: atlasPath },
     posersAsked(flags),
   );
+  if (flags.parallax !== undefined) {
+    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'viewport', 'viewport-from']) {
+      if (flags[flag] !== undefined) throw new UsageError(`--parallax takes no --${flag}: it samples one named dial on its own 9-value grid; drop --${flag} or run ordinary render separately`);
+    }
+    if (flags.poser !== undefined && flags.poser !== 'core') throw new UsageError('--parallax requires --poser core: it reads only a rigc compiled model');
+    const modelText = modelTextBeside(skeletonPath, skeletonText);
+    if (modelText === undefined || choice.core === null) throw new UsageError('--parallax requires a matching skeleton.model.json and the core poser; rebuild the candidate and keep its model beside skeleton.json');
+    const selectedSkin = readSkinFlag(flags, [...facts.skins]);
+    let result: ReturnType<typeof sampleParallax>;
+    try { result = sampleParallax(modelText, atlasText ?? '', flags.parallax, selectedSkin); }
+    catch (error) {
+      if (error instanceof CoreInputError) throw new UsageError(error.message);
+      throw error;
+    }
+    let picture: Plate | null = null;
+    try {
+      picture = parallaxPlate(result, pages, maxSide);
+      if (picture !== null) result.reading.picture = { status: 'READ', reason: 'setup, dial extremes, diff and affine residual heat maps', file: 'parallax.png' };
+    } catch (error) { result.reading.picture.reason = `picture unavailable: ${error instanceof Error ? error.message : String(error)}`; }
+    mkdirSync(outRoot, { recursive: true });
+    writeFileSync(join(outRoot, 'parallax.json'), JSON.stringify(result.reading, null, 2) + '\n');
+    if (picture !== null) picture.writePng(join(outRoot, 'parallax.png'));
+    else rmSync(join(outRoot, 'parallax.png'), { force: true });
+    console.log(`  ..    poser core — named dial ${JSON.stringify(flags.parallax)}, independent reset poses`);
+    console.log(`  ..    PARALLAX ${JSON.stringify(flags.parallax)} ${result.reading.status}: ${result.reading.reason} -> ${outRoot}`);
+    for (const sample of result.reading.samples) {
+      for (const mesh of sample.meshes) console.log(`  ..    PARALLAX ${JSON.stringify(mesh.slot + '/' + mesh.attachment)} dial=${sample.value} affine=${mesh.affine.ratio ?? 'SKIP'} homography=${mesh.homography.ratio ?? 'SKIP'}`);
+    }
+    return;
+  }
   const only = readAnimationFlag(flags, [...facts.animations]);
   const skin = readSkinFlag(flags, [...facts.skins]);
   const subset = readSlotSubsetFlags(flags, facts, skin);

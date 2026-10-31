@@ -481,7 +481,7 @@ export function poseRawSetup(doc: CompiledDocument, plant: CorePlant = {}): RawP
 export function poseRawDial(doc: CompiledDocument, override: DialOverride, slider: string, plant: CorePlant = {}): { pose: RawPose; read: number | null; applied: number } {
   const result = poseDial(doc, override, slider);
   const { world, shown } = result;
-  const drawOrder = shown.map((s) => s.slot);
+  const drawOrder = [...result.drawOrder];
   const drawn = rawDrawn(result.doc, shown, world, drawOrder, plant);
   return { read: result.read, applied: result.applied, pose: {
     trackTime: 0, animationTime: 0, bones: rawBones(result.doc, world), slots: [...result.slots], drawOrder,

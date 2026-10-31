@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 import { Plate } from './tools/plate.ts';
 /** Fixed controls for the geometry reading in #1662; no quality threshold. */
 import { sampleParallax } from './src/parallax_render.ts';
+import { readModel } from './src/core/index.ts';
+import { poseRawSetup, poseRawDial } from './src/core/raw.ts';
 import { fitMotion, parallaxOf, parallaxText, spearman, type ParallaxMesh } from './src/parallax.ts';
 
 type Say = (name: string, ok: boolean, detail: string, why: string) => number;
@@ -99,6 +101,34 @@ export function runParallaxSuite(report?: Say): number {
     say('PLX19_ORDINARY_RENDER_HAS_NO_READING', plain.status === 0 && !existsSync(join(work, 'plain', 'parallax.json')), `ordinary exit ${plain.status}`);
     const incompatible = render('bad', ['--parallax', 'yaw', '--animation', 'turn']);
     say('PLX20_INCOMPATIBLE_GRID_FLAG_NAMED', incompatible.status === 2 && incompatible.stderr.includes('--animation'), incompatible.stderr.slice(-300));
+    const clipRig = { ...rig,
+      bones: [...rig.bones, { name: 'late', parent: 'root', x: 64 }],
+      slots: [{ name: 'clip', bone: 'root', attachment: 'clip' }, ...rig.slots,
+        { name: 'end', bone: 'root', attachment: null }, { name: 'late', bone: 'late', attachment: 'late' }],
+      skins: { default: { ...rig.skins.default,
+        clip: { clip: { type: 'clipping', vertexCount: 4, vertices: [-8, -8, -8, 8, 8, 8, 8, -8], end: 'end' } },
+        late: { late: { image: 'paper.png' } },
+      } },
+    };
+    writeFileSync(join(work, 'clip.rig.json'), JSON.stringify(clipRig));
+    const clipDir = join(work, 'clip');
+    const clipBuild = run('cli_core.ts', ['build', '--rig', join(work, 'clip.rig.json'), '--motion', join(work, 'motion.json'), '--out', clipDir, '--copy-images']);
+    let clipOk = false, clipDetail = `build ${clipBuild.status}; ${clipBuild.stderr.slice(-400)}`;
+    if (clipBuild.status === 0) {
+      const text = readFileSync(join(clipDir, 'skeleton.model.json'), 'utf8');
+      const doc = readModel(text), setup = poseRawSetup(doc);
+      const dial = poseRawDial(doc, { bone: 'dial', field: 'rotation', value: 0 }, 'yaw').pose;
+      const sampled = sampleParallax(text, readFileSync(join(clipDir, 'skeleton.atlas'), 'utf8'), 'yaw');
+      const setupLate = sampled.setup.pieces.filter((p) => p.slot === 'late');
+      const sampleLate = sampled.frames.map((f) => f.pieces.filter((p) => p.slot === 'late'));
+      clipOk = setup.drawOrder.includes('end') && dial.drawOrder.includes('end') &&
+        !setup.clipped.some((r) => r[0] === 'late') && !dial.clipped.some((r) => r[0] === 'late') &&
+        setupLate.length === 1 && sampleLate.length === 9 && sampleLate.every((p) => JSON.stringify(p) === JSON.stringify(setupLate));
+      clipDetail = JSON.stringify({ setupOrder: setup.drawOrder, dialOrder: dial.drawOrder,
+        setupLateClipped: setup.clipped.some((r) => r[0] === 'late'), dialLateClipped: dial.clipped.some((r) => r[0] === 'late'),
+        setupLatePieces: setupLate.length, dialLatePieces: sampleLate.map((p) => p.length) });
+    }
+    say('PLX30_NULL_ATTACHMENT_END_SLOT_ENDS_CLIP_IN_DIAL_AS_IN_SETUP', clipOk, clipDetail);
     const sharedRig = { ...rig, bones: [...rig.bones, { name: 'echo', parent: 'root', y: 48 }],
       slots: [...rig.slots, { name: 'echo', bone: 'echo', attachment: 'echo' }],
       constraints: [...rig.constraints, { ...rig.constraints[0], name: 'echo', animation: 'echo' }],

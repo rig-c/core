@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/rig-c/core/compare/v2.86.0...v3.0.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** remove courtesy subpaths and the former profile for 3.0 ([#1669](https://github.com/rig-c/core/issues/1669))
+
+### Features
+
+* **api:** remove courtesy subpaths and the former profile for 3.0 ([#1669](https://github.com/rig-c/core/issues/1669)) ([c74506c](https://github.com/rig-c/core/commit/c74506cd5a79304678970f50614a4ddc57d63361))
+
 ## [2.86.0](https://github.com/rig-c/core/compare/v2.85.0...v2.86.0) (2026-10-31)
 
 

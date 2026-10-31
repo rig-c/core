@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.84.0](https://github.com/rig-c/core/compare/v2.83.0...v2.84.0) (2026-10-30)
+
+
+### Features
+
+* **seam:** report whether a joint's two pieces stay connected ([#1660](https://github.com/rig-c/core/issues/1660)) ([a2ad560](https://github.com/rig-c/core/commit/a2ad560596ed18c580bb6d05da952477f45a8e52))
+
 ## [2.83.0](https://github.com/rig-c/core/compare/v2.82.2...v2.83.0) (2026-10-30)
 
 

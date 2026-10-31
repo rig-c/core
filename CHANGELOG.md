@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.86.0](https://github.com/rig-c/core/compare/v2.85.0...v2.86.0) (2026-10-31)
+
+
+### Features
+
+* **render:** a parallax reading for value-driven turns ([#1665](https://github.com/rig-c/core/issues/1665)) ([7751daa](https://github.com/rig-c/core/commit/7751daa5a7694210909a0b02589aeb0fb19f8b52))
+
 ## [2.85.0](https://github.com/rig-c/core/compare/v2.84.0...v2.85.0) (2026-10-31)
 
 

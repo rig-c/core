@@ -702,7 +702,7 @@ runtime resolves from the package's own location.
 
 | an install with | `rigc` runs | `rigc --version` prints (stdout, then stderr) |
 | --- | --- | --- |
-| no `@esotericsoftware/spine-core` (what `npm install rig-c` gives) | `cli_core.ts` — `build` and `repack` (gated without the parse, `A00_ROUNDTRIP_PARSE` a SKIP), `explain`, `ingest`, `split`, `diff`, `check`, `render`, `inspect`, `pose`, `chainfit`, `guide`, `skills`, `review`; every other command refused by name | the version, then `entry: cli_core.ts — @esotericsoftware/spine-core absent — …` |
+| no `@esotericsoftware/spine-core` (what `npm install rig-c` gives) | `cli_core.ts` — `build` and `repack` (gated without the parse, `A00_ROUNDTRIP_PARSE` a SKIP), `explain`, `ingest`, `split`, `diff`, `check`, `render`, `inspect`, `texture-scale`, `pose`, `chainfit`, `guide`, `skills`, `review`; every other command refused by name | the version, then `entry: cli_core.ts — @esotericsoftware/spine-core absent — …` |
 | `@esotericsoftware/spine-core` installed beside it | `cli.ts` — every command, `build` through the round trip | the version, then `entry: cli.ts — @esotericsoftware/spine-core <version> present` |
 
 The commands in the first row are the set the command table derives — a

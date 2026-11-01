@@ -56,11 +56,11 @@ workspace and none of them reads `node_modules`; `rigc skills install` puts ever
 skill the package ships there, and `rigc skills --help` says what it refuses.
 
 The package links no Spine runtime. `build` writes `skeleton.json`,
-`skeleton.atlas` and `skeleton.model.json`. `preview`, `vote`, `diff`, `bench` and
-`bonedist` run through `@esotericsoftware/spine-core`: install it beside
+`skeleton.atlas` and `skeleton.model.json`. `preview`, `vote`, `bench` and `bonedist`
+run through `@esotericsoftware/spine-core`: install it beside
 the package (`bun add -d @esotericsoftware/spine-core`) and the same `rigc` runs
 them, and `build` runs the round trip as well. Without it those commands are refused
-by name, while `build`, `validate`, `explain`, `render`, `check` and `inspect`
+by name, while `build`, `validate`, `explain`, `diff`, `render`, `check` and `inspect`
 (`--poser core|spine`) run on rigc's own core over `skeleton.model.json` —
 `rigc --version` names the entry that ran (AUTHORING §0). In the parse's place that
 `build` runs two rules of its own over rigc's model document, `A00_MODEL_READ` and

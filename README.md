@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/core/main/assets/banner.svg" alt="rigc — AI-authored 2D rigging and animation, verified before it is written" width="100%" />
+  <img src="https://raw.githubusercontent.com/rig-c/core/main/assets/banner.svg" alt="@rig-c/core — AI-authored 2D rigging and animation, verified before it is written" width="100%" />
 </p>
 
 <p align="center">
@@ -7,6 +7,8 @@
   <a href="https://www.npmjs.com/package/rig-c"><img src="https://img.shields.io/npm/dm/rig-c.svg?style=flat-square&color=A855F7" alt="npm downloads" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="license" /></a>
 </p>
+
+# @rig-c/core
 
 **AI-authored 2D rigging and animation, verified before it is written.** rigc is
 a rig compiler: a rig spec and a motion spec in, skeleton data out — in the Spine 4.3

@@ -46,14 +46,20 @@ index within that same limit; only legacy uncoded library errors point at `§5.1
 ## Install
 
 ```shell
-bunx @rig-c/core --help       # run it without installing
-bun add -d @rig-c/core        # or pin it in the project; the command is `rigc`
-bun rigc skills install      # then link these skills into .agents/skills
+bunx @rig-c/core --help                  # run it without installing
+bun add -d @rig-c/core                   # or pin it in the project; the command is `rigc`
+bun rigc skills install                  # link this package's and every installed @rig-c/* package's skills into .agents/skills
+bunx @rig-c/core skills install --copy   # in a consumer without @rig-c/core installed (for example, only @rig-c/play)
 ```
 
 Codex, Gemini CLI and Antigravity read skills from `.agents/skills/` in the
-workspace and none of them reads `node_modules`; `rigc skills install` puts every
-skill the package ships there, and `rigc skills --help` says what it refuses.
+workspace and none of them reads `node_modules`; `rigc skills install` scans this
+package's `skills/` and every `node_modules/@rig-c/*/skills/<name>/SKILL.md` (and
+rig-c alias package) in the project, and `rigc skills --help` says what it refuses.
+In a consumer without `@rig-c/core` installed, run `bunx @rig-c/core skills install --copy`:
+it reaches the project's `node_modules` from the working directory and writes plain
+folders instead of linking `@rig-c/core`'s own skills into a temporary `.bunx` cache
+that can be emptied.
 
 The package links no Spine runtime. `build` writes `skeleton.json`,
 `skeleton.atlas` and `skeleton.model.json`. `preview`, `vote`, `bench` and `bonedist`
@@ -157,6 +163,18 @@ spec files field by field, the emission rules, the loop, and the failure map. Th
 | a **face** — a blink, a gaze, a head turn or a value-driven face dial | [FACE.md](https://github.com/rig-c/core/blob/main/docs/FACE.md) | `rigc-face` |
 | a **skeleton.json somebody else authored** — read it, repair it, extend it | [INGEST.md](https://github.com/rig-c/core/blob/main/docs/INGEST.md) | `rigc-ingest` |
 | you are the **person operating** the agent rather than the agent | [PROMPTING.md](https://github.com/rig-c/core/blob/main/docs/PROMPTING.md) | — |
+
+Other `@rig-c/*` packages ship their own agent skills (`node_modules/@rig-c/<pkg>/skills/<skill>/SKILL.md`), which `rigc skills install` links beside these; load that skill for its tool's flags and rules:
+
+| The request is… | Tool | Skill |
+| --- | --- | --- |
+| Turn one anime character painting and its See-through layer decomposition into a verified 2D character rig — measured parts, weighted meshes, bone chains and a looping idle | `@rig-c/parts` (`rig-parts`) | `rig-parts` |
+| Clean and retarget a body-18 (or COCO-17) pose sequence onto a rig built by `rigc` or `@rig-c/parts` — bone rotate keys, hip translate keys, leg foreshortening, alternate-drawing switches and skirt-physics fitting | `@rig-c/pose` (`rig-pose`) | `rig-pose` |
+| Hand a rig build or `rig-parts`/`rig-pose` output to a person for local inspection in a browser workspace (`rig-review open`) and retrieve their structured feedback (`rig-review feedback`), validate the delivery package (`rig-review check`), or export frame strips (`rig-review strip`) | `@rig-c/review` (`rig-review`) | `rig-review` |
+| Play a rig built by `rigc` (`skeleton.model.json`) on a web page as plain DOM or a standalone `<canvas>`, with multi-track playback, attachment sets, wind and gravity physics, bone adjustments and live-frame borrowing | `@rig-c/play` (`rig-play`) | `rig-play` |
+| Play a rig built by `rigc` (`skeleton.model.json`) inside a PixiJS 8 scene graph (`PixiRig` and `PixiRenderer`), posed through `@rig-c/play` with no Spine runtime | `@rig-c/pixi` | `rig-pixi` |
+| Play a rig built by `rigc` (`skeleton.model.json`) inside a Phaser 4.2+ WebGL scene (`PhaserRig` and `PhaserRenderer`), posed through `@rig-c/play` with shared GPU page textures and no Spine runtime | `@rig-c/phaser` | `rig-phaser` |
+| Play a rig built by `rigc` (`skeleton.model.json`) inside a native Three.js WebGL2 scene (`ThreeRig` and `ThreeRenderer`), posed through `@rig-c/play` under an orthographic or perspective camera with no Spine runtime | `@rig-c/three` | `rig-three` |
 
 Every guide linked here is in the installed package at `node_modules/@rig-c/core/docs/`,
 which is the copy that matches the rigc you run; the links go to the repository's

@@ -2211,17 +2211,161 @@ interface SkillsInstallEntry {
   target: string;
   /** `<package>/skills/<name>`. */
   source: string;
+  /** Which package the skill came from (`package.json` `name`, or its `node_modules` directory name). */
+  packageName: string;
   action: SkillsInstallAction;
   /** The link text, relative to the directory it sits in, when the entry is a link. */
   link: string;
+  /** Other copies of the same product that this copy was chosen over, when more than one copy was present. */
+  chosenOver?: Array<{ packageName: string; source: string }>;
+}
+
+export interface DiscoveredSkillSource {
+  packageName: string;
+  skillsDir: string;
+  /** Whether this source lives inside a `node_modules` tree reached walking up from `process.cwd()`. */
+  inProjectNodeModules?: boolean;
+}
+
+/**
+ * Canonical product identity for a package name (issue #1672):
+ * `rig-c`, `spine-rigc` and `@rig-c/core` are the same product (`@rig-c/core`), and each unscoped convenience
+ * alias `rig-<name>` is the same product as `@rig-c/<name>`.
+ */
+function canonicalProduct(packageName: string): string {
+  if (packageName === 'rig-c' || packageName === 'spine-rigc' || packageName === '@rig-c/core') {
+    return '@rig-c/core';
+  }
+  if (packageName.startsWith('rig-')) {
+    return `@rig-c/${packageName.slice('rig-'.length)}`;
+  }
+  return packageName;
+}
+
+function isDirectoryThere(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Every `<name>/` under `source` that holds a `SKILL.md`, in name order, so two runs print the same lines. */
 function shippedSkills(source: string): string[] {
-  if (!existsSync(source) || !statSync(source).isDirectory()) return [];
+  if (!isDirectoryThere(source)) return [];
   return readdirSync(source)
-    .filter((name) => statSync(join(source, name)).isDirectory() && existsSync(join(source, name, 'SKILL.md')))
+    .filter((name) => isDirectoryThere(join(source, name)) && existsSync(join(source, name, 'SKILL.md')))
     .sort();
+}
+
+/** Read `<pkgDir>/package.json`'s `name` when present and non-empty, falling back to `fallback`. */
+function readPackageName(pkgDir: string, fallback: string): string {
+  const manifestPath = join(pkgDir, 'package.json');
+  if (!existsSync(manifestPath)) return fallback;
+  try {
+    const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as { name?: unknown };
+    return typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name.trim() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Whether an unscoped `<node_modules>/<entry>` directory is a rig-c alias package (issue #1672):
+ *   1. it resolves (`realpathSync`) into a `@rig-c/*` directory, or
+ *   2. its `package.json` `repository` (string or `{url}`) points at `github.com/rig-c/`.
+ * A directory or package name alone never qualifies, because any third party can publish an unscoped `rig-<anything>`
+ * package.
+ */
+function isRigcAliasDir(pkgDir: string): boolean {
+  try {
+    if (realpathSync(pkgDir).replaceAll('\\', '/').includes('/@rig-c/')) return true;
+  } catch {
+    return false;
+  }
+  const manifestPath = join(pkgDir, 'package.json');
+  if (!existsSync(manifestPath)) return false;
+  try {
+    const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as { repository?: unknown };
+    const repo =
+      typeof raw.repository === 'string'
+        ? raw.repository.trim()
+        : typeof raw.repository === 'object' && raw.repository !== null && typeof (raw.repository as { url?: unknown }).url === 'string'
+          ? (raw.repository as { url: string }).url.trim()
+          : '';
+    return /^(?:(?:git\+)?https?:\/\/|(?:git\+)?ssh:\/\/git@|git:\/\/)?github\.com[:/]rig-c\/[A-Za-z0-9._-]+(?:\.git)?\/?$/.test(repo);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every `node_modules` directory reachable from `cwd` (walking up `<dir>/node_modules`) and from an installed
+ * `packageRoot` (every ancestor directory named `node_modules`, which covers flat `@rig-c/core`, unscoped `rig-c`, and
+ * isolated `node_modules/.bun/.../node_modules/@rig-c/core` layouts), deduplicated by `realpathSync`.
+ */
+function nodeModulesRoots(cwd: string, packageRoot: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (nm: string): void => {
+    if (!isDirectoryThere(nm)) return;
+    const real = realpathSync(nm);
+    if (seen.has(real)) return;
+    seen.add(real);
+    out.push(nm);
+  };
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    add(join(dir, 'node_modules'));
+    if (dirname(dir) === dir) break;
+  }
+  for (let dir = dirname(resolve(packageRoot)); dirname(dir) !== dir; dir = dirname(dir)) {
+    if (basename(dir) === 'node_modules') add(dir);
+  }
+  return out;
+}
+
+/**
+ * Every skill-shipping package source `rigc skills install` scans (issue #1672):
+ *   1. `join(packageRoot, 'skills')` — the package this command ran from, always first;
+ *   2. every `node_modules/@rig-c/<pkg>/skills` and every rig-c alias package's `skills/` reachable from the project's
+ *      `node_modules`, in deterministic sorted order.
+ */
+export function discoverSkillSources(cwd: string, packageRoot: string): DiscoveredSkillSource[] {
+  const projectNmReals = new Set<string>();
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    const nm = join(dir, 'node_modules');
+    if (isDirectoryThere(nm)) projectNmReals.add(realpathSync(nm));
+    if (dirname(dir) === dir) break;
+  }
+  const sources: DiscoveredSkillSource[] = [
+    {
+      packageName: readPackageName(packageRoot, basename(packageRoot)),
+      skillsDir: join(packageRoot, 'skills'),
+      inProjectNodeModules: false,
+    },
+  ];
+  for (const nm of nodeModulesRoots(cwd, packageRoot)) {
+    const inProjectNodeModules = projectNmReals.has(realpathSync(nm));
+    const scopeDir = join(nm, '@rig-c');
+    if (isDirectoryThere(scopeDir)) {
+      for (const sub of readdirSync(scopeDir).sort()) {
+        const pkgDir = join(scopeDir, sub);
+        const skillsDir = join(pkgDir, 'skills');
+        if (isDirectoryThere(pkgDir) && shippedSkills(skillsDir).length > 0) {
+          sources.push({ packageName: readPackageName(pkgDir, `@rig-c/${sub}`), skillsDir, inProjectNodeModules });
+        }
+      }
+    }
+    for (const entry of readdirSync(nm).sort()) {
+      if (entry.startsWith('@') || entry.startsWith('.')) continue;
+      const pkgDir = join(nm, entry);
+      const skillsDir = join(pkgDir, 'skills');
+      if (isDirectoryThere(pkgDir) && isRigcAliasDir(pkgDir) && shippedSkills(skillsDir).length > 0) {
+        sources.push({ packageName: readPackageName(pkgDir, entry), skillsDir, inProjectNodeModules });
+      }
+    }
+  }
+  return sources;
 }
 
 /**
@@ -2266,30 +2410,90 @@ function firstDifference(copy: string, original: string): string | null {
 }
 
 /**
- * Install every shipped skill into `dir`, or refuse and write nothing.
+ * Install every discovered skill into `dir`, or refuse and write nothing.
  *
- * The plan is made in full before the first write: every entry is classified as
- * absent, already this command's, or in the way, and one entry in the way
- * refuses the whole call with every such entry named.
+ * The plan is made in full before the first write:
+ *   - two sources that resolve (`realpathSync`) to the same skill folder are one skill (an alias or symlink reached
+ *     twice is deduplicated);
+ *   - two copies of the same product (`rig-c` ↔ `@rig-c/core`, `rig-<name>` ↔ `@rig-c/<name>`, or a project copy beside
+ *     the running package) are not a collision: the copy in the project's `node_modules` wins over the running package,
+ *     and between two project copies the scoped package (`@rig-c/*`) wins over the unscoped alias (`rig-*`), with the
+ *     chosen copy reported on its line;
+ *   - two different products shipping the same skill name refuse the call naming both sources and write nothing;
+ *   - every target is classified as absent, already this command's, or in the way, and one entry in the way refuses the
+ *     whole call with every such entry named.
  */
-function installSkills(source: string, dir: string, copy: boolean): SkillsInstallEntry[] {
-  const names = shippedSkills(source);
-  if (names.length === 0) {
+function installSkills(sources: readonly DiscoveredSkillSource[], dir: string, copy: boolean): SkillsInstallEntry[] {
+  const own = sources[0];
+  if (own === undefined || shippedSkills(own.skillsDir).length === 0) {
+    const ownSource = own?.skillsDir ?? join(PACKAGE_ROOT, 'skills');
     throw new SkillsInstallError(
-      `no skill to install: ${source} ${existsSync(source) ? 'holds no <name>/SKILL.md' : 'is not there'}, and it is ` +
+      `no skill to install: ${ownSource} ${existsSync(ownSource) ? 'holds no <name>/SKILL.md' : 'is not there'}, and it is ` +
         'the skills/ directory of the package this command ran from; nothing was written',
+    );
+  }
+  interface CandidateSkill {
+    name: string;
+    packageName: string;
+    product: string;
+    source: string;
+    realFrom: string;
+    inProjectNodeModules: boolean;
+    isScoped: boolean;
+    chosenOver?: Array<{ packageName: string; source: string }>;
+  }
+  const byName = new Map<string, CandidateSkill[]>();
+  for (const src of sources) {
+    const inProject = Boolean(src.inProjectNodeModules);
+    const product = canonicalProduct(src.packageName);
+    const isScoped = src.packageName.startsWith('@rig-c/');
+    for (const name of shippedSkills(src.skillsDir)) {
+      const from = join(src.skillsDir, name);
+      const realFrom = realpathSync(from);
+      const list = byName.get(name) ?? [];
+      if (list.some((item) => item.realFrom === realFrom)) {
+        const existing = list.find((item) => item.realFrom === realFrom);
+        if (existing !== undefined && inProject) existing.inProjectNodeModules = true;
+        continue;
+      }
+      list.push({ name, packageName: src.packageName, product, source: from, realFrom, inProjectNodeModules: inProject, isScoped });
+      byName.set(name, list);
+    }
+  }
+  const collisions = [...byName.entries()]
+    .filter(([, list]) => new Set(list.map((item) => item.product)).size > 1)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (collisions.length > 0) {
+    throw new SkillsInstallError(
+      `${collisions.length} duplicate skill name(s) across packages, and nothing was written:\n` +
+        collisions
+          .map(([name, list]) => `  ${name} is shipped by ${list.map((item) => `${item.packageName} (${item.source})`).join(' and ')}`)
+          .join('\n'),
     );
   }
   if (existsSync(dir) && !statSync(dir).isDirectory()) {
     throw new SkillsInstallError(`${dir} exists and is not a directory, so no skill can be installed into it; nothing was written`);
   }
+  const discovered = [...byName.values()]
+    .map((list) => {
+      if (list.length === 1) return list[0];
+      const ranked = [...list].sort((a, b) => {
+        if (a.inProjectNodeModules !== b.inProjectNodeModules) return a.inProjectNodeModules ? -1 : 1;
+        if (a.isScoped !== b.isScoped) return a.isScoped ? -1 : 1;
+        return 0;
+      });
+      return {
+        ...ranked[0],
+        chosenOver: ranked.slice(1).map((item) => ({ packageName: item.packageName, source: item.source })),
+      };
+    })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const realDir = realpathAhead(dir);
   const planned: SkillsInstallEntry[] = [];
   const refused: string[] = [];
-  for (const name of names) {
+  for (const item of discovered) {
+    const { name, packageName, source: from, realFrom, chosenOver } = item;
     const target = join(dir, name);
-    const from = join(source, name);
-    const realFrom = realpathSync(from);
     const link = relative(realDir, realFrom);
     let action: SkillsInstallAction = copy ? 'copied' : 'linked';
     let found: string | null = null;
@@ -2312,11 +2516,11 @@ function installSkills(source: string, dir: string, copy: boolean): SkillsInstal
       found = 'a plain file';
     }
     if (found !== null) refused.push(`${target} is ${found}; ${copy ? `a copy of ${from}` : `a symlink to ${link}`} was required`);
-    else planned.push({ target, source: from, action, link });
+    else planned.push({ target, source: from, packageName, action, link, chosenOver });
   }
   if (refused.length > 0) {
     throw new SkillsInstallError(
-      `${refused.length} of the ${names.length} skill(s) cannot be installed into ${dir}, and nothing was written:\n` +
+      `${refused.length} of the ${discovered.length} skill(s) cannot be installed into ${dir}, and nothing was written:\n` +
         refused.map((line) => `  ${line}`).join('\n') +
         '\nRemove the entries named above, or pass --dir to install somewhere else.',
     );
@@ -2343,7 +2547,7 @@ export function cmdSkills(flags: Record<string, string>, positional: string[]): 
   if (sub === undefined) {
     throw new UsageError(
       `skills takes a subcommand: ${SKILLS_SUBCOMMANDS.join(', ')} — \`rigc skills install\` links every skill this ` +
-        `package ships into ${DEFAULT_SKILLS_DIR}`,
+        `package and any installed @rig-c/* or alias package ship into ${DEFAULT_SKILLS_DIR}`,
     );
   }
   if (!SKILLS_SUBCOMMANDS.includes(sub)) {
@@ -2364,9 +2568,15 @@ export function cmdSkills(flags: Record<string, string>, positional: string[]): 
   }
   const copy = flags.copy !== undefined;
   const dir = resolve(process.cwd(), flags.dir ?? DEFAULT_SKILLS_DIR);
-  const entries = installSkills(join(PACKAGE_ROOT, 'skills'), dir, copy);
+  const entries = installSkills(discoverSkillSources(process.cwd(), PACKAGE_ROOT), dir, copy);
   for (const entry of entries) {
-    const ends = entry.action.endsWith('linked') ? `${entry.target} -> ${entry.link}  (${entry.source})` : `${entry.target} <- ${entry.source}`;
+    const choiceNote =
+      entry.chosenOver !== undefined && entry.chosenOver.length > 0
+        ? `  (chose ${entry.packageName} at ${entry.source} over ${entry.chosenOver.map((o) => `${o.packageName} at ${o.source}`).join(', ')})`
+        : '';
+    const ends = entry.action.endsWith('linked')
+      ? `${entry.target} -> ${entry.link}  (${entry.source})  [${entry.packageName}]${choiceNote}`
+      : `${entry.target} <- ${entry.source}  [${entry.packageName}]${choiceNote}`;
     console.log(`  ${entry.action.padEnd(14)}  ${ends}`);
   }
   const wrote = entries.filter((entry) => entry.action === 'linked' || entry.action === 'copied').length;

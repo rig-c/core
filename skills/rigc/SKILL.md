@@ -28,7 +28,7 @@ index within that same limit; only legacy uncoded library errors point at `§5.1
 ## Non-negotiables
 
 - **Validation is never bypassed.** `build` writes nothing on a red gate; there is
-  no `--no-validate`, and none may be added — AUTHORING §0 says so in as many
+  no flag to skip it, and none may be added — AUTHORING §0 says so in as many
   words. Correctness is the whole of the reason: the assertions are what make the
   output trustworthy, and they are held to the official parser's verdicts in the
   repository's CI — all but the parse itself, which runs only where the runtime is
@@ -55,20 +55,23 @@ Codex, Gemini CLI and Antigravity read skills from `.agents/skills/` in the
 workspace and none of them reads `node_modules`; `rigc skills install` puts every
 skill the package ships there, and `rigc skills --help` says what it refuses.
 
-The package links no Spine runtime. `validate`, `preview` and `vote` below run
-through `@esotericsoftware/spine-core`: install it beside the package
-(`bun add -d @esotericsoftware/spine-core`) and the same `rigc` runs them, and
-`build` runs the round trip as well. Without it they are refused by name, and
-`build` writes the same files gated without the parse — `rigc --version` names the
-entry that ran. In the parse's place that `build` runs two rules of its own over
-rigc's model document, `A00_MODEL_READ` and `A00_MODEL_REGIONS_ON_PAGES`; they are
-not registry assertions, so its summary counts two more, and AUTHORING §5.2 has a
-row for each.
+The package links no Spine runtime. `build` writes `skeleton.json`,
+`skeleton.atlas` and `skeleton.model.json`. `preview`, `vote`, `diff`, `bench` and
+`bonedist` run through `@esotericsoftware/spine-core`: install it beside
+the package (`bun add -d @esotericsoftware/spine-core`) and the same `rigc` runs
+them, and `build` runs the round trip as well. Without it those commands are refused
+by name, while `build`, `validate`, `explain`, `render`, `check` and `inspect`
+(`--poser core|spine`) run on rigc's own core over `skeleton.model.json` —
+`rigc --version` names the entry that ran (AUTHORING §0). In the parse's place that
+`build` runs two rules of its own over rigc's model document, `A00_MODEL_READ` and
+`A00_MODEL_REGIONS_ON_PAGES`; they are not registry assertions, so its summary
+counts two more, and AUTHORING §5.2 has a row for each.
 
 ## The loop
 
 1. `rigc build --rig <spec> --motion <spec> --images <dir> --out <dir>` compiles,
-   gates, and writes only on green.
+   gates (under `--profile spine`, the default, or `--profile rig-play`), and writes
+   `skeleton.json`, `skeleton.atlas` and `skeleton.model.json` only on green.
 2. Read the report. Every red line names the file to change; fix the spec and
    build again.
 3. `rigc explain --rig <spec> --motion <spec> --out <dir>` when the red line is
@@ -85,11 +88,17 @@ row for each.
    cover a feature the art shows — and answer each with `render --hide <slot>` (or
    `--slot <slot,…>`), which draws the frame again without that part on the same
    grid, so the two frames say which part a pixel is. AUTHORING §0 holds the three.
-   When the question is geometry — is this bone where the art is, which way does it
-   squash, where in rig units is this point — `rigc inspect --candidate <out> --show
-   art,bones,names --dim` draws the bones over the art and writes a legend beside the
-   picture that puts every mark back in world units; AUTHORING §13 maps each
-   question to its view.
+   For motion and dial readings, `render --pass-through <cloth>:<leg>` names the
+   frames where a cloth drawn over a leg passes through it (AUTHORING §8.5),
+   `render --angle-range <bone>:<relative-to>` prints how far a bone turns against
+   another (AUTHORING §8.7), `render --seam <slot>:<slot>` reads joint gaps,
+   visible ghosts and background exposure (AUTHORING §8.8), and
+   `render --parallax <dial>` reads a slider dial across its value grid
+   (AUTHORING §8.12). When the question is geometry — is this bone where the art is,
+   which way does it squash, where in rig units is this point —
+   `rigc inspect --candidate <out> --show art,bones,names --dim` draws the bones
+   over the art and writes a legend beside the picture that puts every mark back in
+   world units; AUTHORING §13 maps each question to its view.
 5. `rigc check --candidate <out> --frames <dir>` when you have reference pictures
    (`--out <dir>` writes the picture each of its numbers came from — open the worst).
    Read its output from the top: the framing block says whether the figures under
@@ -100,17 +109,21 @@ row for each.
    `rigc vote --candidate <a> --candidate <b>` when several candidates are green and
    only a person can choose between them.
 6. `rigc validate <out>` re-gates artifacts already on disk, and
-   `rigc <command> --help` is each command's own flag table. `rigc repack <out>
-   --out <dir>` packs a build again under `build --pack`'s packing flags when its
-   parts were not kept, and writes only after every region and the skeleton are
-   shown unchanged (`--accept-skeleton-differences` writes a rebuild whose skeleton
-   differs, every difference printed; `--stage-box <slot>` reads a build's stage box)
-   — AUTHORING §0.4. A mesh refused because its triangles are several pieces that
-   share no vertex: `rigc split --rig … --motion … --slot <slot> --out <dir>` writes
-   both specs back with one mesh per piece and every deform key renumbered — build
-   that — AUTHORING §3.4.11.
-7. Every finished unit ends with `rigc preview --candidate <out>`, and the report
-   names the `.html` it wrote. The hand-off to a person is part of the work.
+   `rigc <command> --help` is each command's own flag table.
+   `rigc repack <out> --out <dir>` packs a build again under `build --pack`'s
+   packing flags when its parts were not kept, and writes only after every region and
+   the skeleton are shown unchanged (`--keep-pages` refreshes `skeleton.model.json`
+   over the existing atlas pages; `--accept-skeleton-differences` writes a rebuild
+   whose skeleton differs, every difference printed; `--stage-box <slot>` reads a
+   build's stage box) — AUTHORING §0.4. A mesh refused because its triangles are
+   several pieces that share no vertex: `rigc split --rig … --motion … --slot <slot> --out <dir>`
+   writes both specs back with one mesh per piece and every deform key renumbered —
+   build that — AUTHORING §3.4.11.
+7. Every finished unit ends with `rigc preview --candidate <out>` (or
+   `rigc review <out>` when `@rig-c/review` is installed beside the project and a
+   person reviews the build via its loopback URL, AUTHORING §0), and the report
+   names the `.html` or URL it produced. The hand-off to a person is part of the
+   work.
 
 The loop in full, with `pose` before it and `chainfit` after the first build:
 AUTHORING §0.
@@ -141,7 +154,7 @@ spec files field by field, the emission rules, the loop, and the failure map. Th
 | --- | --- | --- |
 | a **skeleton** — how many bones, where each pivot sits, what hangs off what | [RIGGING.md](https://github.com/rig-c/core/blob/main/docs/RIGGING.md) | `rigc-rigging` |
 | a **movement** — an idle, a loop, from this pose to that one | [MOTION.md](https://github.com/rig-c/core/blob/main/docs/MOTION.md) | `rigc-motion` |
-| a **face** — a blink, a gaze, a head turn a few degrees off axis | [FACE.md](https://github.com/rig-c/core/blob/main/docs/FACE.md) | `rigc-face` |
+| a **face** — a blink, a gaze, a head turn or a value-driven face dial | [FACE.md](https://github.com/rig-c/core/blob/main/docs/FACE.md) | `rigc-face` |
 | a **skeleton.json somebody else authored** — read it, repair it, extend it | [INGEST.md](https://github.com/rig-c/core/blob/main/docs/INGEST.md) | `rigc-ingest` |
 | you are the **person operating** the agent rather than the agent | [PROMPTING.md](https://github.com/rig-c/core/blob/main/docs/PROMPTING.md) | — |
 

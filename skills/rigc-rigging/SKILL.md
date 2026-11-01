@@ -36,17 +36,24 @@ index within that same limit; only legacy uncoded library errors point at `§5.1
 ## What this guide will not do
 
 Nothing grades a hierarchy. A rig with its head off its torso passes the gate, the
-pixels are nearly blind to structure, and the two instruments that see it at all
-are named in RIGGING §11 — neither as a pass bar.
+pixels are nearly blind to structure, and the instruments that see it at all are
+named in RIGGING §11 and §11.2 — none as a pass bar. `rigc pose` and `rigc chainfit`
+read part placements and chain hinges from a key-pose picture inside the loop
+(AUTHORING §11, RIGGING §9–§10); `rigc bonedist` measures per-frame bone
+world-transform distance against the same rig's own `home` setup-pose animation
+(RIGGING §7.3) or, at the finish line only, against another skeleton (RIGGING
+§11.2, subject to the honesty rule in AUTHORING §9.1).
 
 ## Read, in this order
 
 1. [AUTHORING.md](https://github.com/rig-c/core/blob/main/docs/AUTHORING.md) — the rig spec field by field (§3),
-   the failure map (§5–§6), reading a pose out of a picture (§8.1, §11, §12),
-   and the editor's own conventions (§10).
+   the failure map (§5–§6), reading a pose out of a picture and diagnostic render
+   flags (§8.1, §8.5, §8.7, §8.8, §11, §12), the honesty rule (§9.1), and the
+   editor's own conventions (§10).
 2. [RIGGING.md](https://github.com/rig-c/core/blob/main/docs/RIGGING.md) — the structure itself: what identifies a
-   pivot and what moving one costs (§2–§3), gauges (§4), what a chain can reach
-   (§6), and the instruments that see structure (§11).
+   pivot and what moving one costs (§2–§3), gauges (§4), what a chain can reach and
+   `bonedist` against `home` (§6–§7, §7.3), and the instruments that see structure
+   (§11, §11.2).
 3. Then [MOTION.md](https://github.com/rig-c/core/blob/main/docs/MOTION.md) once the skeleton exists;
    [FACE.md](https://github.com/rig-c/core/blob/main/docs/FACE.md) if the figure is a head;
    [INGEST.md](https://github.com/rig-c/core/blob/main/docs/INGEST.md) if the skeleton was handed to you already

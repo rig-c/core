@@ -74843,7 +74843,7 @@ const SKILL_NEGATIVE_VERDICTS: ReadonlyArray<{ phrase: string; re: () => RegExp 
   { phrase: 'is not measured', re: () => /\bis not measured\b/gi },
 ];
 
-type SkillClaimKind = 'assertion' | 'section' | 'command' | 'verdict';
+type SkillClaimKind = 'assertion' | 'section' | 'command' | 'flag' | 'verdict';
 
 interface SkillClaimFault {
   kind: SkillClaimKind;
@@ -74869,6 +74869,10 @@ interface SkillClaimTruth {
   sections: Map<string, Set<string>>;
   /** What `rigc` offers, read off its own usage. */
   commands: Set<string>;
+  /** Every `--flag` the CLI usage and per-command help pages offer. */
+  flags: Set<string>;
+  /** Per command, the `--flag` names its own usage and flag table list. */
+  commandFlags: Map<string, Set<string>>;
 }
 
 function skillClaimTruth(root: string): SkillClaimTruth {
@@ -74888,12 +74892,24 @@ function skillClaimTruth(root: string): SkillClaimTruth {
     }
   }
   const usage = runCli([]).stderr;
+  const commands = new Set([...usage.matchAll(/^ {2}rigc ([a-z][a-z-]*) /gm)].map((m) => m[1]));
+  const flags = new Set([...usage.matchAll(/--([a-z][a-z-]*)\b/g)].map((m) => m[1]));
+  const commandFlags = new Map<string, Set<string>>();
+  for (const cmd of commands) {
+    const help = COMMANDS.some((c) => c.name === cmd) ? commandHelp(cmd) : runCli([cmd, '--help']).stdout;
+    const head = help.split('\n\n').slice(0, 2).join('\n\n');
+    const own = new Set([...head.matchAll(/--([a-z][a-z-]*)\b/g)].map((m) => m[1]));
+    for (const f of own) flags.add(f);
+    commandFlags.set(cmd, own);
+  }
   return {
     codes: new Set(ASSERTION_NAMES.map((name) => name.slice(0, 3))),
     names: new Set(ASSERTION_NAMES),
     printed: new Set([...ASSERTION_NAMES, ...MODEL_SIDE_CODES]),
     sections,
-    commands: new Set([...usage.matchAll(/^ {2}rigc ([a-z][a-z-]*) /gm)].map((m) => m[1])),
+    commands,
+    flags,
+    commandFlags,
   };
 }
 
@@ -74936,25 +74952,61 @@ function readSkillClaims(
           what: `names ${found[0]}, and the assertion registry holds ${String(truth.names.size)} rules with no such name, nor is it one of the model side's own codes`,
         });
       }
-      // A command is read where a reader would copy it: an inline code span, or a
-      // line of a fenced block. `rigc compiles a rig spec` is prose about the
-      // tool and names no command.
-      const spans = [...line.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-      if (prose[i] === null && !/^ {0,3}(```+|~~~+)/.test(line)) spans.push(line.trim());
-      for (const span of spans) {
-        const spelled = /^rigc\s+([a-z][a-z-]*)\b/.exec(span.trim());
-        if (spelled === null) continue;
-        site('command');
-        if (truth.commands.has(spelled[1])) continue;
-        faults.push({
-          kind: 'command',
-          where: `${file.path}:${i + 1}`,
-          what:
-            `spells \`rigc ${spelled[1]}\`, and rigc offers ` +
-            `${[...truth.commands].sort().join(', ')}`,
-        });
-      }
     });
+
+    // A command or flag is read where a reader would copy it: an inline code span
+    // (including one wrapped across a newline), or a non-comment line of a fenced
+    // block. `rigc compiles a rig spec` and `rigc is` are prose about the tool and
+    // name no command.
+    const codeSpans: Array<{ line: number; text: string }> = [];
+    const nonFenced = prose.map((l) => l ?? '').join('\n');
+    for (const m of nonFenced.matchAll(/`([^`]+)`/g)) {
+      const idx = m.index ?? 0;
+      const line = nonFenced.slice(0, idx).split('\n').length;
+      codeSpans.push({ line, text: m[1].replace(/\s+/g, ' ').trim() });
+    }
+    raw.forEach((line, i) => {
+      if (prose[i] !== null || /^ {0,3}(```+|~~~+)/.test(line)) return;
+      const trimmed = line.replace(/\s+#.*$/, '').trim();
+      if (trimmed !== '') codeSpans.push({ line: i + 1, text: trimmed });
+    });
+
+    for (const span of codeSpans) {
+      const spelled = /^(?:(?:bun\s+)?rigc\s+([a-z][a-z-]*)\b|(?!rigc\b)([a-z][a-z-]*)(?=\s+--[a-z]))/.exec(span.text);
+      const cmd = spelled === null ? null : (spelled[1] ?? spelled[2] ?? null);
+      if (cmd !== null) {
+        site('command');
+        if (!truth.commands.has(cmd)) {
+          faults.push({
+            kind: 'command',
+            where: `${file.path}:${span.line}`,
+            what:
+              `spells \`${span.text.startsWith('rigc') || span.text.startsWith('bun rigc') ? `rigc ${cmd}` : cmd}\`, and rigc offers ` +
+              `${[...truth.commands].sort().join(', ')}`,
+          });
+        }
+      }
+      for (const flagMatch of span.text.matchAll(/(?:^|\s)--([a-z][a-z-]*)\b/g)) {
+        const flag = flagMatch[1];
+        site('flag');
+        const cmdSet = cmd !== null ? truth.commandFlags.get(cmd) : undefined;
+        if (cmdSet !== undefined) {
+          if (!cmdSet.has(flag)) {
+            faults.push({
+              kind: 'flag',
+              where: `${file.path}:${span.line}`,
+              what: `spells \`--${flag}\` on \`rigc ${cmd}\`, which takes ${[...cmdSet].sort().map((f) => `--${f}`).join(', ')}`,
+            });
+          }
+        } else if (!truth.flags.has(flag)) {
+          faults.push({
+            kind: 'flag',
+            where: `${file.path}:${span.line}`,
+            what: `spells \`--${flag}\`, and no rigc command takes that flag`,
+          });
+        }
+      }
+    }
 
     // Paragraphs: consecutive non-blank prose lines, with every character's own
     // line kept so a fault opens where the sentence starts rather than where the
@@ -75056,6 +75108,13 @@ const SKILL_CLAIM_PROBES: ReadonlyArray<{ row: string; stale: string; clean: str
       'What `A39` still cannot say is whether the projection was the right one —\n' +
       'nothing measures whether 12° was the angle the shot wanted. FACE §9.2 is that\n' +
       'demonstration, three builds with one of them refused.',
+  },
+  {
+    row: 'skills/rigc: planted unknown command, unknown flag, wrong-command flag, and prose rigc is (#1671)',
+    stale:
+      'Run `rigc noncommand --candidate out`, `rigc render --candidate out --no-such-flag`, or `rigc explain --rig a --motion b --out c --profile spine`.',
+    clean:
+      'rigc is a compiler: run `rigc render --candidate out --seam a:b` or `render --pass-through a:b`, and `rigc explain --rig a --motion b --out c` takes no `--profile`.',
   },
 ];
 
@@ -76575,7 +76634,7 @@ function runSkillSurfaceSuite(): number {
   const bodies = surface.skills.map((path) => ({ path, text: readFileSync(join(root, path), 'utf8') }));
   const claims = readSkillClaims(bodies, truth);
   const claimSites = (limb: string): number => claims.sites.get(limb) ?? 0;
-  const thinForms = ['assertion reference', 'section reference', 'command', 'negative verdict'].filter(
+  const thinForms = ['assertion reference', 'section reference', 'command', 'flag', 'negative verdict'].filter(
     (limb) => claimSites(limb) === 0,
   );
   say(
@@ -76584,17 +76643,18 @@ function runSkillSurfaceSuite(): number {
       bodies.every((body) => body.text.trim() !== '') &&
       truth.names.size > 0 &&
       truth.commands.size > 0 &&
+      truth.flags.size > 0 &&
       [...truth.sections.values()].some((numbers) => numbers.size > 0) &&
       thinForms.length === 0,
     thinForms.length > 0
       ? `${thinForms.length} form(s) matched nothing across ${bodies.length} skill(s): ${thinForms.join(', ')}`
       : `${bodies.length} skill body(ies) read against ${truth.names.size} registry rule(s), ` +
-        `${truth.commands.size} command(s) and ${truth.sections.size} page(s) of headings — ` +
+        `${truth.commands.size} command(s), ${truth.flags.size} flag(s) and ${truth.sections.size} page(s) of headings — ` +
         `${claimSites('assertion reference')} rule mention(s), ${claimSites('section reference')} section ` +
-        `reference(s), ${claimSites('command')} command mention(s) and ${claimSites('negative verdict')} ` +
+        `reference(s), ${claimSites('command')} command mention(s), ${claimSites('flag')} flag mention(s) and ${claimSites('negative verdict')} ` +
         'negative verdict(s)',
     'each figure below is a count of what a form matched, and a form that has stopped matching the way these files ' +
-      'are written goes SILENT rather than red; the negative-verdict floor is the sharpest of the four, because one ' +
+      'are written goes SILENT rather than red; the negative-verdict floor is the sharpest of the five, because one ' +
       'unanchored sentence is the whole of what issue #673 found',
   );
 
@@ -76607,12 +76667,12 @@ function runSkillSurfaceSuite(): number {
     unresolved.length === 0,
     unresolved.length === 0
       ? `${claimSites('assertion reference')} rule mention(s), ${claimSites('section reference')} \`§N.M\` ` +
-        `reference(s) and ${claimSites('command')} \`rigc <command>\` spelling(s) across ${bodies.length} ` +
-        'skill(s) all resolve — the rules against the registry, the sections against the headings of the page ' +
-        'each sentence names, the commands against rigc\'s own usage'
+        `reference(s), ${claimSites('command')} command spelling(s) and ${claimSites('flag')} \`--flag\` ` +
+        `spelling(s) across ${bodies.length} skill(s) all resolve — the rules against the registry, the sections ` +
+        'against the headings of the page each sentence names, the commands and flags against rigc\'s own usage and `--help`'
       : `${unresolved.length} reference(s) resolve to nothing:${claimListed(unresolved)}`,
     'a skill is read by an agent that cannot open a second window: a renamed rule, a renumbered section or a ' +
-      'command that never existed sends it to look for something that is not there, and the repository — where the ' +
+      'command or flag that never existed sends it to look for something that is not there, and the repository — where the ' +
       'reader knows what was meant — is the one place that reads as fine',
   );
 

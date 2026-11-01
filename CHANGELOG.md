@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/rig-c/core/compare/v3.0.1...v3.1.0) (2026-11-01)
+
+
+### Features
+
+* **skills:** reach every rig-c package from skills install ([#1677](https://github.com/rig-c/core/issues/1677)) ([909fb19](https://github.com/rig-c/core/commit/909fb19f83af33a354d0967036bd96d87a55490d)), closes [#1672](https://github.com/rig-c/core/issues/1672)
+
 ## [3.0.1](https://github.com/rig-c/core/compare/v3.0.0...v3.0.1) (2026-11-01)
 
 

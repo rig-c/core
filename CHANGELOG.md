@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.0.1](https://github.com/rig-c/core/compare/v3.0.0...v3.0.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **readme:** title the README and banner @rig-c/core ([#1675](https://github.com/rig-c/core/issues/1675)) ([e2e8174](https://github.com/rig-c/core/commit/e2e8174e7bb29898a17ecdc4e9f346d8925332de)), closes [#1674](https://github.com/rig-c/core/issues/1674)
+* **skills:** bring the skills current with 3.0 and hold their flags to the tree ([#1673](https://github.com/rig-c/core/issues/1673)) ([0a91e18](https://github.com/rig-c/core/commit/0a91e18cf4a4242fcc2dfbf6815b3ceb3bb6a9be))
+
 ## [3.0.0](https://github.com/rig-c/core/compare/v2.86.0...v3.0.0) (2026-10-31)
 
 

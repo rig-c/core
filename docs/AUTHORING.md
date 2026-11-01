@@ -139,7 +139,7 @@ commands take it and what its default is.
 | `check --candidate <dir> --frames <dir> [--out <dir>]` | the candidate against reference pictures — the only instrument here that can see a *wrong animation*. `--out` also writes, for every frame the table lists, the picture its figures came from: reference, candidate, difference and overlay at native size <a id="cmd-check"></a> |
 | `bench <rung> --candidate <dir>` | one rung of the benchmark ladder <a id="cmd-bench"></a> |
 | `guide <RULE>` / `guide §<n>[.<m>[.<k>]] [--all]` | the guide's row for the rule a failure line names — every `FAIL` line, `vote --record` refusal, `ingest` finding and coded compile error ends with ` (see rigc guide <RULE>)`; only legacy uncoded library errors point at `§5.1` — or a section's heading, own prose and subsection index, read from the installed `docs/AUTHORING.md` when it runs. `--all` includes the subsection bodies; a leaf prints its full text either way. Sizes describe full ledger spans. `--all` with a rule is refused, exit 2; an unknown name is refused with the nearest real ones, exit 1 <a id="cmd-guide"></a> |
-| `skills install [--dir …] [--copy]` | links every agent skill the package ships into `.agents/skills` (or `--dir`) as relative symlinks, or copies them with `--copy` — where Codex, Gemini CLI and Antigravity look. A second run has nothing to do; an entry already there that is not this command's is refused by name and nothing is written <a id="cmd-skills-install"></a> |
+| `skills install [--dir …] [--copy]` | links every agent skill this package and any installed `@rig-c/*` or rig-c alias package ship (`PACKAGE_ROOT/skills` and every `node_modules/@rig-c/*/skills/<name>/SKILL.md` and alias reachable from the project's `node_modules`) into `.agents/skills` (or `--dir`) as relative symlinks, or copies them with `--copy` — where Codex, Gemini CLI and Antigravity look — reporting which package each skill came from (`[<package>]`). In a consumer without `@rig-c/core` installed, reach the installer with `bunx @rig-c/core skills install`. A second run has nothing to do; an entry already there that is not this command's, or a duplicate skill name across two distinct packages (an alias or symlink resolving to the same `realpathSync` folder is deduplicated), is refused by name and nothing is written <a id="cmd-skills-install"></a> |
 | `review <dir> […]` | the human review of a build, handed to the `rig-review` bin of `@rig-c/review` installed beside the package; rigc does not depend on it and never installs it. `rigc review <dir> [--reference <video>] [--animation <name>] [--compare <dir>]` is `rig-review open <dir> …` with those flags 1:1 and prints the loopback URL to give a person; a first argument that is one of review's own words (`open`, `check`, `feedback`, `control`, `strip`, `compare`) or starts with `-` (`--help`, `--`) is handed over untouched. stdout is review's byte for byte, stderr review's plus the launcher's own refusals, the exit code review's. Refused by name, exit 2, before the bin starts: `REVIEW_OUTPUT_MISSING <path>` (the target is not a directory); `REVIEW_NOT_INSTALLED` with two lines, `bun add -d @rig-c/review` and `bunx @rig-c/review open <dir> …` carrying the flags given — the same on a terminal and off, with nothing installed or written; `REVIEW_BUN_TOO_OLD: Bun <found>, @rig-c/review needs <required>`, the floor read off the installed package's `engines.bun`; and an empty argument (`""`) under a Bun that drops one (Bun 1.2.0, measured by a probe), `rigc review: argument N is empty, and Bun <version>, the Bun running this, drops an empty argument when it starts a process — …`. docs/AUTHORING.md lists every line <a id="cmd-review"></a> |
 
 `diff`, `bonedist`, `check` and `bench` measure against something you were given; the
@@ -405,7 +405,7 @@ What the flags mean:
 | `--min-visible` | `chainfit` only: below this share of a part surviving the parts drawn over it, the placement is refused `occluded` instead of reported flat (default `0.25`) — §12.4 |
 | `--passes` | `chainfit` only: how many times the occluder masks are rebuilt from the answers and the fit rerun (default `2`) — §12.4 |
 | `--anchor-residual` | `chainfit` only: the residual a `pose` placement must be within to anchor a chain (default `0.16`) — §12.2 |
-| `--dir` | `skills install` only: the directory to install the agent skills into, resolved against your working directory (default `.agents/skills`, which Codex, Gemini CLI and Antigravity read). The skills are the `skills/` directory of the package the command runs from, never the working directory's |
+| `--dir` | `skills install` only: the directory to install the agent skills into, resolved against your working directory (default `.agents/skills`, which Codex, Gemini CLI and Antigravity read). The skills are scanned from the `skills/` directory of the package the command runs from and every `@rig-c/*` and rig-c alias package in the project's `node_modules`, never a loose `skills/` in the working directory |
 | `--copy` | `skills install` only: copy each skill folder instead of writing a relative symlink to it. A copy is not reached by an upgrade of the package; one that is no longer the package's bytes is refused on the next run, naming the first file that differs |
 
 `render` also takes `--fps <n>` (the rate it samples at, default 12 — the same
@@ -438,10 +438,28 @@ each under `sets[].dir` — read the folder from there, not from the animation's
 the subsections' bodies. A leaf prints its full text either way — §5 says when to reach for it.
 
 `skills install` is the other command that is not about a rig: it puts the agent
-skills the package ships where an agent host looks for them. Run it through the
+skills this package and every installed `@rig-c/*` or rig-c alias package ship where
+an agent host looks for them, scanning `PACKAGE_ROOT/skills` and every
+`node_modules/@rig-c/*/skills/<name>/SKILL.md` (and any unscoped alias package
+shipping `skills/<name>/SKILL.md` that resolves by `realpathSync` into `@rig-c/*` or
+declares a `github.com/rig-c/` `repository` in `package.json` — never by directory
+name alone) reachable from the project's `node_modules`, and
+reporting `[<package>]` on each line. Run it through the
 project's own install — `bun rigc skills install` — so the links point into that
-project's `node_modules/rig-c/skills/`. A second run has nothing to do and
-exits 0. An entry already at `<dir>/<name>` that is not a link to the same folder
+project's `node_modules/rig-c/skills/` (or `node_modules/@rig-c/core/skills/`) and
+its sibling packages; in a
+consumer without `@rig-c/core` installed (for example, a project with only
+`@rig-c/play` or a host adapter), run `bunx @rig-c/core skills install --copy`
+so every skill is written as a plain folder instead of linking `@rig-c/core`'s
+skills into a temporary `.bunx` cache that can be emptied. A second run has nothing to do and
+exits 0. An alias or symlink that resolves (`realpathSync`) to a skill folder
+already discovered is deduplicated; two copies of the same product (`rig-c` ↔
+`@rig-c/core`, `rig-<name>` ↔ `@rig-c/<name>`, or a project copy beside the running
+package) choose the copy inside the project's `node_modules` first and the scoped
+package (`@rig-c/*`) over the unscoped alias (`rig-*`), printing which copy was
+chosen; two different products shipping the same skill
+name refuse the call, exit 1, naming both sources (`<n> duplicate skill name(s)
+across packages, and nothing was written:`). An entry already at `<dir>/<name>` that is not a link to the same folder
 (or, under `--copy`, not the same bytes) is refused, exit 1, and **nothing is
 written** — every such entry is named with what is there and what was required:
 

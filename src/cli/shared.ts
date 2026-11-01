@@ -933,20 +933,26 @@ export const DEFAULT_BALLOT = 'ballot.html';
 export const DEFAULT_LEDGER = 'votes.jsonl';
 
 // ---------------------------------------------------------------------------
-// skills install — put the shipped skills where an agent host looks (issue #831)
+// skills install — put the shipped skills where an agent host looks (issues #831, #1672)
 // ---------------------------------------------------------------------------
 //
-// After `bun add -d rig-c` the skills sit at `node_modules/rig-c/skills/`,
-// which no host reads. Codex, Gemini CLI and Antigravity all read
-// `<workspace>/.agents/skills/<name>/`, so this links every `skills/<name>/` the
-// package ships into one directory — `.agents/skills` under the working
-// directory unless `--dir` says otherwise.
+// After `bun add -d @rig-c/core` (and sibling packages such as `@rig-c/parts` or
+// `@rig-c/play`) the skills sit at `node_modules/@rig-c/*/skills/`, which no
+// host reads. Codex, Gemini CLI and Antigravity all read
+// `<workspace>/.agents/skills/<name>/`, so this links every `skills/<name>/` this
+// package and every installed `@rig-c/*` or rig-c alias package ship into one
+// directory — `.agents/skills` under the working directory unless `--dir` says
+// otherwise.
 //
-// ⭐ The skills are found from THIS FILE's location, never from the working
-// directory: the command installs the package it is, and a cwd that happens to
-// hold some other `skills/` is not a source. That is also why it lives here and
-// not in `src/`: its one input is where the CLI was installed, nothing else
-// calls it, and `src/` is about rigs.
+// ⭐ The skills are found from `PACKAGE_ROOT/skills` and every `node_modules/@rig-c/*`
+// and rig-c alias package reachable from the working directory's and `PACKAGE_ROOT`'s
+// `node_modules` — never a loose `skills/` in the working directory itself. Two
+// paths that resolve (`realpathSync`) to the same skill folder are deduplicated;
+// two copies of the same product (`rig-c` ↔ `@rig-c/core`, `rig-<name>` ↔ `@rig-c/<name>`)
+// choose the project's `node_modules` copy over the running package and the scoped
+// package over the unscoped alias, printing which copy was chosen; two different
+// products shipping the same skill name refuse the call naming both sources and
+// write nothing.
 //
 // A RELATIVE symlink by default, so the directory survives the project being
 // moved or cloned elsewhere and an upgrade of the package is seen with no second
@@ -1986,15 +1992,26 @@ export const COMMANDS: CommandDoc[] = [
     name: 'skills',
     runtime: false,
     spineFormat: false,
-    usage: [`rigc skills install [--dir ${DEFAULT_SKILLS_DIR}] [--copy]   (every skill this package ships, where an agent host looks)`],
+    usage: [`rigc skills install [--dir ${DEFAULT_SKILLS_DIR}] [--copy]   (every skill this package and any installed rig-c package ship, where an agent host looks)`],
     flags: ['dir', 'copy'],
     notes: [
-      'the skills installed are the skills/ directory of the package this command runs from,',
-      'never whatever the working directory holds. Each becomes <dir>/<name>: a relative',
-      'symlink into that folder, or with --copy a copy of it. An entry already there that',
-      'is not a link to the same folder — or, with --copy, not the same bytes — is refused',
-      'by name, exit 1, and nothing is written; a run over only what this command made has',
-      'nothing to do and exits 0. Codex, Gemini CLI and Antigravity read',
+      'scans the skills/ directory of the package this command runs from and every',
+      'node_modules/@rig-c/*/skills/<name>/SKILL.md and rig-c alias package (resolving by',
+      'realpathSync into @rig-c/* or declaring a github.com/rig-c/ repository in',
+      'package.json, never by directory name alone) reachable',
+      'from the project\'s node_modules (never a loose skills/ in the working directory),',
+      'reporting which package each skill came from. An alias or symlink that resolves',
+      '(realpathSync) to the same skill folder is deduplicated; two copies of the same',
+      'product (rig-c ↔ @rig-c/core, rig-<name> ↔ @rig-c/<name>) choose the project\'s',
+      'node_modules copy first and the scoped package over the alias, printing which copy',
+      'was chosen; two different products shipping the same skill name refuse the call',
+      'naming both sources and write nothing. Each skill becomes <dir>/<name>: a relative',
+      'symlink into that folder, or with --copy a copy of it (use `bunx @rig-c/core skills',
+      'install --copy` in a project without @rig-c/core installed so no link points into a',
+      'temporary .bunx cache). An entry already there that is not a link to the same folder',
+      '— or, with --copy, not the same bytes — is refused by name, exit 1, and nothing is',
+      'written; a run over only what this command made has nothing to do and exits 0. Codex,',
+      'Gemini CLI and Antigravity read',
       `<workspace>/${DEFAULT_SKILLS_DIR}; Claude Code installs the plugin instead (README,`,
       '"Install it into your agent").',
     ],
@@ -2172,12 +2189,14 @@ const USAGE_PARAGRAPHS: ReadonlyArray<{ about: readonly string[] | { flag: strin
   {
     about: ['skills'],
     lines: () => [
-      'skills install puts the agent skills this package ships where an agent host looks',
-      'for them, since none of them reads node_modules:',
+      'skills install puts the agent skills this package and every installed @rig-c/* or',
+      'alias package ship where an agent host looks for them, since none reads node_modules:',
       `  rigc skills install               relative links in ${DEFAULT_SKILLS_DIR}, which Codex, Gemini CLI`,
       '                                    and Antigravity read; --copy writes the folders instead',
-      'An entry already there that this command did not make is refused by name and',
-      'nothing is written; a second run has nothing to do. See `rigc skills --help`.',
+      'Two copies of the same product choose the project copy first and the scoped package',
+      'over the alias; an entry already there that this command did not make, or a duplicate',
+      'skill name across two different products, is refused by name and nothing is written.',
+      'See `rigc skills --help`.',
     ],
   },
   {

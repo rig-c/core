@@ -70059,6 +70059,312 @@ function runCliSuite(): number {
         'than kept or overwritten; and the refusals are measured to happen before the first write, because CLI10 and ' +
         'CLI11 run `rigc skills` from the repository root',
     );
+
+    // CLI122–CLI123 — sibling @rig-c/* and alias discovery, realpath deduplication, duplicate-name refusal, and planted regressions (issue #1672).
+    const ownPackageName = packageNameOf(import.meta.dir);
+    const writeSkillPkg = (
+      pkgRoot: string,
+      pkgName: string,
+      skillName: string,
+      body: string,
+      repository = 'git+https://github.com/rig-c/core.git',
+    ): string => {
+      const skillDir = join(pkgRoot, 'skills', skillName);
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(pkgRoot, 'package.json'),
+        `${JSON.stringify({ name: pkgName, version: '0.0.0', repository: { type: 'git', url: repository } }, null, 2)}\n`,
+      );
+      writeFileSync(join(skillDir, 'SKILL.md'), `---\nname: ${skillName}\ndescription: ${body}\n---\n\n# ${skillName}\n${body}\n`);
+      return skillDir;
+    };
+    const evaluateDiscovery = (runnerScript: string, rootDir: string, labelPrefix: string): string[] => {
+      const faults: string[] = [];
+      const runWith = (cwd: string, args: string[]): { status: number | null; stdout: string; stderr: string } => {
+        const ran = spawnSync(process.execPath, [runnerScript, ...args], { cwd, encoding: 'utf8' });
+        return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
+      };
+      const ownRealSkill = (name: string): string => realpathSync(join(rootDir, 'skills', name));
+
+      // 1. A project with no sibling keeps today's behavior and output shape, tagging each line with `[<package>]`.
+      const solo = ws(`${labelPrefix}-solo`);
+      const soloTarget = join(solo, '.agents', 'skills');
+      const soloRun = runWith(solo, ['skills', 'install']);
+      if (soloRun.status !== 0) faults.push(`no-sibling: exited ${String(soloRun.status)}: ${(soloRun.stderr || soloRun.stdout).trim().slice(0, 300)}`);
+      const soloInstalled = existsSync(soloTarget) ? readdirSync(soloTarget).sort() : [];
+      if (JSON.stringify(soloInstalled) !== JSON.stringify(shipped)) {
+        faults.push(`no-sibling: installed ${JSON.stringify(soloInstalled)}, required ${JSON.stringify(shipped)}`);
+      }
+      for (const name of shipped) {
+        const at = join(soloTarget, name);
+        const line = soloRun.stdout.split('\n').find((l) => l.includes(`${at} -> `)) ?? '';
+        if (!line.includes(`(${join(rootDir, 'skills', name)})`) || !line.includes(`[${ownPackageName}]`)) {
+          faults.push(`no-sibling: line for ${name} is ${JSON.stringify(line)}, missing (${join(rootDir, 'skills', name)}) or [${ownPackageName}]`);
+        }
+      }
+      const soloSummary = `rigc skills install: ${shipped.length} of ${shipped.length} skill(s) linked into ${soloTarget}`;
+      if (!soloRun.stdout.split('\n').includes(soloSummary)) {
+        faults.push(`no-sibling: summary line ${JSON.stringify(soloSummary)} absent from ${JSON.stringify(soloRun.stdout.trim().split('\n').pop() ?? '')}`);
+      }
+
+      // 2. Sibling @rig-c/* packages, unscoped alias package, symlink alias to the same realpath (deduplicated),
+      //    unrelated third-party packages with skills/ (including `rig-foreign` with a `rig-` prefix and non-rig-c repository, ignored), and second run as a no-op.
+      const sib = ws(`${labelPrefix}-siblings`);
+      const sibTarget = join(sib, '.agents', 'skills');
+      const partsSkill = writeSkillPkg(
+        join(sib, 'node_modules', '@rig-c', 'parts'),
+        '@rig-c/parts',
+        'rig-parts',
+        'cut parts fixture',
+        'git+https://github.com/rig-c/parts.git',
+      );
+      const playSkill = writeSkillPkg(
+        join(sib, 'node_modules', '@rig-c', 'play'),
+        '@rig-c/play',
+        'rig-play',
+        'play fixture',
+        'git+https://github.com/rig-c/play.git',
+      );
+      const poseSkill = writeSkillPkg(
+        join(sib, 'node_modules', 'rig-pose'),
+        'rig-pose',
+        'rig-pose',
+        'pose alias fixture',
+        'git+https://github.com/rig-c/pose.git',
+      );
+      writeSkillPkg(
+        join(sib, 'node_modules', 'unrelated-tool'),
+        'unrelated-tool',
+        'unrelated-skill',
+        'must not be installed',
+        'git+https://github.com/other-org/unrelated-tool.git',
+      );
+      writeSkillPkg(
+        join(sib, 'node_modules', 'rig-foreign'),
+        'rig-foreign',
+        'x',
+        'foreign skill with rig- prefix',
+        'git+https://github.com/other-org/rig-c/rig-foreign.git',
+      );
+      // An alias symlink and a self-symlink into rootDir: both resolve (`realpathSync`) to already-discovered folders.
+      symlinkSync(join(sib, 'node_modules', '@rig-c', 'parts'), join(sib, 'node_modules', 'rig-parts'), 'dir');
+      symlinkSync(rootDir, join(sib, 'node_modules', '@rig-c', 'core'), 'dir');
+
+      const expectedAll: Array<{ name: string; pkg: string; real: string }> = [
+        ...shipped.map((name) => ({ name, pkg: ownPackageName, real: ownRealSkill(name) })),
+        { name: 'rig-parts', pkg: '@rig-c/parts', real: realpathSync(partsSkill) },
+        { name: 'rig-play', pkg: '@rig-c/play', real: realpathSync(playSkill) },
+        { name: 'rig-pose', pkg: 'rig-pose', real: realpathSync(poseSkill) },
+      ].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+      const sibOne = runWith(sib, ['skills', 'install']);
+      const afterSibOne = snapshot(sibTarget);
+      const sibTwo = runWith(sib, ['skills', 'install']);
+      if (sibOne.status !== 0) faults.push(`siblings first run: exited ${String(sibOne.status)}: ${(sibOne.stderr || sibOne.stdout).trim().slice(0, 300)}`);
+      const sibInstalled = existsSync(sibTarget) ? readdirSync(sibTarget).sort() : [];
+      if (sibInstalled.includes('x') || sibOne.stdout.includes('rig-foreign') || sibOne.stdout.includes('/skills/x')) {
+        faults.push(
+          `siblings: third-party rig-foreign was installed or printed: installed=${JSON.stringify(sibInstalled)} stdout=${JSON.stringify(sibOne.stdout.trim().slice(0, 300))}`,
+        );
+      }
+      const expectedNames = expectedAll.map((e) => e.name);
+      if (JSON.stringify(sibInstalled) !== JSON.stringify(expectedNames)) {
+        faults.push(`siblings: installed ${JSON.stringify(sibInstalled)}, required ${JSON.stringify(expectedNames)}`);
+      }
+      for (const item of expectedAll) {
+        const at = join(sibTarget, item.name);
+        if (!existsSync(at) || !lstatSync(at).isSymbolicLink()) {
+          faults.push(`siblings: ${item.name} is ${existsSync(at) ? 'not a symlink' : 'absent'}`);
+          continue;
+        }
+        const linkText = readlinkSync(at);
+        if (linkText.startsWith('/')) faults.push(`siblings: ${item.name} is an absolute link ${linkText}`);
+        if (realpathSync(at) !== item.real) faults.push(`siblings: ${item.name} resolves to ${realpathSync(at)}, required ${item.real}`);
+        if (!readFileSync(join(at, 'SKILL.md')).equals(readFileSync(join(item.real, 'SKILL.md')))) {
+          faults.push(`siblings: ${item.name}/SKILL.md bytes do not match ${item.real}/SKILL.md`);
+        }
+        const matchingLines = sibOne.stdout.split('\n').filter((l) => l.includes(`${at} -> `) && l.includes(`[${item.pkg}]`));
+        if (matchingLines.length !== 1) {
+          faults.push(`siblings: printed ${matchingLines.length} line(s) for ${item.name} naming [${item.pkg}]; 1 was required`);
+        }
+      }
+      if (sibOne.stdout.includes('(chose ')) {
+        faults.push(`siblings: symlink alias was treated as a second copy instead of deduplicated by realpathSync: ${JSON.stringify(sibOne.stdout.trim().slice(0, 300))}`);
+      }
+      if (sibTwo.status !== 0) faults.push(`siblings second run: exited ${String(sibTwo.status)}: ${(sibTwo.stderr || sibTwo.stdout).trim().slice(0, 300)}`);
+      if (!/nothing to do/.test(sibTwo.stdout)) faults.push(`siblings second run: did not say "nothing to do": ${JSON.stringify(sibTwo.stdout.trim().split('\n').pop() ?? '')}`);
+      const sibAlready = sibTwo.stdout.split('\n').filter((l) => /^ {2}already linked {2}/.test(l)).length;
+      if (sibAlready !== expectedAll.length) faults.push(`siblings second run: printed ${sibAlready} "already linked" line(s), required ${expectedAll.length}`);
+      if (snapshot(sibTarget) !== afterSibOne) faults.push(`siblings second run changed the target directory`);
+
+      // 3. Same product under two names (`@rig-c/parts` beside `rig-parts`, and project `rig-c` beside running package),
+      //    with differing bytes: not refused; project `node_modules` copy wins over running package, and scoped `@rig-c/*`
+      //    wins over unscoped `rig-*` alias, printing which copy was chosen.
+      const sameProd = ws(`${labelPrefix}-same-product`);
+      const sameProdTarget = join(sameProd, '.agents', 'skills');
+      const scopedPartsSource = writeSkillPkg(
+        join(sameProd, 'node_modules', '@rig-c', 'parts'),
+        '@rig-c/parts',
+        'rig-parts',
+        'scoped parts bytes v2.0.2',
+        'git+https://github.com/rig-c/parts.git',
+      );
+      const aliasPartsSource = writeSkillPkg(
+        join(sameProd, 'node_modules', 'rig-parts'),
+        'rig-parts',
+        'rig-parts',
+        'unscoped alias parts bytes v1.0.0',
+        'git+https://github.com/rig-c/parts.git',
+      );
+      const projectRigcSource = writeSkillPkg(
+        join(sameProd, 'node_modules', 'rig-c'),
+        'rig-c',
+        'rigc',
+        'project unscoped rig-c bytes',
+        'git+https://github.com/rig-c/core.git',
+      );
+      const sameProdRun = runWith(sameProd, ['skills', 'install']);
+      if (sameProdRun.status !== 0) {
+        faults.push(`same-product: exited ${String(sameProdRun.status)}: ${(sameProdRun.stderr || sameProdRun.stdout).trim().slice(0, 300)}`);
+      } else {
+        const installedParts = join(sameProdTarget, 'rig-parts', 'SKILL.md');
+        if (!existsSync(installedParts) || !readFileSync(installedParts, 'utf8').includes('scoped parts bytes v2.0.2')) {
+          faults.push(`same-product: rig-parts bytes were not taken from scoped @rig-c/parts (${scopedPartsSource})`);
+        }
+        const expectedPartsChoice = `(chose @rig-c/parts at ${scopedPartsSource} over rig-parts at ${aliasPartsSource})`;
+        if (!sameProdRun.stdout.includes(expectedPartsChoice)) {
+          faults.push(`same-product: stdout did not print chosen copy ${JSON.stringify(expectedPartsChoice)}: ${JSON.stringify(sameProdRun.stdout.trim().slice(0, 400))}`);
+        }
+        const installedRigc = join(sameProdTarget, 'rigc', 'SKILL.md');
+        if (!existsSync(installedRigc) || !readFileSync(installedRigc, 'utf8').includes('project unscoped rig-c bytes')) {
+          faults.push(`same-product: rigc bytes were not taken from project node_modules/rig-c (${projectRigcSource})`);
+        }
+        const expectedRigcChoice = `(chose rig-c at ${projectRigcSource} over ${ownPackageName} at ${join(rootDir, 'skills', 'rigc')})`;
+        if (!sameProdRun.stdout.includes(expectedRigcChoice)) {
+          faults.push(`same-product: stdout did not print chosen copy ${JSON.stringify(expectedRigcChoice)}: ${JSON.stringify(sameProdRun.stdout.trim().slice(0, 400))}`);
+        }
+      }
+
+      // 4. Duplicate skill name across two DIFFERENT products (`@rig-c/parts` and `@rig-c/pose`) is refused naming both sources, and writes nothing.
+      const dup = ws(`${labelPrefix}-collision`);
+      const dupTarget = join(dup, '.agents', 'skills');
+      const dupSourceA = writeSkillPkg(join(dup, 'node_modules', '@rig-c', 'parts'), '@rig-c/parts', 'rig-parts', 'canonical parts skill', 'git+https://github.com/rig-c/parts.git');
+      const dupSourceB = writeSkillPkg(join(dup, 'node_modules', '@rig-c', 'pose'), '@rig-c/pose', 'rig-parts', 'different product shipping rig-parts', 'git+https://github.com/rig-c/pose.git');
+      const dupRun = runWith(dup, ['skills', 'install']);
+      if (dupRun.status !== 1) faults.push(`collision: exited ${String(dupRun.status)}; 1 was required`);
+      if (!dupRun.stderr.includes('duplicate skill name(s) across packages')) {
+        faults.push(`collision: stderr does not name duplicate skill names across packages: ${JSON.stringify(dupRun.stderr.trim().slice(0, 300))}`);
+      }
+      if (!dupRun.stderr.includes(`@rig-c/parts (${dupSourceA})`) || !dupRun.stderr.includes(`@rig-c/pose (${dupSourceB})`)) {
+        faults.push(`collision: stderr does not name both sources (@rig-c/parts (${dupSourceA}) and @rig-c/pose (${dupSourceB})): ${JSON.stringify(dupRun.stderr.trim().slice(0, 300))}`);
+      }
+      if (!dupRun.stderr.includes('nothing was written')) faults.push('collision: stderr does not say nothing was written');
+      if (existsSync(dupTarget) || existsSync(join(dup, '.agents'))) {
+        faults.push(`collision: refused run wrote ${snapshot(dupTarget)} under ${dup}`);
+      }
+      return faults;
+    };
+
+    const discoveryProbes = evaluateDiscovery(cli, import.meta.dir, 'live');
+    const discoveryHeld = discoveryProbes.length === 0;
+    say(
+      'CLI122_SKILLS_INSTALL_REACHES_EVERY_SIBLING_AND_ALIAS_PACKAGE_DEDUPLICATES_BY_REALPATH_AND_REFUSES_DUPLICATE_SKILL_NAMES',
+      discoveryHeld,
+      probeDetail(
+        discoveryHeld,
+        discoveryProbes,
+        `a project with no sibling installs the ${shipped.length} own skill(s) keeping today's summary and tagging [${ownPackageName}]; ` +
+          `a project with @rig-c/parts, @rig-c/play, unscoped rig-pose, a symlink alias rig-parts -> @rig-c/parts, a self-symlink @rig-c/core, ` +
+          `and unrelated third-party packages (including rig-foreign with skills/x/SKILL.md and a non-rig-c repository) installs ${shipped.length + 3} skill(s) ` +
+          '(ignoring both unrelated packages and deduplicating both symlinks by realpathSync), ' +
+          'names the source package on every line, and is a no-op on the second run; two copies of the same product with differing bytes ' +
+          '(@rig-c/parts beside rig-parts, and project rig-c beside the running package) choose the project copy first and the scoped package over the alias, ' +
+          'printing which copy was chosen; two different products (@rig-c/parts and @rig-c/pose) shipping rig-parts exit 1 naming both sources and write nothing',
+      ),
+      'issue #1672: a user installing @rig-c/core alongside @rig-c/parts or @rig-c/play previously got only core\'s five skills while sibling skills sat unlinked in node_modules',
+    );
+
+    // CLI123 — planted negative controls on a copy of the tree (`absentTree` + `skills/`), proving CLI122 catches each regression.
+    const plantBase = join(work, 'plant-tree');
+    absentTree(plantBase);
+    cpSync(join(import.meta.dir, 'skills'), join(plantBase, 'skills'), { recursive: true });
+    const coreCommandsFile = join(plantBase, 'src', 'cli', 'core_commands.ts');
+    const originalCoreCommands = readFileSync(coreCommandsFile, 'utf8');
+    const plantRunner = join(plantBase, 'cli_core.ts');
+    const discoveryPlants: Array<{ label: string; target: string; replacement: string; expectedSubstring: string }> = [
+      {
+        label: 'scan only PACKAGE_ROOT/skills',
+        target: 'for (const nm of nodeModulesRoots(cwd, packageRoot)) {',
+        replacement: 'for (const nm of [] as string[]) {',
+        expectedSubstring: 'siblings: installed',
+      },
+      {
+        label: 'accept unscoped directory by rig- name prefix without repository check',
+        target: 'function isRigcAliasDir(pkgDir: string): boolean {',
+        replacement: 'function isRigcAliasDir(pkgDir: string): boolean {\n  if (basename(pkgDir).startsWith(\'rig-\')) return true;',
+        expectedSubstring: 'siblings: third-party rig-foreign was installed or printed',
+      },
+      {
+        label: 'deduplicate by raw path string instead of realpathSync',
+        target: 'if (list.some((item) => item.realFrom === realFrom)) {',
+        replacement: 'if (list.some((item) => item.source === from)) {',
+        expectedSubstring: 'siblings: symlink alias was treated as a second copy',
+      },
+      {
+        label: 'refuse alias beside scoped copy of the same product',
+        target: 'if (packageName.startsWith(\'rig-\')) {',
+        replacement: 'if (packageName.startsWith(\'__never__\')) {',
+        expectedSubstring: 'same-product: exited 1',
+      },
+      {
+        label: 'prefer unscoped alias over scoped package for two project copies',
+        target: 'if (a.isScoped !== b.isScoped) return a.isScoped ? -1 : 1;',
+        replacement: 'if (a.isScoped !== b.isScoped) return a.isScoped ? 1 : -1;',
+        expectedSubstring: 'same-product: rig-parts bytes were not taken from scoped @rig-c/parts',
+      },
+      {
+        label: 'drop duplicate-skill collision refusal',
+        target: 'if (collisions.length > 0) {',
+        replacement: 'if (collisions.length > 999) {',
+        expectedSubstring: 'collision: exited 0; 1 was required',
+      },
+      {
+        label: 'omit package provenance from output lines',
+        target: '(${entry.source})  [${entry.packageName}]',
+        replacement: '(${entry.source})',
+        expectedSubstring: 'missing',
+      },
+    ];
+    const plantRegressionProbes: string[] = [];
+    const plantNotes: string[] = [];
+    for (const [idx, p] of discoveryPlants.entries()) {
+      const firstHit = originalCoreCommands.indexOf(p.target);
+      if (firstHit === -1 || firstHit !== originalCoreCommands.lastIndexOf(p.target)) {
+        plantRegressionProbes.push(`plant "${p.label}": target snippet was not unique in src/cli/core_commands.ts`);
+        continue;
+      }
+      writeFileSync(coreCommandsFile, originalCoreCommands.replace(p.target, p.replacement));
+      const caughtFaults = raisedBy(evaluateDiscovery(plantRunner, plantBase, `plant-${idx}`), { was: discoveryProbes });
+      if (!caughtFaults.some((f) => f.includes(p.expectedSubstring))) {
+        plantRegressionProbes.push(
+          `plant "${p.label}" was not caught with "${p.expectedSubstring}": faults were ${JSON.stringify(caughtFaults)}`,
+        );
+      } else {
+        plantNotes.push(`${p.label} -> caught (${caughtFaults.find((f) => f.includes(p.expectedSubstring))?.slice(0, 90) ?? ''})`);
+      }
+    }
+    writeFileSync(coreCommandsFile, originalCoreCommands);
+    const plantRegressionHeld = plantRegressionProbes.length === 0;
+    say(
+      'CLI123_SKILLS_INSTALL_DISCOVERY_CONTROLS_CATCH_PLANTED_REGRESSIONS',
+      plantRegressionHeld,
+      probeDetail(
+        plantRegressionHeld,
+        plantRegressionProbes,
+        `${discoveryPlants.length} planted regression(s) each caught by CLI122's evaluator: ${plantNotes.join('; ')}`,
+      ),
+      'issue #1672: a gate nobody has seen fail is not a gate — each clause of CLI122 is proven against a planted regression in src/cli/core_commands.ts',
+    );
     rmSync(work, { recursive: true, force: true });
   }
 
@@ -76861,8 +77167,10 @@ function runSkillSurfaceSuite(): number {
   // somebody else's `motion` is a coin toss — Codex lists both, Gemini CLI takes
   // the higher-precedence one — and the entry skill's routing table, which names
   // skills by that bare word, points at whichever won. Every skill carries the
-  // plugin's name, and every name the router hands an agent is a skill that ships.
-  const namingFaults = (skillDocs: string[], plugin: string | null, router: string | null): { faults: string[]; routed: number } => {
+  // plugin's name, every own skill the router hands an agent is a skill that ships,
+  // and every sibling package row (`| The request is… | Tool | Skill |`) routes
+  // `@rig-c/<sub>` to `rig-<sub>` (issue #1672).
+  const namingFaults = (skillDocs: string[], plugin: string | null, router: string | null): { faults: string[]; routed: number; siblingRouted: number } => {
     const faults: string[] = [];
     const names = skillDocs.map((doc) => basename(dirname(doc)));
     if (plugin === null) faults.push('no plugin name to hold the skill names to');
@@ -76872,39 +77180,84 @@ function runSkillSurfaceSuite(): number {
       }
     }
     let routed = 0;
+    let siblingRouted = 0;
     if (router === null) {
       faults.push('the entry skill could not be read, so no routed name was checked');
-      return { faults, routed };
+      return { faults, routed, siblingRouted };
     }
+    const SIBLING_ROW_CONTRACTS: Readonly<Record<string, { required: readonly string[]; forbidden: readonly string[] }>> = {
+      'rig-parts': { required: ['See-through', 'painting'], forbidden: ['loose PNGs'] },
+      'rig-pose': { required: ['body-18', 'retarget'], forbidden: ['chainfit', 'rigc pose'] },
+      'rig-review': { required: ['person', 'feedback'], forbidden: ['rigc review'] },
+      'rig-play': { required: ['skeleton.model.json', 'DOM'], forbidden: ['Spine pair', 'skeleton.json'] },
+      'rig-pixi': { required: ['skeleton.model.json', 'PixiJS 8'], forbidden: ['Spine pair', 'skeleton.json'] },
+      'rig-phaser': { required: ['skeleton.model.json', 'Phaser 4.2+'], forbidden: ['Spine pair', 'skeleton.json'] },
+      'rig-three': { required: ['skeleton.model.json', 'Three.js'], forbidden: ['Spine pair', 'skeleton.json'] },
+    };
     let column = -1;
+    let toolColumn = -1;
     router.split('\n').forEach((line, i) => {
       if (!line.startsWith('|')) {
         column = -1;
+        toolColumn = -1;
         return;
       }
       const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
       if (column === -1) {
         column = cells.indexOf('Skill');
+        toolColumn = cells.indexOf('Tool');
         return;
       }
       const named = /^`([^`]+)`$/.exec(cells[column] ?? '')?.[1];
       if (named === undefined) return;
+      if (toolColumn !== -1) {
+        siblingRouted += 1;
+        const pkgSub = /`@rig-c\/([a-z0-9-]+)`/.exec(cells[toolColumn] ?? '')?.[1];
+        const expected = pkgSub === undefined ? null : `rig-${pkgSub}`;
+        if (expected === null || named !== expected) {
+          faults.push(
+            `the router's line ${i + 1} routes tool ${cells[toolColumn] ?? '(none)'} to skill \`${named}\`, where ${expected === null ? 'a `@rig-c/<name>` tool cell' : `\`${expected}\``} was required`,
+          );
+          return;
+        }
+        const requestCell = cells[0] ?? '';
+        const contract = SIBLING_ROW_CONTRACTS[named];
+        if (contract !== undefined) {
+          for (const reqTerm of contract.required) {
+            if (!requestCell.includes(reqTerm)) {
+              faults.push(`the router's line ${i + 1} for \`${named}\` omits required frontmatter term ${JSON.stringify(reqTerm)}: ${JSON.stringify(requestCell)}`);
+            }
+          }
+          for (const badTerm of contract.forbidden) {
+            if (requestCell.includes(badTerm)) {
+              faults.push(`the router's line ${i + 1} for \`${named}\` contains forbidden conflation ${JSON.stringify(badTerm)}: ${JSON.stringify(requestCell)}`);
+            }
+          }
+        }
+        return;
+      }
       routed += 1;
       if (!names.includes(named)) faults.push(`the router's line ${i + 1} sends an agent to skill \`${named}\`, and no skill of that name ships`);
     });
     if (routed === 0) faults.push('the entry skill\'s routing table named no skill, so the router\'s pointers were not read');
-    return { faults, routed };
+    return { faults, routed, siblingRouted };
   };
   const entryDoc = surface.pluginName === null ? null : join(root, 'skills', surface.pluginName, 'SKILL.md');
   const naming = namingFaults(surface.skills, surface.pluginName, entryDoc !== null && existsSync(entryDoc) ? readFileSync(entryDoc, 'utf8') : null);
   const table = '| The request is… | Open | Skill |\n| --- | --- | --- |\n';
+  const siblingTable = '\n| The request is… | Tool | Skill |\n| --- | --- | --- |\n';
   const namingPlants: Array<[string, string[], string, number]> = [
     ['a bare name', ['skills/probe/SKILL.md', 'skills/motion/SKILL.md'], `${table}| a move | x | \`motion\` |\n`, 1],
     ['a routed name that does not ship', ['skills/probe/SKILL.md', 'skills/probe-motion/SKILL.md'], `${table}| a move | x | \`probe-moves\` |\n`, 1],
     ['a table that routes nowhere', ['skills/probe/SKILL.md'], `${table}| a person | x | — |\n`, 1],
-    ['a clean surface', ['skills/probe/SKILL.md', 'skills/probe-motion/SKILL.md'], `${table}| a move | x | \`probe-motion\` |\n`, 0],
+    ['a sibling row whose skill does not match its @rig-c/<name> tool', ['skills/probe/SKILL.md', 'skills/probe-motion/SKILL.md'], `${table}| a move | x | \`probe-motion\` |\n${siblingTable}| Turn one painting and See-through into a rig | \`@rig-c/parts\` | \`parts\` |\n`, 1],
+    ['a sibling row that conflates rig-pose with chainfit', ['skills/probe/SKILL.md', 'skills/probe-motion/SKILL.md'], `${table}| a move | x | \`probe-motion\` |\n${siblingTable}| retarget a body-18 pose (chainfit) | \`@rig-c/pose\` | \`rig-pose\` |\n`, 1],
+    ['a clean surface', ['skills/probe/SKILL.md', 'skills/probe-motion/SKILL.md'], `${table}| a move | x | \`probe-motion\` |\n${siblingTable}| Turn one painting and See-through into a rig | \`@rig-c/parts\` | \`rig-parts\` |\n`, 0],
   ];
-  const namingProbes = [...naming.faults];
+  const namingProbes = [
+    ...naming.faults,
+    ...(naming.siblingRouted < 7 ? [`the entry skill's sibling routing table named ${naming.siblingRouted} sibling skill(s); at least 7 were required`] : []),
+  ];
   for (const [label, docs, router, expected] of namingPlants) {
     const got = namingFaults(docs, 'probe', router).faults.length;
     if (got !== expected) namingProbes.push(`the plant "${label}" produced ${got} fault(s); ${expected} was required`);
@@ -76916,11 +77269,12 @@ function runSkillSurfaceSuite(): number {
     probeDetail(
       namingHeld,
       namingProbes,
-      `${surface.skills.length} skill(s) named "${surface.pluginName ?? ''}" or "${surface.pluginName ?? ''}-…", and the ` +
-        `entry skill's table routes to ${naming.routed} of them by name, each one that ships; four planted surfaces — ` +
-        'a bare name, a routed name that does not ship, a table routing nowhere, and a clean one — fault 1, 1, 1 and 0 times',
+      `${surface.skills.length} skill(s) named "${surface.pluginName ?? ''}" or "${surface.pluginName ?? ''}-…", the ` +
+        `entry skill's guide table routes to ${naming.routed} of them by name (each one that ships) and its sibling ` +
+        `table routes ${naming.siblingRouted} \`@rig-c/<name>\` tool(s) to \`rig-<name>\` with their frontmatter domain terms and no core-command conflation; six planted surfaces — ` +
+        'a bare name, a routed name that does not ship, a table routing nowhere, a mismatched sibling skill, a conflated sibling description, and a clean one — fault 1, 1, 1, 1, 1 and 0 times',
     ),
-    'issue #831: `face`, `motion`, `rigging` and `ingest` are namespaced under the Claude plugin and bare everywhere ' +
+    'issues #831, #1672: `face`, `motion`, `rigging` and `ingest` are namespaced under the Claude plugin and bare everywhere ' +
       'else, and the router named them by the bare word — a pointer that resolves to whatever else is installed under it',
   );
   return bad;

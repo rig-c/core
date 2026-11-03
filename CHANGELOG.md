@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.1](https://github.com/rig-c/core/compare/v3.2.0...v3.2.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **render:** --preroll lands its physics clock on the frame grid, not on the wrap ([#1687](https://github.com/rig-c/core/issues/1687)) ([#1688](https://github.com/rig-c/core/issues/1688)) ([13c4fd4](https://github.com/rig-c/core/commit/13c4fd4b43fa79a743b6af48b266717273cef183))
+
 ## [3.2.0](https://github.com/rig-c/core/compare/v3.1.1...v3.2.0) (2026-11-03)
 
 

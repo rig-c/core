@@ -503,7 +503,7 @@ export function spinePoser(data: SkeletonData): Poser {
     slots: data.slots.map((slot) => ({ name: slot.name, bone: slot.boneData.name })),
     subset: (opts, skin) => slotSubsetOf(data, opts, skin),
     setup: (skin) => spinePosed(setupPosed(data, skin)),
-    animation: (name, skin, fps, count, visit, environment, _channels, times, loop) => {
+    animation: (name, skin, fps, count, visit, environment, _channels, times, loop, clockSteps) => {
       const skeleton = skeletonUnderSkin(data, skin);
       const state = new AnimationState(new AnimationStateData(data));
       // Not looping: the last frame sits at the animation's duration, and a looping
@@ -522,7 +522,8 @@ export function spinePoser(data: SkeletonData): Poser {
           state.update(delta);
           state.apply(skeleton);
           setSkeletonEnvironment(skeleton, environment?.(i));
-          skeleton.update(times === undefined ? clock : physicsClockStep(delta));
+          // `clockSteps` (issue #1687, `render --preroll`): what the step moves the physics clock by, where that is not its own length.
+          skeleton.update(times === undefined ? clock : physicsClockStep(clockSteps?.[i - 1] ?? delta));
           skeleton.updateWorldTransform(Physics.update);
         } else {
           state.apply(skeleton);

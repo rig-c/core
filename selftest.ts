@@ -41,10 +41,10 @@ import { splitRigSkin, type RigAlphaClip, type RigClippingAttachment } from './s
  * did not already have the fixtures.
  *
  * So the fixtures are written fresh into a temp directory on every run, by
- * [`fixtures/public.ts`](fixtures/public.ts). Eight of them, one per shape the
+ * [`fixtures/public.ts`](fixtures/public.ts). Nine of them, one per shape the
  * assertions care about: `overlay_probe`, `articulated_probe`,
  * `contained_probe`, `segments_probe` (with no manifest), `skirt_probe`,
- * `pass_through_probe`, `leg_stop_probe` and `overlap_probe`. Two further suites build their own even smaller rigs inline
+ * `pass_through_probe`, `leg_stop_probe`, `overlap_probe` and `preroll_probe`. Two further suites build their own even smaller rigs inline
  * (static rigs, draw-order timelines).
  *
  * Other suites measure against the official Spine example corpus that
@@ -742,6 +742,7 @@ import {
   PASS_PLATE,
   passThroughFixture,
   placeFixturesUnder,
+  prerollFixture,
   SEGMENTS_PLATE,
   segmentsFixture,
   SKIRT_INFLUENCE,
@@ -123918,6 +123919,31 @@ function runRenderEnvironmentSuite(): number {
  *   with, planted on the core, is red at frame 0; and over a sweep of float64
  *   durations the walk `prerollTimes` lays out lands on `prerollStart` exactly,
  *   one float past every product that rounds short of the wrap.
+ *
+ * PRE07–PRE09 (issue #1687) take a fourth subject, the preroll probe
+ * (`prerollFixture`): a four-link spring chain under loops of 8/3 s and 1.6 s,
+ * which the posers read as the float32 just short of 32 frames at 12 fps and
+ * 80 at 30, and just past 48 at 30. There the step onto the wrap is a frame
+ * short (or a sliver past one) by `n · δ`, and moving the physics clock by it
+ * dropped a physics step at the landing and started the loop recorded on a
+ * fresh transient.
+ *
+ * - PRE07 is the card's bar: on the probe's stepped loops at pre-rolls of 2 and
+ *   10, on both posers, the loop recorded is loop `n + 1` of a plain looping
+ *   walk on the uniform grid — every keyed bone to the bit (the stepped keys
+ *   sit 1/120 s from every frame, past any re-phase), and every spring's tip
+ *   and rotation within what the plain walk moves by with its physics clock
+ *   one more `PHYSICS_CLOCK_LEAD` ahead. That bound is the render's own
+ *   resolution of physics time (issue #1380): a dropped or added physics step
+ *   is 1/60 s, over 10⁵ leads at any clock this suite reaches. The eased loop's distance, which is the
+ *   re-phase onto the wrap and not the clock, is printed as a reading.
+ * - PRE08: after 10 loops, where the plain walk's own loop closes, the loop
+ *   recorded closes its physics seam on both posers, every spring within its
+ *   largest in-loop step — and the short landing, planted on the core, opens
+ *   at least one.
+ * - PRE09 plants the walk this card retires on the core — the physics clock
+ *   moved by every step's own length, the step onto the wrap included — and
+ *   holds PRE07's reading red on every (loop, pre-roll) pair, by name.
  */
 function runRenderPrerollSuite(): number {
   console.log('\n── render --preroll: a looping track walked whole loops first, alike on both posers (issue #1684) ──');
@@ -123932,8 +123958,12 @@ function runRenderPrerollSuite(): number {
     'PRE04_WITHOUT_THE_FLAG_EVERY_WALK_HOLDS_AND_NO_FILE_RECORDS_A_PREROLL',
     'PRE05_A_PREROLL_THE_RENDER_WOULD_NOT_WALK_IS_REFUSED_BY_NAME_AND_CHECK_REFUSES_ONE_AS_A_REFERENCE',
     'PRE06_ON_A_LOOP_OF_NO_WHOLE_FRAME_COUNT_FRAME_0_IS_ANIMATION_TIME_0_AND_THE_WALK_LANDS_ON_THE_WRAP',
+    'PRE07_ON_A_LOOP_SHORT_OF_OR_PAST_WHOLE_FRAMES_THE_LOOP_RECORDED_IS_LOOP_N_PLUS_1_OF_THE_PLAIN_LOOPING_WALK',
+    'PRE08_AFTER_TEN_LOOPS_THE_LOOP_RECORDED_CLOSES_ITS_PHYSICS_SEAM_AND_THE_SHORT_LANDING_DOES_NOT',
+    'PRE09_THE_SHORT_LANDING_STEP_RESTORED_ON_THE_CORE_IS_RED_IN_PRE07S_READING_BY_NAME',
   ];
   const ORIGIN = 'issue #1684: a looping idle rendered from rest shows its physics starting from rest at every wrap; the render reaches the walk a player\'s looping track takes, and the export\'s walk has to be the core\'s';
+  const LANDING = 'issue #1687: on a loop whose duration is a float32 a hair off a whole number of frames, the step onto the wrap moved the physics clock by its own short length, a physics step was dropped, and the loop recorded started a fresh transient instead of continuing the settled cycle';
   const FPS = PROTOCOL_FPS;
   const PREROLL = 2;
   const bits = (x: unknown): string => JSON.stringify(x, (_k, v: unknown) => (typeof v === 'number' ? (Object.is(v, -0) ? '-0' : String(v)) : v));
@@ -124172,10 +124202,10 @@ function runRenderPrerollSuite(): number {
       let tracks = 0;
       for (const s of subjects) {
         // The core: every walk the sampler and the framing ask for, without the flag, holds and takes `count` steps.
-        const asked: Array<{ animation: string; steps: number; loop: boolean | undefined }> = [];
-        const observing: CoreRawWalk = (doc, animation, steps, plant, visit, env, loop) => {
-          asked.push({ animation, steps: steps.length, loop });
-          CORE_RAW_WALK(doc, animation, steps, plant, visit, env, loop);
+        const asked: Array<{ animation: string; steps: number; loop: boolean | undefined; clock: boolean }> = [];
+        const observing: CoreRawWalk = (doc, animation, steps, plant, visit, env, loop, clock) => {
+          asked.push({ animation, steps: steps.length, loop, clock: clock !== undefined });
+          CORE_RAW_WALK(doc, animation, steps, plant, visit, env, loop, clock);
         };
         const core = s.core(observing);
         for (const a of core.animations) sampleAnimation(core, a.name, FPS, { bones: true, geometry: true });
@@ -124184,6 +124214,7 @@ function runRenderPrerollSuite(): number {
         for (const w of asked) {
           walks++;
           if (w.loop !== undefined) probes.push(`${s.label} "${w.animation}": a walk without the flag was asked loop ${String(w.loop)}`);
+          if (w.clock) probes.push(`${s.label} "${w.animation}": a walk without the flag was handed a physics clock of its own (issue #1687)`);
           const d = durations.get(w.animation) ?? Number.NaN;
           if (w.steps !== Math.round(d * FPS) && w.steps !== Math.round(d * FRAMING_FPS)) probes.push(`${s.label} "${w.animation}": a walk without the flag took ${w.steps} step(s), not round(duration · fps)`);
         }
@@ -124223,7 +124254,7 @@ function runRenderPrerollSuite(): number {
       say(
         names[3],
         ok,
-        probeDetail(ok, probes.slice(0, 12), `${walks} core walk(s) without the flag, every one held (loop absent) and of round(duration · fps) steps; ${tracks} spine-core track(s), every one set not looping; no frames.json, geometry.json or ${SHEET_MANIFEST_FILE} without the flag records a preroll — the gallery's bytes are RH05's and EH06's`),
+        probeDetail(ok, probes.slice(0, 12), `${walks} core walk(s) without the flag, every one held (loop absent), on the render's own physics clock (no clock handed in) and of round(duration · fps) steps; ${tracks} spine-core track(s), every one set not looping; no frames.json, geometry.json or ${SHEET_MANIFEST_FILE} without the flag records a preroll — the gallery's bytes are RH05's and EH06's`),
         'issue #1684: an absent flag is today\'s render, byte for byte — `render_hashes base --check` and `emit_hashes base --check` stay green with neither base regenerated',
       );
     }
@@ -124414,6 +124445,235 @@ function runRenderPrerollSuite(): number {
         probeDetail(ok, probes.slice(0, 12), rows.join('; ')),
         'issue #1684, PR review: a loop that is no whole number of frames walked by `preroll · count` uniform steps started the loop recorded at the wrong animation time while frame 0 was filed at time 0',
       );
+    }
+
+    // --- PRE07–PRE09: the landing on the wrap, on a loop that is no whole number of frames as the posers read it ------
+    // The preroll probe (`prerollFixture`): its loops last 8/3 s and 1.6 s as written, which the posers read as the
+    // float32 just below and just above a whole number of frames. A pre-roll's loop recorded is held to loop n + 1 of a
+    // plain looping walk on the uniform grid — `Poser.animation` with no `times`, `(n + 1) · count` steps of 1/fps.
+    {
+      const probe = prerollFixture();
+      const built = runCli(['build', '--rig', probe.rigPath, '--motion', probe.motionPath, '--images', probe.imagesDir, '--out', probe.outDir]);
+      if (built.status !== 0) {
+        for (const name of names.slice(6)) say(name, false, `the ${probe.rig} fixture did not build (exit ${String(built.status)}): ${built.stderr.trim().split('\n').slice(-1)[0] ?? ''}`, LANDING);
+        return bad;
+      }
+      const modelPath = join(probe.outDir, MODEL_DOCUMENT_FILE);
+      const modelText = readFileSync(modelPath, 'utf8');
+      const atlasText = readFileSync(join(probe.outDir, 'skeleton.atlas'), 'utf8');
+      const skeletonPath = join(probe.outDir, 'skeleton.json');
+      const skeletonText = readFileSync(skeletonPath, 'utf8');
+      const skeletonRef = { path: skeletonPath, bytes: readFileSync(skeletonPath) };
+      const core = (walk?: CoreRawWalk): Poser => corePoser(modelText, atlasText, modelPath, skeletonRef, undefined, walk === undefined ? {} : { walk });
+      const spine = (): Poser => spinePoser(loadOracleData(skeletonText, atlasText, `the ${probe.rig} fixture`));
+      const json = JSON.parse(skeletonText) as { bones: Array<{ name: string; parent?: string; length?: number }> };
+      const lengths = new Map(json.bones.map((b) => [b.name, b.length ?? 0]));
+      const springs = physicsBonesOf(skeletonText);
+      const driven = new Set(springs);
+      for (const b of json.bones) if (b.parent !== undefined && driven.has(b.parent)) driven.add(b.name);
+      const keyed = json.bones.map((b) => b.name).filter((n) => !driven.has(n));
+      type Snap = NonNullable<Frame['bones']>;
+      const read = (bones: Snap, bone: string): { x: number; y: number; deg: number } => {
+        const b = bones.find((x) => x.name === bone);
+        if (b === undefined) return { x: Number.NaN, y: Number.NaN, deg: Number.NaN };
+        const length = lengths.get(bone) ?? 0;
+        return { x: b.worldX + length * b.a, y: b.worldY + length * b.c, deg: (Math.atan2(b.c, b.a) * 180) / Math.PI };
+      };
+      const turnOf = (p: number, q: number): number => {
+        const d = Math.abs(p - q) % 360;
+        return d > 180 ? 360 - d : d;
+      };
+      const apart = (a: Snap, b: Snap, bone: string): { tip: number; turn: number } => {
+        const p = read(a, bone);
+        const q = read(b, bone);
+        return { tip: Math.hypot(p.x - q.x, p.y - q.y), turn: turnOf(p.deg, q.deg) };
+      };
+      // Loop n + 1 of the plain looping walk: frames n · count to (n + 1) · count of the uniform grid, on a looping track.
+      const plainLoop = (poser: Poser, name: string, fps: number, n: number, count: number): Snap[] => {
+        const loop: Snap[] = [];
+        poser.animation(name, undefined, fps, (n + 1) * count, (i, posed) => {
+          if (i >= n * count) loop.push(posed.bones());
+        }, undefined, undefined, undefined, true);
+        return loop;
+      };
+      const recorded = (poser: Poser, name: string, fps: number, n: number): Snap[] => sampleAnimation(poser, name, fps, { bones: true, preroll: n }).map((f) => f.bones ?? []);
+      // The yardstick: the same plain walk with its physics clock one more PHYSICS_CLOCK_LEAD ahead (issue #1380).
+      const lead2: CoreRawWalk = (doc, animation, steps, plant, visit, env, loop) => CORE_RAW_WALK(doc, animation, steps, plant, visit, env, loop, (dt) => physicsClockStep(dt) + dt * PHYSICS_CLOCK_LEAD);
+      // The walk this card retires, planted on the core: the physics clock moved by every step's own length, the short
+      // step onto the wrap included — `clockSteps` dropped.
+      const shortLanding: CoreRawWalk = (doc, animation, steps, plant, visit, env, loop) => CORE_RAW_WALK(doc, animation, steps, plant, visit, env, loop);
+      const CASES: Array<{ name: string; fps: number; short: boolean }> = [
+        { name: 'step', fps: FPS, short: true },
+        { name: 'step', fps: 30, short: true },
+        { name: 'step_over', fps: 30, short: false },
+      ];
+      const LOOPS = [2, 10];
+      // PRE07's reading, on one pair of posers — the unplanted pair, or the planted core against itself (PRE09).
+      const landing = (posers: Array<[string, () => Poser]>): { probes: string[]; rows: string[]; compared: number } => {
+        const probes: string[] = [];
+        const rows: string[] = [];
+        let compared = 0;
+        for (const c of CASES) {
+          const duration = core().animations.find((a) => a.name === c.name)?.duration ?? Number.NaN;
+          const count = Math.round(duration * c.fps);
+          const delta = count / c.fps - duration;
+          if (!(c.short ? delta > 0 : delta < 0)) {
+            probes.push(`"${c.name}" at ${c.fps} fps: ${duration}s is ${(duration * c.fps).toFixed(9)} frames, not just ${c.short ? 'short of' : 'past'} a whole ${count} — this case cannot see the landing it is for`);
+            continue;
+          }
+          for (const n of LOOPS) {
+            // The bound, per spring: what one more lead of the physics clock moves it by over the same loop, read on the core.
+            const base = plainLoop(core(), c.name, c.fps, n, count);
+            const ahead = plainLoop(core(lead2), c.name, c.fps, n, count);
+            const bound = new Map(springs.map((bone) => {
+              let tip = 0;
+              let turn = 0;
+              for (let i = 0; i <= count; i++) {
+                const d = apart(base[i], ahead[i], bone);
+                tip = Math.max(tip, d.tip);
+                turn = Math.max(turn, d.turn);
+              }
+              return [bone, { tip, turn }];
+            }));
+            for (const [bone, b] of bound) if (!(b.tip > 0) || !(b.turn > 0)) probes.push(`"${c.name}" at ${c.fps} fps, ${n} loop(s): one more lead moved spring "${bone}" by ${b.tip} and ${b.turn}°, so the bound measures nothing`);
+            let worst = { bone: '', ratio: 0, tip: 0, bound: 0 };
+            for (const [label, make] of posers) {
+              const plain = plainLoop(make(), c.name, c.fps, n, count);
+              const warm = recorded(make(), c.name, c.fps, n);
+              compared++;
+              if (warm.length !== count + 1 || plain.length !== count + 1) {
+                probes.push(`"${c.name}" at ${c.fps} fps, ${n} loop(s) on ${label}: ${warm.length} frame(s) recorded and ${plain.length} walked, not ${count + 1}`);
+                continue;
+              }
+              const keyedAt = warm.findIndex((f, i) => bits(f.filter((b) => keyed.includes(b.name))) !== bits(plain[i].filter((b) => keyed.includes(b.name))));
+              if (keyedAt !== -1) probes.push(`"${c.name}" at ${c.fps} fps, ${n} loop(s) on ${label}: frame ${keyedAt}'s keyed bones [${keyed.join(', ')}] are not the plain walk's to the bit, so a stepped key sits within the re-phase of a frame and the springs' inputs differ`);
+              for (const bone of springs) {
+                const b = bound.get(bone) ?? { tip: 0, turn: 0 };
+                let far = { at: -1, tip: 0, turn: 0 };
+                for (let i = 0; i <= count; i++) {
+                  const d = apart(warm[i], plain[i], bone);
+                  if (d.tip > far.tip || d.turn > far.turn) far = { at: i, tip: Math.max(far.tip, d.tip), turn: Math.max(far.turn, d.turn) };
+                }
+                if (!(far.tip <= b.tip) || !(far.turn <= b.turn)) {
+                  probes.push(`"${c.name}" at ${c.fps} fps, --preroll ${n} on ${label}: spring "${bone}" is ${far.tip.toExponential(3)} from loop ${n + 1} of the plain looping walk and ${far.turn.toExponential(3)}° (frame ${far.at}), past what one more lead of the clock moves it, ${b.tip.toExponential(3)} and ${b.turn.toExponential(3)}°`);
+                }
+                const ratio = Math.max(far.tip / b.tip, far.turn / b.turn);
+                if (ratio >= worst.ratio) worst = { bone, ratio, tip: far.tip, bound: b.tip };
+              }
+            }
+            rows.push(`"${c.name}" ${c.fps} fps --preroll ${n} (${count} frames ${c.short ? 'short' : 'past'} by ${Math.abs(delta).toExponential(2)} s): worst "${worst.bone}" ${worst.tip.toExponential(2)} against one lead's ${worst.bound.toExponential(2)} (${worst.ratio.toExponential(1)} of it)`);
+          }
+        }
+        return { probes, rows, compared };
+      };
+
+      // --- PRE07: the loop recorded is loop n + 1 of the plain looping walk -----------------------------------------
+      {
+        const { probes, rows, compared } = landing([['core', () => core()], ['spine-core', spine]]);
+        // Where the duration is exactly `count / fps` the clock steps are the track's own, so an exact loop's pre-roll is
+        // the walk it was; and over the probe's own two durations the step onto the wrap is the one that parts.
+        let exact = 0;
+        let parted = 0;
+        for (const fps of [7, 12, 24, 30, 60]) {
+          for (const count of [1, 6, 24, 36, 60, 90]) {
+            for (const n of [1, 2, 3, 10]) {
+              const d = Math.fround(count / fps);
+              const { times, clock, first } = prerollTimes(d, fps, n);
+              if (d !== count / fps) {
+                if (clock[first - 1] !== times[first] - times[first - 1]) parted++;
+                continue;
+              }
+              exact++;
+              const moved = clock.findIndex((c, k) => c !== times[k + 1] - times[k]);
+              if (moved !== -1) probes.push(`${d}s at ${fps} fps, --preroll ${n}: a duration of exactly ${count} frames moves its physics clock off the track at step ${moved}`);
+            }
+          }
+        }
+        if (exact === 0 || parted === 0) probes.push(`the sweep found ${exact} exact and ${parted} parted landing(s), so it cannot tell the two apart`);
+        rows.push(`over ${exact} (duration, fps, pre-roll) triple(s) whose duration is exactly a whole number of frames, every physics clock step is the track's own; ${parted} landing(s) of the others part from it`);
+        // A reading, not a bar: on the eased idle the re-phase n · δ moves the keyed bones, and the springs answer it.
+        const reading: string[] = [];
+        const duration = core().animations.find((a) => a.name === 'breath')?.duration ?? Number.NaN;
+        const count = Math.round(duration * FPS);
+        for (const n of LOOPS) {
+          const plain = plainLoop(core(), 'breath', FPS, n, count);
+          const warm = recorded(core(), 'breath', FPS, n);
+          let tip = 0;
+          for (let i = 0; i <= count && i < warm.length; i++) for (const bone of springs) tip = Math.max(tip, apart(warm[i], plain[i], bone).tip);
+          reading.push(`${tip.toExponential(3)} at --preroll ${n}`);
+        }
+        const ok = probes.length === 0;
+        say(
+          names[6],
+          ok,
+          probeDetail(ok, probes.slice(0, 12), `${compared} comparison(s) of ${springs.length} spring(s) on the core and spine-core, every keyed bone the plain walk's to the bit: ${rows.join('; ')} — the bound per spring is the plain walk against itself with its physics clock one more PHYSICS_CLOCK_LEAD (${PHYSICS_CLOCK_LEAD}) ahead; on the eased "breath" (a reading) the springs sit ${reading.join(' and ')} off the plain walk, the re-phase onto the wrap`),
+          LANDING,
+        );
+      }
+
+      // --- PRE08: the loop recorded closes its physics seam ---------------------------------------------------------
+      // Per spring: frame 0 against the last frame, tip and rotation, within that spring's own largest step between two
+      // adjacent frames — after ten loops, where the plain walk's own loop closes (read beside it, or the bar is moot).
+      {
+        const probes: string[] = [];
+        const rows: string[] = [];
+        const N = 10;
+        const seam = (loop: Snap[]): { bone: string; ratio: number }[] =>
+          springs.map((bone) => {
+            let tipStep = 0;
+            let turnStep = 0;
+            for (let i = 1; i < loop.length; i++) {
+              const d = apart(loop[i - 1], loop[i], bone);
+              tipStep = Math.max(tipStep, d.tip);
+              turnStep = Math.max(turnStep, d.turn);
+            }
+            const d = apart(loop[0], loop[loop.length - 1], bone);
+            return { bone, ratio: Math.max(d.tip / tipStep, d.turn / turnStep) };
+          });
+        const worstOf = (s: { bone: string; ratio: number }[]): { bone: string; ratio: number } => s.reduce((a, b) => (b.ratio > a.ratio || Number.isNaN(b.ratio) ? b : a));
+        let shortOpen = 0;
+        let sets = 0;
+        for (const [name, fps] of [['breath', FPS], ['breath', 30], ['step', FPS], ['step', 30], ['step_over', 30]] as const) {
+          sets++;
+          const duration = core().animations.find((a) => a.name === name)?.duration ?? Number.NaN;
+          const count = Math.round(duration * fps);
+          const settled = worstOf(seam(plainLoop(core(), name, fps, N, count)));
+          if (!(settled.ratio <= 1)) probes.push(`"${name}" at ${fps} fps: the plain walk's own loop ${N + 1} is open at "${settled.bone}" (${settled.ratio.toFixed(4)} of its step), so it has not settled and the seam cannot be read`);
+          for (const [label, make] of [['core', () => core()], ['spine-core', spine]] as const) {
+            const w = worstOf(seam(recorded(make(), name, fps, N)));
+            if (!(w.ratio <= 1)) probes.push(`"${name}" at ${fps} fps, --preroll ${N} on ${label}: spring "${w.bone}" ends ${w.ratio.toFixed(4)} of its largest in-loop step from where it started`);
+            if (label === 'core') rows.push(`"${name}" ${fps} fps: worst "${w.bone}" ${w.ratio.toFixed(4)} of its step (plain walk ${settled.ratio.toFixed(4)})`);
+          }
+          const planted = worstOf(seam(recorded(core(shortLanding), name, fps, N)));
+          if (planted.ratio > 1) shortOpen++;
+          rows.push(`short landing planted: "${planted.bone}" ${planted.ratio.toFixed(4)}`);
+        }
+        if (shortOpen === 0) probes.push(`the short landing planted on the core closed every seam of ${sets}, so this reading cannot see the landing knock a settled cycle off`);
+        const ok = probes.length === 0;
+        say(
+          names[7],
+          ok,
+          probeDetail(ok, probes.slice(0, 12), `${sets} set(s) after ${N} loops, on the core and spine-core: ${rows.join('; ')} — the short landing planted on the core opens ${shortOpen} of ${sets}`),
+          LANDING,
+        );
+      }
+
+      // --- PRE09: the short landing restored on the core is red in PRE07's reading, by name -------------------------
+      {
+        const probes: string[] = [];
+        const planted = landing([['the core with the short landing planted', () => core(shortLanding)]]);
+        const cases = CASES.length * LOOPS.length;
+        const red = planted.probes.filter((p) => / spring "/.test(p));
+        const redCases = new Set(red.map((p) => p.slice(0, p.indexOf(' on '))));
+        if (redCases.size !== cases) probes.push(`${redCases.size} of ${cases} (case, pre-roll) pair(s) red with the short landing planted, so PRE07 cannot see it on the rest: ${planted.rows.join('; ')}`);
+        const ok = probes.length === 0;
+        say(
+          names[8],
+          ok,
+          probeDetail(ok, probes.slice(0, 12), `the physics clock moved by every step's own length, the step onto the wrap included, planted on the core: PRE07's reading red on ${redCases.size} of ${cases} (case, pre-roll) pair(s) by name, e.g. ${red[0] ?? 'none'}`),
+          LANDING,
+        );
+      }
     }
   } finally {
     rmSync(work, { recursive: true, force: true });

@@ -8,7 +8,7 @@
  * ships was a gate a fresh clone could not run — the tool's central claim,
  * demonstrable only by the one person who already had the fixtures.
  *
- * So the fixtures are generated. Seven of them, and between them they carry every
+ * So the fixtures are generated. Nine of them, and between them they carry every
  * structure the assertions have an opinion about:
  *
  *   - `overlay_probe`    — a base plate with alpha overlays pinned on top, one of
@@ -42,6 +42,11 @@
  *   - `leg_stop_probe`   — a skirt chain swung into a leg three ways: held by a
  *                          `stops` declaration, held by the same network written
  *                          by hand, and not held (issue #1413).
+ *   - `overlap_probe`    — an arm slid across a still body, once with a
+ *                          draw-order key that puts it behind (issue #1480).
+ *   - `preroll_probe`    — a four-link spring chain under loops whose durations,
+ *                          as the posers read them, sit just short of and just
+ *                          past a whole number of frames (issue #1687).
  *
  * 🚫 **None of this is art.** Every plate is a checkerboard with its own name
  * burned into it by `tools/plate.ts`, and no claim about seams, blending or style
@@ -1388,4 +1393,102 @@ export function legStopFixture(): LegStopFixture {
   });
 
   return { rig: 'leg_stop_probe', dir, rigPath, motionPath, imagesDir, outDir: join(dir, 'spine'), handRigPath, freeRigPath };
+}
+
+// ---------------------------------------------------------------------------
+// preroll_probe (issue #1687)
+// ---------------------------------------------------------------------------
+
+/**
+ * The pre-roll probe's numbers: a chain of `links` links of `link` units
+ * under a keyed `swing` bone, every link on a `rotate` spring, and three loops
+ * whose durations are NOT a whole number of frames in the posers' float.
+ *
+ * - `duration` is 8/3 s, 32 frames at 12 fps and 80 at 30, and the posers
+ *   read it as the float32 2.6666665 — one float below 8/3, so `count / fps`
+ *   overshoots it by 1.6e-7 s and a pre-roll's step onto the wrap is a frame
+ *   short by that times the loops. `over` is 1.6 s, 48 frames at 30 fps, read
+ *   as the float32 above it: the step onto the wrap is a sliver past a grid
+ *   point (`prerollTimes`). (At 12 fps 1.6 s is 19.2 frames, no whole loop.)
+ * - `step` and `step_over` key `swing` by **stepped** keys only, at odd
+ *   multiples of 1/120 s: at least 1/120 s from every frame at 12 and 30 fps,
+ *   where the re-phase a pre-roll lands with is under 2e-6 s at ten loops, so
+ *   every keyed value a pre-roll poses is the plain looping walk's, to the
+ *   bit, and the physics is all that can differ. Each returns to 0 before its
+ *   end, so the loop is continuous at the wrap.
+ * - `breath` keys the same bone by eased curves — the idle a consumer writes —
+ *   where the re-phase moves the keyed bones by its own length times their
+ *   speed.
+ */
+export const PREROLL_PROBE = { links: 4, link: 40, duration: 8 / 3, over: 1.6 } as const;
+
+/**
+ * A four-link spring chain under a swung bone with three looping animations
+ * whose durations are no whole number of frames as the posers read them — what
+ * `render --preroll`'s landing on the wrap is held to (issue #1687).
+ */
+export function prerollFixture(): SpecOnlyFixture {
+  const dir = makeDir('preroll_probe');
+  const imagesDir = join(dir, 'parts');
+  const { links, link, duration, over } = PREROLL_PROBE;
+  writePlate(join(imagesDir, 'tip.png'), 24, 24, 'tip');
+  const bones: Array<Record<string, unknown>> = [{ name: 'root' }, { name: 'swing', parent: 'root', x: 128, y: 220 }];
+  const physics: Record<string, Record<string, unknown>> = {};
+  for (let k = 0; k < links; k++) {
+    const name = `link_${k}`;
+    bones.push(k === 0 ? { name, parent: 'swing', rotation: -90, length: link } : { name, parent: `link_${k - 1}`, x: link, length: link });
+    physics[`${name}_spring`] = { bone: name, rotate: 1, inertia: 0.5, strength: 60, damping: 0.85, mass: 1, mix: 1 };
+  }
+
+  const rigPath = join(dir, 'preroll_probe.rig.json');
+  writeJson(rigPath, {
+    spec: 'rigc-rig/1',
+    name: 'preroll_probe',
+    images: 'parts',
+    skeleton: { width: 256, height: 256 },
+    bones,
+    slots: [{ name: 'tip', bone: `link_${links - 1}`, attachment: 'tip' }],
+    skins: { default: { tip: { tip: { image: 'tip.png', x: link / 2 } } } },
+  });
+
+  // Stepped keys at k/120 s, k odd; each returns to 0 before the end, which closes the loop on the value it opened with.
+  const stepped = (end: number, keys: Array<[number, number]>): Array<Record<string, unknown>> => [
+    ...keys.map(([k, v]) => ({ t: k / 120, v: [v], ease: 'stepped' })),
+    { t: end, v: [0] },
+  ];
+  const quarters = (values: number[]): Array<Record<string, unknown>> => values.map((v, k) => ({ t: (k * duration) / 4, v: [v], ...(k < 4 ? { ease: 'swing' } : {}) }));
+  const motionPath = join(dir, 'preroll_probe.motion.json');
+  writeJson(motionPath, {
+    spec: 'rigc-motion/1',
+    archetype: 'preroll_probe',
+    cut: 'preroll_probe',
+    easings: { swing: [0.36, 0, 0.64, 1] },
+    physics,
+    animations: {
+      step: {
+        duration,
+        loop: true,
+        tracks: [{ bone: 'swing', property: 'rotate', keys: stepped(duration, [[0, 0], [41, 20], [121, 0], [201, -20], [281, 0]]) }],
+      },
+      step_over: {
+        duration: over,
+        loop: true,
+        tracks: [{ bone: 'swing', property: 'rotate', keys: stepped(over, [[0, 0], [41, 20], [101, -20], [151, 0]]) }],
+      },
+      breath: {
+        duration,
+        loop: true,
+        tracks: [
+          { bone: 'swing', property: 'rotate', keys: quarters([0, 20, 0, -20, 0]) },
+          {
+            bone: 'swing',
+            property: 'translate',
+            keys: [0, 25, 0, -25, 0].map((x, k) => ({ t: (k * duration) / 4, v: [x, 0], ...(k < 4 ? { ease: 'swing' } : {}) })),
+          },
+        ],
+      },
+    },
+  });
+
+  return { rig: 'preroll_probe', dir, rigPath, motionPath, imagesDir, outDir: join(dir, 'spine') };
 }

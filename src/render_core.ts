@@ -18,7 +18,7 @@ import type { ChannelValue } from './render_shared.ts';
  * with the runtime it replaces — and "the core poser imports nothing from
  * spine-core" could then only be said, not read off the file. Here it can be:
  * the value imports below are the core, the atlas reader and nothing else, and
- * the one thing taken from `render.ts` is its types (erased at run time). The
+ * the renderer's types come from `render_shared.ts` (nothing from `render.ts`). The
  * modules that link spine-core stay three (`CUR07`).
  *
  * ## What each part of a pose is read from
@@ -98,7 +98,7 @@ import type {
   Poser,
   SkinRoster,
   SlotSubset,
-} from './render.ts';
+} from './render_shared.ts';
 import { atlasRegionLookup, parseAtlasText } from './atlas.ts';
 import { pagesOfAtlas, spineFileSha256, type ModelPage } from './model.ts';
 import { clipThrough, type ClipShape, type ShapeClipper } from './core/clipping.ts';

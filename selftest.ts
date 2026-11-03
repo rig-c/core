@@ -123890,28 +123890,28 @@ function runRenderEnvironmentSuite(): number {
  * LS05–LS06 (two links on a ±12° swing, one 4 s period from t = 0) and the
  * articulated fixture (three physics constraints over three animations).
  *
- * - RP01 renders each through the core and `--poser spine` with `--preroll 2
+ * - PRE01 renders each through the core and `--poser spine` with `--preroll 2
  *   --geometry --sheet` and holds every file equal — frames.json, geometry.json
  *   and the sheet files byte for byte, every PNG by its pixels — and that each
  *   file records the pre-roll.
- * - RP02 is the card's bar: on the skirt and the spring probe, after a pre-roll
+ * - PRE02 is the card's bar: on the skirt and the spring probe, after a pre-roll
  *   of 1 loop, every physics bone's frame-0-against-last-frame difference —
  *   its tip's distance and its rotation — is within that bone's own largest
  *   step between two adjacent frames of the loop; without the flag the same
  *   reading is red on both (the spring released from rest). Read off the
  *   `geometry.json` the CLI wrote, on both posers.
- * - RP03 plants the rejected walks on the core's side and holds each red
+ * - PRE03 plants the rejected walks on the core's side and holds each red
  *   against spine-core: the loop flag ignored (a track that holds at its
  *   duration through the pre-roll), and the pre-roll dropped (the recorded loop
  *   walked from rest). The unplanted core is the positive control.
- * - RP04: without the flag the render is the one it was — every walk the core
+ * - PRE04: without the flag the render is the one it was — every walk the core
  *   is asked for holds (`loop` absent) and takes `count` steps, spine-core's
  *   track is set with `loop` false, and no file carries a `preroll` field; the
  *   gallery's bytes are held by `RH05` and `EH06` (`render_hashes`,
  *   `emit_hashes` `base --check`), which this change regenerates neither of.
- * - RP05: every refusal by name, exit 2, nothing written; and `check` refuses a
+ * - PRE05: every refusal by name, exit 2, nothing written; and `check` refuses a
  *   frame set drawn after a pre-roll as a reference.
- * - RP06: on a loop that is no whole number of frames (1.03 s at 12 fps) with a
+ * - PRE06: on a loop that is no whole number of frames (1.03 s at 12 fps) with a
  *   stepped key, every frame's keyed bones after pre-rolls of 1 and 3 are the
  *   render from rest's to the bit on both posers — frame 0 at animation time 0
  *   — and the uniform grid of `preroll · count` steps this flag first landed
@@ -123926,12 +123926,12 @@ function runRenderPrerollSuite(): number {
     bad += reportCase(name, ok, detail, why);
   };
   const names = [
-    'RP01_A_PREROLL_RENDERS_THE_SAME_FRAMES_GEOMETRY_SHEET_AND_FRAMES_JSON_THROUGH_THE_CORE_AND_SPINE_CORE',
-    'RP02_AFTER_A_PREROLL_EVERY_PHYSICS_BONE_CLOSES_WITHIN_ITS_OWN_LARGEST_STEP_AND_FROM_REST_IT_DOES_NOT',
-    'RP03_EACH_REJECTED_WALK_PLANTED_ON_THE_CORE_IS_RED_AGAINST_SPINE_CORE',
-    'RP04_WITHOUT_THE_FLAG_EVERY_WALK_HOLDS_AND_NO_FILE_RECORDS_A_PREROLL',
-    'RP05_A_PREROLL_THE_RENDER_WOULD_NOT_WALK_IS_REFUSED_BY_NAME_AND_CHECK_REFUSES_ONE_AS_A_REFERENCE',
-    'RP06_ON_A_LOOP_OF_NO_WHOLE_FRAME_COUNT_FRAME_0_IS_ANIMATION_TIME_0_AND_THE_WALK_LANDS_ON_THE_WRAP',
+    'PRE01_A_PREROLL_RENDERS_THE_SAME_FRAMES_GEOMETRY_SHEET_AND_FRAMES_JSON_THROUGH_THE_CORE_AND_SPINE_CORE',
+    'PRE02_AFTER_A_PREROLL_EVERY_PHYSICS_BONE_CLOSES_WITHIN_ITS_OWN_LARGEST_STEP_AND_FROM_REST_IT_DOES_NOT',
+    'PRE03_EACH_REJECTED_WALK_PLANTED_ON_THE_CORE_IS_RED_AGAINST_SPINE_CORE',
+    'PRE04_WITHOUT_THE_FLAG_EVERY_WALK_HOLDS_AND_NO_FILE_RECORDS_A_PREROLL',
+    'PRE05_A_PREROLL_THE_RENDER_WOULD_NOT_WALK_IS_REFUSED_BY_NAME_AND_CHECK_REFUSES_ONE_AS_A_REFERENCE',
+    'PRE06_ON_A_LOOP_OF_NO_WHOLE_FRAME_COUNT_FRAME_0_IS_ANIMATION_TIME_0_AND_THE_WALK_LANDS_ON_THE_WRAP',
   ];
   const ORIGIN = 'issue #1684: a looping idle rendered from rest shows its physics starting from rest at every wrap; the render reaches the walk a player\'s looping track takes, and the export\'s walk has to be the core\'s';
   const FPS = PROTOCOL_FPS;
@@ -123992,7 +123992,7 @@ function runRenderPrerollSuite(): number {
       return out.sort();
     };
 
-    // --- RP01: through the CLI, the core and spine-core write the same files --------------------------------
+    // --- PRE01: through the CLI, the core and spine-core write the same files --------------------------------
     const renders = new Map<Subject, string>();
     {
       const probes: string[] = [];
@@ -124040,7 +124040,7 @@ function runRenderPrerollSuite(): number {
       say(names[0], ok, probeDetail(ok, probes.slice(0, 12), `${rows.join('; ')} — every PNG equal in its pixels, frames.json, geometry.json and the sheet files byte for byte, the default render posed by the core and the other by spine-core, each file recording preroll ${PREROLL}`), ORIGIN);
     }
 
-    // --- RP02: the card's bar, read off the geometry.json the CLI wrote -------------------------------------
+    // --- PRE02: the card's bar, read off the geometry.json the CLI wrote -------------------------------------
     // Per physics bone: its tip — the origin plus `length` along its world x axis — and its world rotation. The bone's
     // own bound is its largest step between two adjacent frames of the loop recorded; the closure is frame 0 against the
     // last frame, which a loop repeats as its first.
@@ -124116,7 +124116,7 @@ function runRenderPrerollSuite(): number {
       );
     }
 
-    // --- RP03: each rejected walk, planted on the core, is red against spine-core ---------------------------
+    // --- PRE03: each rejected walk, planted on the core, is red against spine-core ---------------------------
     {
       const probes: string[] = [];
       // By name: the two posers list a skeleton's animations in orders of their own.
@@ -124165,7 +124165,7 @@ function runRenderPrerollSuite(): number {
       );
     }
 
-    // --- RP04: without the flag, the walk is the one it always was ------------------------------------------
+    // --- PRE04: without the flag, the walk is the one it always was ------------------------------------------
     {
       const probes: string[] = [];
       let walks = 0;
@@ -124228,7 +124228,7 @@ function runRenderPrerollSuite(): number {
       );
     }
 
-    // --- RP05: refusals by name, exit 2, nothing written ----------------------------------------------------
+    // --- PRE05: refusals by name, exit 2, nothing written ----------------------------------------------------
     {
       const probes: string[] = [];
       let checks = 0;
@@ -124289,7 +124289,7 @@ function runRenderPrerollSuite(): number {
       // check: a frame set drawn after a pre-roll is not a reference.
       const reference = renders.get(skirtSubject);
       let checkExit: number | null = null;
-      if (reference === undefined) probes.push('RP01 left no render after a pre-roll to hand check');
+      if (reference === undefined) probes.push('PRE01 left no render after a pre-roll to hand check');
       else {
         const r = runCli(['check', '--candidate', skirtSubject.out, '--frames', reference]);
         checkExit = r.status;
@@ -124306,7 +124306,7 @@ function runRenderPrerollSuite(): number {
       );
     }
 
-    // --- RP06: a loop that is no whole number of frames records from animation time 0 -----------------------
+    // --- PRE06: a loop that is no whole number of frames records from animation time 0 -----------------------
     // The spring probe's rig under a 1.03 s loop (12.36 frames at 12 fps) whose `swing` key is stepped — 0 on the
     // first half of the loop, 12 on the second — so a keyed bone reads which half of the loop a pose sits in, to the
     // bit: frame 0 of a pre-roll is at animation time 0 only if its keyed bones are the render from rest's frame 0.

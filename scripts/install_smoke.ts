@@ -755,13 +755,62 @@ const isDropPlant = (plant: Plant): plant is DropPlant => plant in DROPPED_ENTRI
  * issue #1212 — can tell, and the call probe has to go red alone.
  */
 const FORK_ERROR_IMPORT = "import { CompileError, NotImplementedError } from './errors.ts';";
-const FORK_ERROR_PLANTED = "import { NotImplementedError } from './errors.ts';\nclass CompileError extends Error {}";
+const FORK_ERROR_PLANTED = "import { NotImplementedError } from './errors.ts';\nclass CompileError extends Error { constructor(message?: string, readonly code?: string) { super(message); } }";
 const FORK_ERROR_MODULE = 'src/rig.ts';
+
+interface ImportSurfaceRow {
+  /** The `exports` key, e.g. `./plate`. */
+  entry: string;
+  /** The bare specifier for this package, e.g. `rig-c/plate`. */
+  spec: string;
+  /** The third column of RELEASING.md *The import surface*. */
+  needs: string;
+  /** True when the third column states the entry needs `nothing` installed beside the package. */
+  needsNothing: boolean;
+}
+
+/**
+ * The entry table in RELEASING.md *The import surface*, read from the document
+ * so the list of runtime-free entries is never copied by hand (issue #1679).
+ */
+function readImportSurfaceTable(): ImportSurfaceRow[] {
+  const text = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8');
+  const section = /(?:^|\n)#### The import surface\n([\s\S]*?)(?=\n#{2,4} )/.exec(text)?.[1] ?? '';
+  const table = /\|\s*entry\s*\|\s*named by\s*\|\s*needs installed beside the package\s*\|\n\|\s*---\s*\|\s*---\s*\|\s*---\s*\|\n((?:\|[^\n]+\n)+)/.exec(section)?.[1] ?? '';
+  const rows: ImportSurfaceRow[] = [];
+  for (const line of table.trim().split('\n')) {
+    if (line.trim() === '') continue;
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    const entryMatch = /^`[^`/]+\/(.+)`$/.exec(cells[0] ?? '');
+    if (cells.length !== 3 || entryMatch === null) {
+      throw new Error(`install_smoke: malformed row in RELEASING.md *The import surface*: ${line}`);
+    }
+    const subpath = entryMatch[1];
+    const needs = cells[2];
+    rows.push({
+      entry: `./${subpath}`,
+      spec: `${NAME}/${subpath}`,
+      needs,
+      needsNothing: /^nothing(?:$|[;,. ])/.test(needs),
+    });
+  }
+  return rows;
+}
+const IMPORT_SURFACE = readImportSurfaceTable();
+const NOTHING_ENTRIES = IMPORT_SURFACE.filter((row) => row.needsNothing);
 
 // A plant aimed at something the table does not list would prove nothing about
 // the table, so every target is held to it where it is declared — and an
 // entry's rows have to agree on what it needs, or the probe without the
 // runtime would hold one entry to two statements.
+if (IMPORT_SURFACE.length === 0 || NOTHING_ENTRIES.length === 0) {
+  throw new Error('install_smoke: RELEASING.md *The import surface* table yielded no runtime-free entries');
+}
+for (const key of new Set([...Object.keys(NAMED_EXPORTS), ...IMPORT_SURFACE.map((row) => row.entry)])) {
+  if (!(key in NAMED_EXPORTS) || !IMPORT_SURFACE.some((row) => row.entry === key)) {
+    throw new Error(`install_smoke: RELEASING.md *The import surface* and NAMED_EXPORTS disagree on ${key}`);
+  }
+}
 if (OBSERVED_SYMBOLS.find((row) => row.entry === RENAME_PLANT.entry)?.values[RENAME_PLANT.symbol] === undefined) {
   throw new Error(`install_smoke: RENAME_PLANT names ${RENAME_PLANT.symbol} through ${RENAME_PLANT.entry}, which OBSERVED_SYMBOLS does not list`);
 }
@@ -776,6 +825,10 @@ if (OBSERVED_SYMBOLS.find((row) => row.entry === './errors')?.values.CompileErro
 for (const row of OBSERVED_SYMBOLS) {
   const other = OBSERVED_SYMBOLS.find((r) => r.entry === row.entry && r.needsRuntime !== row.needsRuntime);
   if (other !== undefined) throw new Error(`install_smoke: OBSERVED_SYMBOLS states ${row.entry} both needs and does not need ${RUNTIME} (${row.observed}; ${other.observed})`);
+  const surface = IMPORT_SURFACE.find((s) => s.entry === row.entry);
+  if (surface === undefined || row.needsRuntime === surface.needsNothing) {
+    throw new Error(`install_smoke: OBSERVED_SYMBOLS (${row.entry} needsRuntime=${String(row.needsRuntime)}) disagrees with RELEASING.md *The import surface* (${surface?.needs ?? 'absent'})`);
+  }
 }
 
 /**
@@ -1636,6 +1689,52 @@ function bundlerOnce(): { js: string; version: string; faults: string[] } {
   }
   bundler = { js, version: (JSON.parse(readFileSync(pkg, 'utf8')) as { version?: string }).version ?? wanted, faults: [] };
   return bundler;
+}
+
+/**
+ * The TypeScript compiler and `@types/bun`, installed once per run into a
+ * directory of their own — never into a case's install, so `node_modules` in
+ * the install stays the runtime-free install a user receives (issue #1679).
+ */
+let typechecker: { js: string; typeRoots: string[]; version: string; faults: string[] } | null = null;
+function typecheckerOnce(): { js: string; typeRoots: string[]; version: string; faults: string[] } {
+  if (typechecker !== null) return typechecker;
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
+  const lock = existsSync(join(ROOT, 'bun.lock')) ? readFileSync(join(ROOT, 'bun.lock'), 'utf8') : '';
+  const tsWanted = /"typescript": \["typescript@([^"]+)"/.exec(lock)?.[1] ?? manifest.devDependencies?.typescript ?? null;
+  const bunTypesWanted = /"@types\/bun": \["@types\/bun@([^"]+)"/.exec(lock)?.[1] ?? manifest.devDependencies?.['@types/bun'] ?? null;
+  if (tsWanted === null || bunTypesWanted === null) {
+    typechecker = {
+      js: '',
+      typeRoots: [],
+      version: '',
+      faults: [`SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: this tree declares no typescript (${String(tsWanted)}) or @types/bun (${String(bunTypesWanted)}) in devDependencies and bun.lock resolves none`],
+    };
+    return typechecker;
+  }
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'rigc-smoke-tsc-')));
+  LEFT_BEHIND.push(dir);
+  writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name: 'rigc-install-smoke-tsc', private: true, version: '0.0.0' }, null, 2)}\n`);
+  const installed = run('npm', ['install', `typescript@${tsWanted}`, `@types/bun@${bunTypesWanted}`, '--no-audit', '--no-fund', '--no-package-lock'], dir);
+  const js = join(dir, 'node_modules', 'typescript', 'bin', 'tsc');
+  const pkg = join(dir, 'node_modules', 'typescript', 'package.json');
+  const bunTypesPkg = join(dir, 'node_modules', '@types', 'bun', 'package.json');
+  if (!existsSync(js) || !existsSync(pkg) || !existsSync(bunTypesPkg)) {
+    typechecker = {
+      js: '',
+      typeRoots: [],
+      version: tsWanted,
+      faults: [`SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: npm install typescript@${tsWanted} @types/bun@${bunTypesWanted} exited ${installed.status} and left no ${js} or ${bunTypesPkg}. ${installed.out.trim().slice(0, 1500)}`],
+    };
+    return typechecker;
+  }
+  typechecker = {
+    js,
+    typeRoots: [join(dir, 'node_modules', '@types')],
+    version: (JSON.parse(readFileSync(pkg, 'utf8')) as { version?: string }).version ?? tsWanted,
+    faults: [],
+  };
+  return typechecker;
 }
 
 // ---------------------------------------------------------------------------
@@ -2712,12 +2811,15 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   // also reddening render and check — the `refuse-core-build` plant goes red at
   // one step, which is what shows render and check are untouched by it.
   rmSync(runtimeDir, { recursive: true, force: true });
+  rmSync(dirname(runtimeDir), { recursive: true, force: true });
   if (!existsSync(runtimeDir)) {
     expectVersion('version', 'cli_core.ts', `entry: cli_core.ts — ${RUNTIME} absent`);
 
-    // What each observed entry needs installed beside it (issue #1167), read
-    // from this install with the runtime gone: RELEASING.md states it beside
-    // the entry, and `needsRuntime` in OBSERVED_SYMBOLS is what is checked.
+    // What each observed entry needs installed beside it (issues #1167, #1679),
+    // read from this install with the runtime gone: RELEASING.md *The import
+    // surface* states it beside the entry, and both halves — loading without
+    // the runtime and type-checking a one-line dependant importing each
+    // runtime-free entry with no @esotericsoftware/* present — are held here.
     const bareRan = run('bun', [join(home, 'exports_probe.mjs'), 'without-runtime'], home);
     output += bareRan.out;
     const bareBad = bareRan.out.split('\n').filter((line) => line.startsWith('EXPORT_BAD '));
@@ -2728,8 +2830,66 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
         'exports-without-runtime',
         `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: the import probe without ${RUNTIME} exited ${bareRan.status} without a verdict. ${bareRan.out.trim().slice(0, 2000)}`,
       );
-    } else if (bareBad.length === 0) {
-      notes.push(`exports: ${bareCounts}`);
+    }
+    const tsc = typecheckerOnce();
+    const nodeForTsc = onPath('node');
+    for (const f of tsc.faults) fault('exports-without-runtime', f);
+    if (nodeForTsc === null) fault('exports-without-runtime', 'SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: `node` is not on PATH, and `tsc` runs on it');
+    let typechecked = 0;
+    if (tsc.faults.length === 0 && nodeForTsc !== null) {
+      const tcDir = mkdirIn(home, 'exports-typecheck');
+      const files = NOTHING_ENTRIES.map((row, index) => {
+        const file = `dependant_${index}.ts`;
+        writeFileSync(join(tcDir, file), `import '${row.spec}';\n`);
+        return file;
+      });
+      const writeTsconfig = (targetFiles: string[]): string => {
+        const cfg = join(tcDir, 'tsconfig.json');
+        writeFileSync(
+          cfg,
+          `${JSON.stringify(
+            {
+              extends: join(ROOT, 'tsconfig.json'),
+              compilerOptions: { typeRoots: tsc.typeRoots },
+              include: [],
+              files: targetFiles,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+        return cfg;
+      };
+      const allRan = run('node', [tsc.js, '-p', writeTsconfig(files)], tcDir);
+      output += allRan.out;
+      if (allRan.status === 0) {
+        typechecked = NOTHING_ENTRIES.length;
+      } else {
+        for (const [index, row] of NOTHING_ENTRIES.entries()) {
+          const oneRan = run('node', [tsc.js, '-p', writeTsconfig([files[index]])], tcDir);
+          output += oneRan.out;
+          if (oneRan.status === 0) {
+            typechecked += 1;
+          } else {
+            const errors = oneRan.out.split('\n').filter((line) => /error TS\d+:/.test(line));
+            const first = (errors[0] ?? oneRan.out.trim().split('\n')[0] ?? '(no diagnostic)').trim();
+            fault(
+              'exports-without-runtime',
+              `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: ${row.spec}: tsc ${tsc.version} on \`import '${row.spec}';\` without ${RUNTIME} exited ${oneRan.status} (${errors.length} error(s); first: ${first}), and RELEASING.md *The import surface* states this entry needs nothing installed beside the package`,
+            );
+          }
+        }
+        if (typechecked === NOTHING_ENTRIES.length) {
+          fault(
+            'exports-without-runtime',
+            `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: tsc ${tsc.version} without ${RUNTIME} exited ${allRan.status}: ${allRan.out.trim().slice(0, 1500)}`,
+          );
+        }
+      }
+      rmSync(tcDir, { recursive: true, force: true });
+    }
+    if (bareCounts !== undefined && bareBad.length === 0 && typechecked === NOTHING_ENTRIES.length) {
+      notes.push(`exports: ${bareCounts}, ${typechecked}/${NOTHING_ENTRIES.length} runtime-free entr(ies) type-checked (tsc ${tsc.version})`);
     }
     // MQ45 (issue #1230): the motion comparison from this install, the runtime gone. It reads `build/` for the reason
     // render and check below do — the comparison above holds it to the core entry's bytes, and a broken core build

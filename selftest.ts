@@ -123911,6 +123911,13 @@ function runRenderEnvironmentSuite(): number {
  *   `emit_hashes` `base --check`), which this change regenerates neither of.
  * - RP05: every refusal by name, exit 2, nothing written; and `check` refuses a
  *   frame set drawn after a pre-roll as a reference.
+ * - RP06: on a loop that is no whole number of frames (1.03 s at 12 fps) with a
+ *   stepped key, every frame's keyed bones after pre-rolls of 1 and 3 are the
+ *   render from rest's to the bit on both posers — frame 0 at animation time 0
+ *   — and the uniform grid of `preroll · count` steps this flag first landed
+ *   with, planted on the core, is red at frame 0; and over a sweep of float64
+ *   durations the walk `prerollTimes` lays out lands on `prerollStart` exactly,
+ *   one float past every product that rounds short of the wrap.
  */
 function runRenderPrerollSuite(): number {
   console.log('\n── render --preroll: a looping track walked whole loops first, alike on both posers (issue #1684) ──');
@@ -123924,6 +123931,7 @@ function runRenderPrerollSuite(): number {
     'RP03_EACH_REJECTED_WALK_PLANTED_ON_THE_CORE_IS_RED_AGAINST_SPINE_CORE',
     'RP04_WITHOUT_THE_FLAG_EVERY_WALK_HOLDS_AND_NO_FILE_RECORDS_A_PREROLL',
     'RP05_A_PREROLL_THE_RENDER_WOULD_NOT_WALK_IS_REFUSED_BY_NAME_AND_CHECK_REFUSES_ONE_AS_A_REFERENCE',
+    'RP06_ON_A_LOOP_OF_NO_WHOLE_FRAME_COUNT_FRAME_0_IS_ANIMATION_TIME_0_AND_THE_WALK_LANDS_ON_THE_WRAP',
   ];
   const ORIGIN = 'issue #1684: a looping idle rendered from rest shows its physics starting from rest at every wrap; the render reaches the walk a player\'s looping track takes, and the export\'s walk has to be the core\'s';
   const FPS = PROTOCOL_FPS;
@@ -124297,11 +124305,123 @@ function runRenderPrerollSuite(): number {
         'issue #1684: a pre-roll the render would not walk prints a frame set from rest under a flag that says it is warm, so each is a named failure before anything is posed',
       );
     }
+
+    // --- RP06: a loop that is no whole number of frames records from animation time 0 -----------------------
+    // The spring probe's rig under a 1.03 s loop (12.36 frames at 12 fps) whose `swing` key is stepped — 0 on the
+    // first half of the loop, 12 on the second — so a keyed bone reads which half of the loop a pose sits in, to the
+    // bit: frame 0 of a pre-roll is at animation time 0 only if its keyed bones are the render from rest's frame 0.
+    {
+      const probes: string[] = [];
+      const rows: string[] = [];
+      const DURATION = 1.03;
+      const dir = join(work, 'rp06');
+      mkdirSync(dir);
+      const motionPath = join(dir, 'motion.json');
+      const spring = { rotate: 1, inertia: 0.5, strength: 60, damping: 0.8, mass: 1, mix: 1 };
+      writeFileSync(
+        motionPath,
+        JSON.stringify({
+          spec: 'rigc-motion/1',
+          archetype: 'springloop',
+          cut: 'springloop',
+          easings: {},
+          physics: { c0_spring: { bone: 'c0', ...spring }, c1_spring: { bone: 'c1', ...spring } },
+          animations: { step: { duration: DURATION, loop: true, tracks: [{ bone: 'swing', property: 'rotate', keys: [{ t: 0, v: [0], ease: 'stepped' }, { t: DURATION / 2, v: [12], ease: 'stepped' }, { t: DURATION, v: [12] }] }] } },
+        }),
+      );
+      const out = join(dir, 'build');
+      const built = runCli(['build', '--rig', join(work, 'spring', 'rig.json'), '--motion', motionPath, '--out', out]);
+      if (built.status !== 0) probes.push(`the stepped probe did not build (exit ${String(built.status)}): ${built.stderr.trim().split('\n').slice(-1)[0] ?? ''}`);
+      else {
+        const modelPath = join(out, MODEL_DOCUMENT_FILE);
+        const modelText = readFileSync(modelPath, 'utf8');
+        const atlasText = readFileSync(join(out, 'skeleton.atlas'), 'utf8');
+        const skeletonPath = join(out, 'skeleton.json');
+        const skeletonText = readFileSync(skeletonPath, 'utf8');
+        const skeletonRef = { path: skeletonPath, bytes: readFileSync(skeletonPath) };
+        const core = (walk?: CoreRawWalk): Poser => corePoser(modelText, atlasText, modelPath, skeletonRef, undefined, walk === undefined ? {} : { walk });
+        const spine = (): Poser => spinePoser(loadOracleData(skeletonText, atlasText, 'the stepped probe'));
+        const json = JSON.parse(skeletonText) as { bones: Array<{ name: string; parent?: string }> };
+        const driven = new Set(physicsBonesOf(skeletonText));
+        for (const b of json.bones) if (b.parent !== undefined && driven.has(b.parent)) driven.add(b.name);
+        const keyed = json.bones.map((b) => b.name).filter((n) => !driven.has(n));
+        const duration = core().animations.find((a) => a.name === 'step')?.duration ?? Number.NaN;
+        const count = Math.round(duration * FPS);
+        if (Math.abs(count / FPS - duration) === 0) probes.push(`the stepped probe's loop, ${duration}s, is ${count} whole frames at ${FPS} fps, so it cannot see a pre-roll's phase`);
+        const bonesOf = (f: Frame | undefined): string => bits((f?.bones ?? []).filter((b) => keyed.includes(b.name)));
+        const sample = (poser: Poser, preroll?: number): Frame[] => sampleAnimation(poser, 'step', FPS, { bones: true, geometry: true, ...(preroll === undefined ? {} : { preroll }) });
+        const flat = (f: Frame | undefined): string => bits([f?.bones ?? null, f?.attachments ?? null]);
+        // The walk rejected, planted on the core: the uniform grid this flag first landed with — `preroll · count` steps
+        // of 1/fps, then the loop.
+        const uniform = (n: number): CoreRawWalk => (doc, animation, steps, plant, visit, env, loop) => {
+          const first = steps.length - count;
+          const skipped = n * count;
+          CORE_RAW_WALK(doc, animation, new Array<number>(skipped + count).fill(1 / FPS), plant, (pose, i) => visit(pose, i - skipped + first), env, loop);
+        };
+        const cold = { core: sample(core()), spine: sample(spine()) };
+        let uniformRed = 0;
+        for (const n of [1, 3]) {
+          // Both posers read a duration off float32 key times, so `n · duration` is a float and its looped time is 0.
+          if ((n * duration) % duration !== 0) probes.push(`--preroll ${n}: ${n} · ${duration} is not a float on the wrap, so frame 0 cannot sit at animation time 0`);
+          for (const [label, poser, from] of [['core', core(), cold.core], ['spine-core', spine(), cold.spine]] as const) {
+            const warm = sample(poser, n);
+            if (warm.length !== count + 1) probes.push(`--preroll ${n} on ${label}: ${warm.length} frame(s), not ${count + 1}`);
+            const at = warm.findIndex((f, i) => bonesOf(f) !== bonesOf(from[i]));
+            if (at !== -1) probes.push(`--preroll ${n} on ${label}: frame ${at}'s keyed bones [${keyed.join(', ')}] are not the render from rest's at animation time ${(at / FPS).toFixed(4)}s`);
+            if (warm.some((f, i) => f.time !== i / FPS && f.time !== i * (1 / FPS))) probes.push(`--preroll ${n} on ${label}: a frame filed at a time that is not its index over ${FPS}`);
+          }
+          const want = sample(spine(), n);
+          const got = sample(core(), n);
+          const differing = got.findIndex((f, i) => flat(f) !== flat(want[i]));
+          if (differing !== -1 || got.length !== want.length) probes.push(`--preroll ${n}: the core differs from spine-core at frame ${differing}`);
+          const planted = sample(core(uniform(n)), n);
+          if (bonesOf(planted[0]) !== bonesOf(cold.core[0])) uniformRed++;
+          rows.push(`--preroll ${n}: ${count + 1} frame(s) of a ${duration}s loop (${(duration * FPS).toFixed(2)} frames at ${FPS} fps), every keyed bone of every frame the render from rest's to the bit on the core and on spine-core, every pose of the two equal`);
+        }
+        if (uniformRed !== 2) probes.push(`the uniform grid planted on the core was red on ${uniformRed} of 2 pre-rolls, so this control cannot see a misplaced phase`);
+        rows.push(`the uniform grid of the first landing, planted on the core, red at frame 0 on ${uniformRed} of 2`);
+      }
+      // The walk's own arithmetic, over a sweep: adding up the steps of `prerollTimes` the way both posers do lands on
+      // `prerollStart` exactly, whose looped time is the wrap or the float past it.
+      let swept = 0;
+      let moved = 0;
+      let shortProducts = 0;
+      for (const d of [DURATION, 2.667, 0.7, 1.1, 0.35, 5.003]) {
+        for (const fps of [7, 12, 24, 30, 60]) {
+          for (let n = 1; n <= 8; n++) {
+            swept++;
+            const { times, first } = prerollTimes(d, fps, n);
+            let track = 0;
+            for (let j = 1; j <= first; j++) track += times[j] - times[j - 1];
+            const start = prerollStart(d, n);
+            if (start !== n * d) moved++;
+            if ((n * d) % d > d / 2) shortProducts++;
+            const prior = new Float64Array([start]);
+            new BigUint64Array(prior.buffer)[0] -= 1n;
+            if (track !== start) probes.push(`${d}s at ${fps} fps, --preroll ${n}: the walk lands on ${track}, not ${start}`);
+            else if (!(start % d < d / 2) || (start !== n * d && !(prior[0] % d > d / 2))) probes.push(`${d}s, --preroll ${n}: the walk starts at ${start}, whose looped time ${start % d} is not the wrap or the float just past it`);
+            if (times.length - 1 - first !== Math.round(d * fps)) probes.push(`${d}s at ${fps} fps, --preroll ${n}: ${times.length - 1 - first} step(s) recorded, not round(duration · fps)`);
+          }
+        }
+      }
+      if (shortProducts === 0) probes.push(`no product in the sweep rounds short of the wrap, so it cannot see prerollStart move one past it`);
+      if (moved !== shortProducts) probes.push(`prerollStart moved ${moved} start(s), where ${shortProducts} product(s) round short of the wrap`);
+      rows.push(`the walk's arithmetic over ${swept} (duration, fps, pre-roll) triple(s) at float64 durations: every one lands on its start exactly, and the ${shortProducts} whose product \`n · duration\` rounds short of the wrap — the duration's loop end, not its start — start one float past it`);
+      const ok = probes.length === 0;
+      say(
+        names[5],
+        ok,
+        probeDetail(ok, probes.slice(0, 12), rows.join('; ')),
+        'issue #1684, PR review: a loop that is no whole number of frames walked by `preroll · count` uniform steps started the loop recorded at the wrong animation time while frame 0 was filed at time 0',
+      );
+    }
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
   return bad;
 }
+
+import { prerollStart, prerollTimes } from './src/render_shared.ts';
 
 /** The bones a Spine 4.3 skeleton's physics constraints drive, in declaration order, off its JSON. */
 function physicsBonesOf(skeletonText: string): string[] {

@@ -47,7 +47,7 @@ import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError,
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
-import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
+import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, prerollStart, prerollWarmPoints, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
 import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
@@ -563,7 +563,8 @@ function prerollRefusal(preroll: number, fps: number, durations: ReadonlyArray<{
     );
   }
   for (const { name, duration } of durations) {
-    const steps = (preroll + 1) * Math.round(duration * fps);
+    // `prerollTimes`' own length, counted rather than built: the grid before the wrap, the step onto it, and the loop recorded.
+    const steps = prerollWarmPoints(prerollStart(duration, preroll), fps) + Math.round(duration * fps);
     if (steps > WALK_STEPS_HELD) return `--preroll ${preroll}: "${name}" would walk ${steps} steps at ${fps} fps, more than a walk's step list holds (${WALK_STEPS_HELD})`;
   }
   return null;

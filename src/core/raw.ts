@@ -621,6 +621,26 @@ export function poseRawAnimationEach(doc: CompiledDocument, animation: string, s
 }
 
 /**
+ * The live track's looping mode (`./track.ts`, issue #1276) as a batch walk's:
+ * the animation time the track time wrapped by the duration, `reset` keys
+ * fired across the wrap, the clipped rows cut as the raw entry cuts them, and
+ * no value that is not finite kept.
+ */
+const RAW_LOOPED_MODE: WalkMode = { loop: true, keep: false, live: true };
+
+/**
+ * `poseRawAnimationEach` on a looping track (issue #1684): the same walk in the
+ * live track's looping mode (`RAW_LOOPED_MODE`) — the walk `render --preroll`
+ * takes, which carries the physics across every wrap as a player's looping
+ * track does. Not part of the entry's promised surface: `src/render_core.ts`
+ * is its one caller, and spine-core's poser takes the same walk through
+ * `setAnimation(0, name, true)`.
+ */
+export function poseRawLoopEach(doc: CompiledDocument, animation: string, steps: readonly number[], plant: TimelinePlant, reset: RawReset, visit: (pose: RawPose, index: number) => void, clock?: (dt: number) => number, environment?: StepEnvironment): void {
+  walkEach(doc, animation, steps, plant, reset, clock === undefined ? RAW_LOOPED_MODE : { ...RAW_LOOPED_MODE, clock: (dt) => clock(dt) }, RAW_SHAPE, visit, environment);
+}
+
+/**
  * What a batch walk sets on its physics before a pose (issue #1416, part C):
  * pose `index`'s change to the world every physics constraint answers — either
  * half, merged over the one standing as a live track's `setEnvironment` merges

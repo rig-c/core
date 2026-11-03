@@ -47,7 +47,7 @@ import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError,
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
-import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
+import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, prerollStart, prerollWarmPoints, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
 import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
@@ -508,6 +508,69 @@ function readEnvironmentFlag(flags: Record<string, string>): { path: string; ste
 }
 
 /**
+ * `--preroll <n>` read (issue #1684): how many whole loops of each animation the
+ * render walks on a looping track before the loop it records — or refused as a
+ * usage error, naming the value found and what is required, before anything is
+ * read off the candidate. `undefined` without the flag, which is the render from
+ * rest it always was.
+ *
+ * ⭐ A count of loops rather than a start in seconds: a whole number of loops
+ * puts the recorded frame `i` at the loop time the render without the flag draws
+ * it at (to the running sum's rounding), so the two renders compare frame for
+ * frame and only the physics differs — a start in seconds would need a second
+ * rule for where the window falls on the frame grid, and could land mid-loop.
+ */
+function readPrerollFlag(flags: Record<string, string>): number | undefined {
+  const given = flags.preroll;
+  if (given === undefined) return undefined;
+  const wants = 'it takes how many whole loops of each animation to walk, on a looping track, before the loop it records — 1 or more';
+  const value = given.trim() === '' ? Number.NaN : Number(given);
+  if (!Number.isFinite(value)) throw new UsageError(`--preroll ${JSON.stringify(given)}: not a number — ${wants}`);
+  if (value < 0) throw new UsageError(`--preroll ${given}: negative — ${wants}`);
+  if (!Number.isInteger(value)) throw new UsageError(`--preroll ${given}: not a whole number of loops — ${wants}`);
+  if (value === 0) throw new UsageError(`--preroll 0 walks no loop before the one recorded, which is the render from rest — leave --preroll out for it; ${wants}`);
+  return value;
+}
+
+/** The most steps a walk's step list holds: the longest array the language makes (`2^32 − 1`). */
+const WALK_STEPS_HELD = 2 ** 32 - 1;
+
+/**
+ * The refusal of a pre-roll this candidate, at this rate, would not walk (issue
+ * #1684), each a frame set from rest printed under a flag that says it is warm,
+ * or a walk that could not be taken:
+ *
+ * - a skeleton with no animation, whose one frame is the setup pose;
+ * - a skeleton that declares no physics constraint, where nothing carries from
+ *   one loop into the next;
+ * - a set drawn that spans no frame at `fps`, whose loop takes no step;
+ * - a walk longer than a step list holds (`WALK_STEPS_HELD`), which would
+ *   otherwise die on the array's own error rather than on a name.
+ *
+ * `durations` are the poser's, of the sets this run draws; `physics` the
+ * physics constraints the skeleton declares.
+ */
+function prerollRefusal(preroll: number, fps: number, durations: ReadonlyArray<{ name: string; duration: number }>, physics: readonly string[]): string | null {
+  if (durations.length === 0) return `--preroll ${preroll}: the skeleton has no animation — its one frame is the setup pose, where nothing loops and no physics step runs`;
+  if (physics.length === 0) {
+    return `--preroll ${preroll}: the skeleton declares no physics constraint, so nothing carries from one loop into the next and the loop recorded would be the render from rest`;
+  }
+  const still = durations.find(({ duration }) => Math.round(duration * fps) === 0);
+  if (still !== undefined) {
+    return (
+      `--preroll ${preroll}: "${still.name}" lasts ${still.duration}s, which is 0 frames at ${fps} fps — a loop of it walks no step, so no pre-roll ` +
+      'moves its physics. Name another set with --animation, or raise --fps'
+    );
+  }
+  for (const { name, duration } of durations) {
+    // `prerollTimes`' own length, counted rather than built: the grid before the wrap, the step onto it, and the loop recorded.
+    const steps = prerollWarmPoints(prerollStart(duration, preroll), fps) + Math.round(duration * fps);
+    if (steps > WALK_STEPS_HELD) return `--preroll ${preroll}: "${name}" would walk ${steps} steps at ${fps} fps, more than a walk's step list holds (${WALK_STEPS_HELD})`;
+  }
+  return null;
+}
+
+/**
  * The refusals of a well-formed schedule that this candidate, at this rate,
  * would quietly not draw (issue #1416) — each one a render that would print a
  * plausible frame set showing nothing the schedule asked for:
@@ -657,6 +720,15 @@ export function cmdRender(flags: Record<string, string>): void {
   const fps = readPositiveNumber(flags, 'fps', PROTOCOL_FPS, 1);
   // Read before anything is read off the candidate, so a malformed schedule is refused before a line is printed.
   const environment = readEnvironmentFlag(flags);
+  // The pre-roll (issue #1684), read and refused as early, and refused beside a schedule: under a pre-roll a schedule's
+  // `t` could be read on the recording's clock or on the walk's, the two give different physics, and nothing settles it.
+  const preroll = readPrerollFlag(flags);
+  if (preroll !== undefined && environment !== undefined) {
+    throw new UsageError(
+      `--preroll takes no --environment: a schedule's t could be read from the first frame recorded or from the first loop walked, ` +
+        'and the two put the physics in different worlds while it warms. Render with one of them',
+    );
+  }
   const maxSide = readPositiveNumber(flags, 'max', 256, 16);
   // A box given rather than fitted (issue #1414), read before a line is printed, so a malformed one is refused first.
   const given = readGivenViewport(flags);
@@ -778,7 +850,7 @@ export function cmdRender(flags: Record<string, string>): void {
     posersAsked(flags),
   );
   if (flags.parallax !== undefined) {
-    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'viewport', 'viewport-from']) {
+    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'viewport', 'viewport-from']) {
       if (flags[flag] !== undefined) throw new UsageError(`--parallax takes no --${flag}: it samples one named dial on its own 9-value grid; drop --${flag} or run ordinary render separately`);
     }
     if (flags.poser !== undefined && flags.poser !== 'core') throw new UsageError('--parallax requires --poser core: it reads only a rigc compiled model');
@@ -824,15 +896,22 @@ export function cmdRender(flags: Record<string, string>): void {
   // the frames draw the subset and the box is still the whole rig's.
   // The environment rides on the same object for the same reason (issue #1416): the framing reads it, so the box holds
   // what the frames under it draw.
+  // The pre-roll rides on it for the environment's reason (issue #1684): it changes the pose, so the framing reads it.
   const pose =
-    skin === undefined && subset === undefined && environment === undefined
+    skin === undefined && subset === undefined && environment === undefined && preroll === undefined
       ? undefined
-      : { ...(skin === undefined ? {} : { skin }), ...subsetFields(subset), ...(environment === undefined ? {} : { environment: environment.steps }) };
+      : {
+          ...(skin === undefined ? {} : { skin }),
+          ...subsetFields(subset),
+          ...(environment === undefined ? {} : { environment: environment.steps }),
+          ...(preroll === undefined ? {} : { preroll }),
+        };
   if (skin !== undefined) console.log(`  ..    skin     ${skin}`);
   if (subset !== undefined) console.log(`  ..    ${subset.mode.padEnd(8)} ${subset.names.join(', ')}`);
   if (environment !== undefined && facts.animations.length === 0) {
     throw new UsageError(environmentRefusal(flags.environment, environment.steps, skeletonText, fps, []) ?? '');
   }
+  if (preroll !== undefined && facts.animations.length === 0) throw new UsageError(prerollRefusal(preroll, fps, [], physicsDeclared) ?? '');
 
   // Rigc's own core when the candidate is a rigc build, and spine-core
   // otherwise, or where the core refuses the input by name. Never silently:
@@ -851,6 +930,11 @@ export function cmdRender(flags: Record<string, string>): void {
     if (environment !== undefined) {
       const drawn = poser.animations.filter((a) => only === undefined || a.name === only);
       const refusal = environmentRefusal(flags.environment, environment.steps, skeletonText, fps, drawn);
+      if (refusal !== null) throw new UsageError(refusal);
+    }
+    // A pre-roll this candidate would not walk is refused off the same durations, for the same reason (issue #1684).
+    if (preroll !== undefined) {
+      const refusal = prerollRefusal(preroll, fps, poser.animations.filter((a) => only === undefined || a.name === only), physicsDeclared);
       if (refusal !== null) throw new UsageError(refusal);
     }
     // `null` is a skeleton that posed no vertex at all. One that posed a vertex
@@ -935,7 +1019,7 @@ export function cmdRender(flags: Record<string, string>): void {
     if (geometry) {
       for (const [name, frames] of sampled) {
         const animation = name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name;
-        geometryTexts.set(name, geometryText(geometryFileOf(poser, animation, fps, frames, viewport, skin, environment?.steps)));
+        geometryTexts.set(name, geometryText(geometryFileOf(poser, animation, fps, frames, viewport, skin, environment?.steps, preroll)));
       }
     }
     // The fold reading, off the very attachments the frames were drawn from, against the rest table the geometry
@@ -1066,6 +1150,7 @@ export function cmdRender(flags: Record<string, string>): void {
               skin,
               subset,
               environment: environment?.steps,
+              preroll,
               pinned,
             }),
           );
@@ -1084,6 +1169,12 @@ export function cmdRender(flags: Record<string, string>): void {
     console.log(
       `  ..    world    ${environment.steps.length} step(s) from ${environment.path} (x right, y down; the runtime's wind [1, 0] and gravity [0, 1] before the first) — ` +
         `wind answered by ${response.wind.join(', ') || 'none'}; gravity by ${response.gravity.join(', ') || 'none'}`,
+    );
+  }
+  if (preroll !== undefined) {
+    console.log(
+      `  ..    preroll  ${preroll} loop(s) of each set walked on a looping track before the loop recorded, drawn by no frame — ` +
+        'the physics carried across every wrap, as a player\'s looping track carries it',
     );
   }
   console.log(`  ..    ${viewport.width}x${viewport.height}px at ${fps} fps, ${sampled.size} set(s) -> ${outRoot}`);
@@ -1237,6 +1328,8 @@ export function cmdRender(flags: Record<string, string>): void {
     ...subsetFields(subset),
     // Written only when a schedule was given (issue #1416): a render without one says nothing and stays the bytes it was.
     ...(environment === undefined ? {} : { environment: environment.steps }),
+    // Written only when a pre-roll was asked for (issue #1684), for the same reason.
+    ...(preroll === undefined ? {} : { preroll }),
     // Written only when the box was given (issue #1414): a fitted render says nothing and stays the bytes it was.
     ...(given === undefined ? {} : { pinned: pinnedRecord(given.by, outside) }),
     background: BACKGROUND,

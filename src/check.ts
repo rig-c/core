@@ -1298,6 +1298,17 @@ export function checkAgainstFrames(options: CheckOptions): CheckReport {
         'difference between two worlds. Render the reference frames without --environment.',
     );
   }
+  // A frame set drawn after a pre-roll (`render --preroll`, issue #1684) shows the physics warm; check poses the
+  // candidate from rest, so the score would be a number about the difference between a warm loop and a cold one.
+  const referencePreroll = located.sidecar?.preroll;
+  if (referencePreroll !== undefined) {
+    throw new CheckError(
+      `${FRAMES_SIDECAR} records that these frames were rendered after a pre-roll (\`rigc render --preroll ${String(referencePreroll)}\`: ` +
+        'that many loops walked on a looping track before the loop recorded, the physics carried), and check poses the candidate ' +
+        'from rest — so the comparison would be a number about the difference between a warm loop and a cold one. ' +
+        'Render the reference frames without --preroll.',
+    );
+  }
   if (referenceSkin === null && options.skin !== undefined) {
     notes.push(
       `the candidate is posed under skin ${JSON.stringify(options.skin)} and the reference frames record no skin ` +

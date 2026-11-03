@@ -284,6 +284,16 @@ export interface FramesSidecar {
    */
   environment?: EnvironmentStep[];
   /**
+   * The whole loops each set walked on a looping track before the loop its
+   * frames record, when `render --preroll` gave them (issue #1684).
+   *
+   * ⭐ Absent on a render without it, for `skin`'s reason: every frame set
+   * written before the field existed is a render from rest, and says the same.
+   * A frame set carrying it shows the physics warm, which `check` does not
+   * pose, so `check` refuses it as a reference by name.
+   */
+  preroll?: number;
+  /**
    * The box was given rather than fitted, when `render --viewport` or
    * `render --viewport-from` gave it (issue #1414): which flag, and every slot
    * that reaches past the box, by set and frame — what lies past it is not in
@@ -501,6 +511,23 @@ export interface PoseOptions {
   environment?: readonly EnvironmentStep[];
   /** Also record the physics constraints the step that posed each frame stepped — see `Frame.physics` (issue #1467). */
   physics?: boolean;
+  /**
+   * Whole loops walked before the loop recorded — `render --preroll` (issue
+   * #1684): the track set looping, walked and drawn by no frame up to track
+   * time `preroll · duration` (`prerollTimes`), then the `count + 1` frames of
+   * the next loop, frame `i` the pose at track time `preroll · duration + i /
+   * fps` — animation time `i / fps` — filed under index `i` and time `i / fps`.
+   * The physics is carried across every wrap, as
+   * a player's looping track carries it, so a spring that converges is warm
+   * on the first frame recorded. Absent, the track holds at its duration and
+   * every pose is the one it always was. A whole number at or above 1; not
+   * with `environment`, whose clock under a pre-roll nothing settles.
+   *
+   * ⭐ **It is part of the shot, so the framing reads it**, for `environment`'s
+   * reason: a spring warmed from rest swings differently from one released
+   * from it, and the box holds what the frames draw.
+   */
+  preroll?: number;
 }
 
 /**
@@ -1165,9 +1192,14 @@ export interface Poser {
    * answers set before the step that poses frame `i` (issue #1416).
    * Optional `times` replaces the uniform grid with increasing absolute times
    * starting at 0 (count = times.length - 1), stepped by adjacent differences.
-   * Used by texture-scale to include key times; ordinary renders are unchanged.
+   * Used by texture-scale to include key times, and by a pre-roll to land on
+   * the wrap (`prerollTimes`); ordinary renders are unchanged.
+   * `loop` (issue #1684, `render --preroll`) sets the track looping — the
+   * animation time the track time wrapped by the duration, the physics carried
+   * across every wrap, as a player's looping track carries it; absent, the
+   * track holds at its duration as it always did.
    */
-  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean, times?: readonly number[]): void;
+  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean, times?: readonly number[], loop?: boolean): void;
   /** The rest table for the (slot, attachment) pairs `shown` holds — see `AttachmentRest`. */
   rest(skin: string | undefined, shown: readonly AttachmentPose[][]): AttachmentRest[];
 }
@@ -1242,6 +1274,19 @@ export function sampleAnimation(source: PoseSource, name: string, fps: number, o
   const count = Math.round(animation.duration * fps);
   const draw = drawResolver(poser, opts);
   const frames: Frame[] = [];
+  const preroll = opts?.preroll;
+  if (preroll !== undefined) {
+    // Refused by name at the CLI first (`readPrerollFlag`); here so no other caller walks a pre-roll nobody defined.
+    if (!Number.isInteger(preroll) || preroll < 1) throw new Error(`preroll is ${String(preroll)}, not a whole number of loops at or above 1`);
+    if (opts?.environment !== undefined) throw new Error('preroll and environment were both given: nothing settles which clock the schedule is read on under a pre-roll');
+    // The track loops; every pose before track time `preroll · duration` is walked and drawn by no frame (issue #1684).
+    const { times, first } = prerollTimes(animation.duration, fps, preroll);
+    const recorded = (i: number, posed: Posed): void => {
+      if (i >= first) frames.push(frameOf(i - first, (i - first) * step, posed, draw(), opts));
+    };
+    poser.animation(name, opts?.skin, fps, times.length - 1, recorded, undefined, opts?.channels === true ? true : undefined, times, true);
+    return frames;
+  }
   const visit = (i: number, posed: Posed): void => {
     frames.push(frameOf(i, i * step, posed, draw(), opts));
   };
@@ -1250,6 +1295,72 @@ export function sampleAnimation(source: PoseSource, name: string, fps: number, o
   else if (opts?.environment === undefined) poser.animation(name, opts?.skin, fps, count, visit);
   else poser.animation(name, opts.skin, fps, count, visit, environmentAt(opts.environment, fps));
   return frames;
+}
+
+/**
+ * The track time `render --preroll`'s loop recorded starts at (issue #1684): the
+ * end of `preroll` whole loops, `preroll · duration` — where the track has
+ * wrapped `preroll` times and the animation time is 0.
+ *
+ * ⚠️ The product is a float only when `preroll · duration` fits one; where it
+ * does not, it rounds to the nearer float, and that can sit just short of the
+ * wrap — at `duration · 3` for a duration of 1.03, measured — where the
+ * animation time is the duration less an ulp: the pose at the loop's end, not
+ * its start. So a product that lands short is moved to the next float above
+ * it, past the wrap, where the animation time is under one ulp of the product
+ * past 0. No float lies on the wrap there, and this is the one past it.
+ */
+export function prerollStart(duration: number, preroll: number): number {
+  let start = preroll * duration;
+  while (duration > 0 && start % duration > duration / 2) start = nextFloatAbove(start);
+  return start;
+}
+
+/** The float just above a positive finite `x`. */
+function nextFloatAbove(x: number): number {
+  const box = new Float64Array([x]);
+  const bits = new BigUint64Array(box.buffer);
+  bits[0] += 1n;
+  return box[0];
+}
+
+/**
+ * How many points of the render's grid, `j / fps` from `j = 0`, lie strictly
+ * before track time `start` — the steps a pre-roll walks before the one that
+ * lands on `start` (`prerollTimes`).
+ */
+export function prerollWarmPoints(start: number, fps: number): number {
+  if (!(start > 0)) return 0;
+  let m = Math.max(0, Math.ceil(start * fps) - 1);
+  while ((m + 1) / fps < start) m++;
+  while (m > 0 && m / fps >= start) m--;
+  return m + 1;
+}
+
+/**
+ * The track times a pre-roll of `preroll` loops walks, for `Poser.animation`'s
+ * `times` (issue #1684): the render's grid `j / fps` up to the last point
+ * before `prerollStart`, one shorter step onto it, then the loop recorded,
+ * `start + i / fps` for `i = 1..count`. `first` is the index of `start` — the
+ * pose frame 0 is.
+ *
+ * ⭐ **The walk lands on `start` exactly.** Both posers step a track by the
+ * differences of `times` and add them up (`trackTime += delta`), and every
+ * difference before `start` is exact — two floats within a factor of two of
+ * each other subtract without rounding — so each running sum is the time it
+ * steps to, by induction, and the last is `start`. A uniform grid of
+ * `preroll · count` steps instead lands on `preroll · count / fps`, which is
+ * the wrap only where `duration · fps` is whole: elsewhere the loop recorded
+ * started at the wrong phase while frame 0 was filed at time 0.
+ */
+export function prerollTimes(duration: number, fps: number, preroll: number): { times: number[]; first: number } {
+  const start = prerollStart(duration, preroll);
+  const count = Math.round(duration * fps);
+  const first = prerollWarmPoints(start, fps);
+  const times = Array.from({ length: first }, (_, j) => j / fps);
+  times.push(start);
+  for (let i = 1; i <= count; i++) times.push(start + i / fps);
+  return { times, first };
 }
 
 /**
@@ -1570,6 +1681,8 @@ export interface GeometryFile {
   skin?: string;
   /** The schedule the physics answered (`render --environment`, issue #1416) — `frames.json`'s own `environment`; absent without it. */
   environment?: EnvironmentStep[];
+  /** The whole loops walked before the loop these frames record (`render --preroll`, issue #1684) — `frames.json`'s own `preroll`; absent without it. */
+  preroll?: number;
   fps: number;
   /** The box the PNG frames beside this file were drawn over — `frames.json`'s own `viewport`. */
   viewport: FramesSidecar['viewport'];
@@ -1630,6 +1743,7 @@ export function geometryFileOf(
   viewport: Viewport,
   skin: string | undefined,
   environment?: EnvironmentStep[],
+  preroll?: number,
 ): GeometryFile {
   const geometryFrame = (frame: Frame, where: string): Omit<GeometryFrame, 'index' | 'time'> => {
     if (frame.bones === undefined || frame.attachments === undefined) {
@@ -1654,6 +1768,7 @@ export function geometryFileOf(
     animation,
     ...(skin === undefined ? {} : { skin }),
     ...(environment === undefined ? {} : { environment }),
+    ...(preroll === undefined ? {} : { preroll }),
     fps,
     viewport: sidecarViewport(viewport),
     bones: poser.bones.map(({ name, parent }) => ({ name, parent })),

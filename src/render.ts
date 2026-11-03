@@ -503,12 +503,14 @@ export function spinePoser(data: SkeletonData): Poser {
     slots: data.slots.map((slot) => ({ name: slot.name, bone: slot.boneData.name })),
     subset: (opts, skin) => slotSubsetOf(data, opts, skin),
     setup: (skin) => spinePosed(setupPosed(data, skin)),
-    animation: (name, skin, fps, count, visit, environment, _channels, times) => {
+    animation: (name, skin, fps, count, visit, environment, _channels, times, loop) => {
       const skeleton = skeletonUnderSkin(data, skin);
       const state = new AnimationState(new AnimationStateData(data));
       // Not looping: the last frame sits at the animation's duration, and a looping
-      // entry would wrap it back onto the first pose.
-      state.setAnimation(0, name, false);
+      // entry would wrap it back onto the first pose. Looping only when asked (issue
+      // #1684, `render --preroll`): the walk a player's looping track takes, the
+      // physics carried across every wrap — the core walks it as `poseRawLoopEach`.
+      state.setAnimation(0, name, loop === true);
       skeleton.setupPose();
       const step = 1 / fps;
       // The physics clock runs `PHYSICS_CLOCK_LEAD` fast, so no frame ends on a physics step's tie (issue #1380).

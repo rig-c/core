@@ -103,7 +103,7 @@ import { atlasRegionLookup, parseAtlasText } from './atlas.ts';
 import { pagesOfAtlas, spineFileSha256, type ModelPage } from './model.ts';
 import { clipThrough, type ClipShape, type ShapeClipper } from './core/clipping.ts';
 import { activeBones, CoreInputError, readModel, sourceOfDoc, underNoSkin, underSkin, type CompiledDocument, type CoreSlotRow } from './core/index.ts';
-import { PHYSICS_CLOCK_LEAD, physicsClockStep, poseRawAnimationEach, poseRawDial, poseRawSetup, type RawDrawn, type RawPose, type StepEnvironment } from './core/raw.ts';
+import { PHYSICS_CLOCK_LEAD, physicsClockStep, poseRawAnimationEach, poseRawDial, poseRawLoopEach, poseRawSetup, type RawDrawn, type RawPose, type StepEnvironment } from './core/raw.ts';
 import type { TimelinePlant } from './core/animation.ts';
 import { stepPhysics, type PhysicsStepper } from './core/constraints_physics.ts';
 import { CORE_DEFAULT_SKIN, lookupSkins } from './core/skins.ts';
@@ -367,14 +367,18 @@ export function keptPieceArrays(): PieceArrays {
  * one pose is held at a time rather than the animation's whole series. A plant
  * passes another (`RC44`).
  */
-export type CoreRawWalk = (doc: CompiledDocument, animation: string, steps: readonly number[], plant: TimelinePlant, visit: (pose: RawPose, index: number) => void, environment?: StepEnvironment) => void;
+export type CoreRawWalk = (doc: CompiledDocument, animation: string, steps: readonly number[], plant: TimelinePlant, visit: (pose: RawPose, index: number) => void, environment?: StepEnvironment, loop?: boolean) => void;
 
 /**
  * The walk `corePoser` steps with unless a plant passes another: one pose posed, drawn and released before the next, the
  * physics clock moved by `physicsClockStep` (issue #1380), and `render --environment`'s change for each pose set before it
- * is posed (issue #1416, `StepEnvironment`).
+ * is posed (issue #1416, `StepEnvironment`). `loop` (issue #1684, `render --preroll`) walks the track looping
+ * (`poseRawLoopEach`) — spine-core's poser sets the same track looping — and absent, the walk is the one it always was.
  */
-export const CORE_RAW_WALK: CoreRawWalk = (doc, animation, steps, plant, visit, environment) => poseRawAnimationEach(doc, animation, steps, plant, 'animation', visit, physicsClockStep, environment);
+export const CORE_RAW_WALK: CoreRawWalk = (doc, animation, steps, plant, visit, environment, loop) =>
+  loop === true
+    ? poseRawLoopEach(doc, animation, steps, plant, 'animation', visit, physicsClockStep, environment)
+    : poseRawAnimationEach(doc, animation, steps, plant, 'animation', visit, physicsClockStep, environment);
 
 /**
  * The render's physics clock (issue #1380): defined beside the walk that takes it (`./core/raw.ts`), where the mesh
@@ -790,7 +794,7 @@ export function corePoser(
       const pose = poseRawSetup(input.doc, { through, ...observe });
       return corePosed(input, pose, through, [], values);
     },
-    animation: (name, skin, fps, count, visit, environment, channels, times) => {
+    animation: (name, skin, fps, count, visit, environment, channels, times, loop) => {
       let values: ChannelValue[] | undefined;
       const observe = channels ? { readLocals: (bones: readonly import('./model.ts').ModelBone[], sliders: readonly import('./core/constraints_slider.ts').SliderApplication[]) => { values = localChannels(bones, sliders); } } : {};
       const input = inputOf(skin);
@@ -819,7 +823,7 @@ export function corePoser(
         } catch (thrown) {
           drawFailed.push(thrown);
         }
-      }, environment);
+      }, environment, loop);
       if (drawFailed.length > 0) throw drawFailed[0];
     },
     rest: (skin, shown) => {

@@ -758,6 +758,19 @@ const FORK_ERROR_IMPORT = "import { CompileError, NotImplementedError } from './
 const FORK_ERROR_PLANTED = "import { NotImplementedError } from './errors.ts';\nclass CompileError extends Error { constructor(message?: string, readonly code?: string) { super(message); } }";
 const FORK_ERROR_MODULE = 'src/rig.ts';
 
+/**
+ * What `type-leak-render-core` does to the packed `src/render_core.ts`: the
+ * type import of renderer types from `./render_shared.ts` pointed back at
+ * `./render.ts` as #1679 had it (issue #1683). Bun erases type imports at run
+ * time so every runtime probe and build passes, and `tsc` without the runtime
+ * has to go red at `exports-without-runtime` alone, naming
+ * `rig-c/render-shared`, `rig-c/passthrough` and `rig-c/seam`.
+ */
+const TYPE_LEAK_MODULE = 'src/render_core.ts';
+const TYPE_LEAK_IMPORT = "  SlotSubset,\n} from './render_shared.ts';";
+const TYPE_LEAK_PLANTED = "  SlotSubset,\n} from './render.ts';";
+const TYPE_LEAK_ENTRIES = ['./render-shared', './passthrough', './seam'] as const;
+
 interface ImportSurfaceRow {
   /** The `exports` key, e.g. `./plate`. */
   entry: string;
@@ -774,7 +787,8 @@ interface ImportSurfaceRow {
  * so the list of runtime-free entries is never copied by hand (issue #1679).
  */
 function readImportSurfaceTable(): ImportSurfaceRow[] {
-  const text = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8');
+  // A Windows checkout writes CRLF; the table is read in LF (issue #1680's windows leg).
+  const text = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8').replace(/\r\n/g, '\n');
   const section = /(?:^|\n)#### The import surface\n([\s\S]*?)(?=\n#{2,4} )/.exec(text)?.[1] ?? '';
   const table = /\|\s*entry\s*\|\s*named by\s*\|\s*needs installed beside the package\s*\|\n\|\s*---\s*\|\s*---\s*\|\s*---\s*\|\n((?:\|[^\n]+\n)+)/.exec(section)?.[1] ?? '';
   const rows: ImportSurfaceRow[] = [];
@@ -821,6 +835,11 @@ for (const [plant, entry] of Object.entries(DROPPED_ENTRIES)) {
 }
 if (OBSERVED_SYMBOLS.find((row) => row.entry === './errors')?.values.CompileError === undefined || NAMED_EXPORTS['./rig'] !== FORK_ERROR_MODULE) {
   throw new Error(`install_smoke: fork-compile-error forks the CompileError ${FORK_ERROR_MODULE} throws, and OBSERVED_SYMBOLS has to list CompileError through ./errors and NAMED_EXPORTS map ./rig to ${FORK_ERROR_MODULE}`);
+}
+for (const entry of TYPE_LEAK_ENTRIES) {
+  if (!NOTHING_ENTRIES.some((row) => row.entry === entry)) {
+    throw new Error(`install_smoke: type-leak-render-core expects ${entry} in NOTHING_ENTRIES`);
+  }
 }
 for (const row of OBSERVED_SYMBOLS) {
   const other = OBSERVED_SYMBOLS.find((r) => r.entry === row.entry && r.needsRuntime !== row.needsRuntime);
@@ -1986,7 +2005,10 @@ type Plant =
   | 'rename-symbol'
   | 'fork-compile-error'
   | 'refuse-core-build'
-  | 'move-core-byte';
+  | 'move-core-byte'
+  | 'type-leak-render-core';
+
+const runsRuntimeFreeTypecheck = (plant: Plant): boolean => plant === 'none' || plant === 'type-leak-render-core';
 
 /**
  * The line of the packed `src/cli/core_commands.ts` that registers the core
@@ -2162,6 +2184,12 @@ const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]
     alone: true,
     what: `one byte appended to the \`skeleton.atlas\` the core entry's build wrote, after its gate (issue #1178) — the core build still exits 0 and writes every file, so only the comparison with the round-tripped build of the same fixture can see it, and it has to name the file`,
   },
+  'type-leak-render-core': {
+    names: ['SMOKE_ENTRIES_STATE_WHAT_THEY_NEED', ...TYPE_LEAK_ENTRIES.map((entry) => `${NAME}${entry.slice(1)}`)],
+    steps: ['exports-without-runtime'],
+    alone: true,
+    what: `the packed \`${TYPE_LEAK_MODULE}\` type import pointed back at \`./render.ts\` instead of \`./render_shared.ts\` (issues #1679, #1683): Bun erases type imports at run time so every runtime probe and build passes, and \`tsc\` without ${RUNTIME} has to go red at \`exports-without-runtime\` alone, naming ${TYPE_LEAK_ENTRIES.map((entry) => `\`${NAME}${entry.slice(1)}\``).join(', ')}`,
+  },
 };
 
 /**
@@ -2288,6 +2316,14 @@ function tarballFor(
       return { tgz: '', faults, paths: [], evidence: '' };
     }
     writeFileSync(victim, text.replace(CORE_BUILD_LINE, CORE_BUILD_PLANTS[plant]));
+  } else if (plant === 'type-leak-render-core') {
+    const victim = join(pkgDir, TYPE_LEAK_MODULE);
+    const text = existsSync(victim) ? readFileSync(victim, 'utf8').replace(/\r\n/g, '\n') : '';
+    if (text.split(TYPE_LEAK_IMPORT).length !== 2) {
+      faults.push(`SMOKE_PLANT_APPLIED: ${TYPE_LEAK_MODULE} carries \`${TYPE_LEAK_IMPORT}\` ${text.split(TYPE_LEAK_IMPORT).length - 1} time(s) where once was required, so the plant "${plant}" plants nothing`);
+      return { tgz: '', faults, paths: [], evidence: '' };
+    }
+    writeFileSync(victim, text.replace(TYPE_LEAK_IMPORT, TYPE_LEAK_PLANTED));
   } else {
     const victim = join(pkgDir, 'src', 'validate.ts');
     if (!existsSync(victim)) {
@@ -2378,6 +2414,14 @@ function tarballFor(
       faults.push(`SMOKE_PLANT_APPLIED: the packed ${CORE_BUILD_MODULE} still registers the core entry's build as the tree does, or not as the plant "${plant}" writes it, so nothing was planted`);
     } else {
       evidence = `the packed ${CORE_BUILD_MODULE} registers the core entry's build as \`${CORE_BUILD_PLANTS[plant].trim()}\``;
+    }
+  } else if (plant === 'type-leak-render-core') {
+    const shipped = run('tar', ['-xzOf', second, `package/${TYPE_LEAK_MODULE}`], work);
+    const shippedText = shipped.out.replace(/\r\n/g, '\n');
+    if (shipped.status !== 0 || shippedText.includes(TYPE_LEAK_IMPORT) || !shippedText.includes(TYPE_LEAK_PLANTED)) {
+      faults.push(`SMOKE_PLANT_APPLIED: the packed ${TYPE_LEAK_MODULE} still imports its renderer types from ./render_shared.ts, or not from ./render.ts as the plant "${plant}" writes it, so nothing was planted`);
+    } else {
+      evidence = `the packed ${TYPE_LEAK_MODULE} imports its renderer types from ./render.ts instead of ./render_shared.ts`;
     }
   } else if (plant === 'drop-exports' || plant === 'add-export-pattern') {
     const shipped = run('tar', ['-xzOf', second, 'package/package.json'], work);
@@ -2477,7 +2521,7 @@ function sameBuild(core: string, full: string): { differences: string[]; files: 
   return { differences, files };
 }
 
-function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
+function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: readonly string[]): CaseResult {
   const faults: string[] = [];
   const steps: string[] = [];
   const notes: string[] = [];
@@ -2831,65 +2875,71 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
         `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: the import probe without ${RUNTIME} exited ${bareRan.status} without a verdict. ${bareRan.out.trim().slice(0, 2000)}`,
       );
     }
-    const tsc = typecheckerOnce();
-    const nodeForTsc = onPath('node');
-    for (const f of tsc.faults) fault('exports-without-runtime', f);
-    if (nodeForTsc === null) fault('exports-without-runtime', 'SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: `node` is not on PATH, and `tsc` runs on it');
-    let typechecked = 0;
-    if (tsc.faults.length === 0 && nodeForTsc !== null) {
-      const tcDir = mkdirIn(home, 'exports-typecheck');
-      const files = NOTHING_ENTRIES.map((row, index) => {
-        const file = `dependant_${index}.ts`;
-        writeFileSync(join(tcDir, file), `import '${row.spec}';\n`);
-        return file;
-      });
-      const writeTsconfig = (targetFiles: string[]): string => {
-        const cfg = join(tcDir, 'tsconfig.json');
-        writeFileSync(
-          cfg,
-          `${JSON.stringify(
-            {
-              extends: join(ROOT, 'tsconfig.json'),
-              compilerOptions: { typeRoots: tsc.typeRoots },
-              include: [],
-              files: targetFiles,
-            },
-            null,
-            2,
-          )}\n`,
-        );
-        return cfg;
-      };
-      const allRan = run('node', [tsc.js, '-p', writeTsconfig(files)], tcDir);
-      output += allRan.out;
-      if (allRan.status === 0) {
-        typechecked = NOTHING_ENTRIES.length;
-      } else {
-        for (const [index, row] of NOTHING_ENTRIES.entries()) {
-          const oneRan = run('node', [tsc.js, '-p', writeTsconfig([files[index]])], tcDir);
-          output += oneRan.out;
-          if (oneRan.status === 0) {
-            typechecked += 1;
-          } else {
-            const errors = oneRan.out.split('\n').filter((line) => /error TS\d+:/.test(line));
-            const first = (errors[0] ?? oneRan.out.trim().split('\n')[0] ?? '(no diagnostic)').trim();
+    if (runsRuntimeFreeTypecheck(spec.plant)) {
+      const tsc = typecheckerOnce();
+      const nodeForTsc = onPath('node');
+      for (const f of tsc.faults) fault('exports-without-runtime', f);
+      if (nodeForTsc === null) fault('exports-without-runtime', 'SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: `node` is not on PATH, and `tsc` runs on it');
+      let typechecked = 0;
+      if (tsc.faults.length === 0 && nodeForTsc !== null) {
+        const tcDir = mkdirIn(home, 'exports-typecheck');
+        const files = NOTHING_ENTRIES.map((row, index) => {
+          const file = `dependant_${index}.ts`;
+          writeFileSync(join(tcDir, file), `import '${row.spec}';\n`);
+          return file;
+        });
+        const writeTsconfig = (targetFiles: string[]): string => {
+          const cfg = join(tcDir, 'tsconfig.json');
+          writeFileSync(
+            cfg,
+            `${JSON.stringify(
+              {
+                extends: join(ROOT, 'tsconfig.json'),
+                compilerOptions: { typeRoots: tsc.typeRoots },
+                include: [],
+                files: targetFiles,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          return cfg;
+        };
+        const allRan = run('node', [tsc.js, '-p', writeTsconfig(files)], tcDir);
+        output += allRan.out;
+        if (allRan.status === 0) {
+          typechecked = NOTHING_ENTRIES.length;
+        } else {
+          for (const [index, row] of NOTHING_ENTRIES.entries()) {
+            const oneRan = run('node', [tsc.js, '-p', writeTsconfig([files[index]])], tcDir);
+            output += oneRan.out;
+            if (oneRan.status === 0) {
+              typechecked += 1;
+            } else {
+              const errors = oneRan.out.split('\n').filter((line) => /error TS\d+:/.test(line));
+              const first = (errors[0] ?? oneRan.out.trim().split('\n')[0] ?? '(no diagnostic)').trim();
+              fault(
+                'exports-without-runtime',
+                `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: ${row.spec}: tsc ${tsc.version} on \`import '${row.spec}';\` without ${RUNTIME} exited ${oneRan.status} (${errors.length} error(s); first: ${first}), and RELEASING.md *The import surface* states this entry needs nothing installed beside the package`,
+              );
+            }
+          }
+          if (typechecked === NOTHING_ENTRIES.length) {
             fault(
               'exports-without-runtime',
-              `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: ${row.spec}: tsc ${tsc.version} on \`import '${row.spec}';\` without ${RUNTIME} exited ${oneRan.status} (${errors.length} error(s); first: ${first}), and RELEASING.md *The import surface* states this entry needs nothing installed beside the package`,
+              `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: tsc ${tsc.version} without ${RUNTIME} exited ${allRan.status}: ${allRan.out.trim().slice(0, 1500)}`,
             );
           }
         }
-        if (typechecked === NOTHING_ENTRIES.length) {
-          fault(
-            'exports-without-runtime',
-            `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: tsc ${tsc.version} without ${RUNTIME} exited ${allRan.status}: ${allRan.out.trim().slice(0, 1500)}`,
-          );
-        }
+        rmSync(tcDir, { recursive: true, force: true });
       }
-      rmSync(tcDir, { recursive: true, force: true });
-    }
-    if (bareCounts !== undefined && bareBad.length === 0 && typechecked === NOTHING_ENTRIES.length) {
-      notes.push(`exports: ${bareCounts}, ${typechecked}/${NOTHING_ENTRIES.length} runtime-free entr(ies) type-checked (tsc ${tsc.version})`);
+      if (bareCounts !== undefined && bareBad.length === 0 && typechecked === NOTHING_ENTRIES.length) {
+        notes.push(`exports: ${bareCounts}, ${typechecked}/${NOTHING_ENTRIES.length} runtime-free entr(ies) type-checked (tsc ${tsc.version})`);
+      }
+    } else if (bareCounts !== undefined && bareBad.length === 0) {
+      notes.push(`exports: ${bareCounts}; runtime-free type-check not run here (run in ${typecheckedCases.join(', ')})`);
+    } else {
+      notes.push(`exports: runtime-free type-check not run here (run in ${typecheckedCases.join(', ')})`);
     }
     // MQ45 (issue #1230): the motion comparison from this install, the runtime gone. It reads `build/` for the reason
     // render and check below do — the comparison above holds it to the core entry's bytes, and a broken core build
@@ -3167,6 +3217,7 @@ cases:
   fork-compile-error ${FORK_ERROR_MODULE} given a CompileError of its own — the parser's refusal, caught by the class ${NAME}/errors exports, has to go RED alone naming both
   refuse-core-build  the core entry's build body made to refuse — the core-build step, and only it, has to go RED naming SMOKE_CORE_ENTRY_BUILDS
   move-core-byte     one byte appended to the atlas the core entry's build wrote — the comparison, and only it, has to go RED naming the file
+  type-leak-render-core  ${TYPE_LEAK_MODULE} type import pointed back at ./render.ts — exports-without-runtime, and only it, has to go RED naming ${TYPE_LEAK_ENTRIES.map((entry) => `${NAME}${entry.slice(1)}`).join(', ')}
 
 A plant case is green when the smoke failed the way the plant says it must, and
 red when the smoke passed anyway. Nothing is written inside the repository.
@@ -3319,7 +3370,9 @@ function main(): number {
     { name: 'fork-compile-error', source, installer, plant: 'fork-compile-error', dirName: 'planted-fork-error' },
     { name: 'refuse-core-build', source, installer, plant: 'refuse-core-build', dirName: 'planted-core-build' },
     { name: 'move-core-byte', source, installer, plant: 'move-core-byte', dirName: 'planted-core-byte' },
+    { name: 'type-leak-render-core', source, installer, plant: 'type-leak-render-core', dirName: 'planted-type-leak-render-core' },
   ];
+  const typecheckedCases = battery.filter((c) => runsRuntimeFreeTypecheck(c.plant)).map((c) => c.name);
   const chosen = only === null ? battery : battery.filter((c) => c.name === only);
   if (chosen.length === 0) {
     console.log(`  FAIL  SMOKE_PREREQ_TOOLS_ON_PATH: no case is named "${only}" — ${battery.map((c) => c.name).join(', ')}`);
@@ -3333,7 +3386,7 @@ function main(): number {
     // fault prints is the one a child process would print back.
     const work = realpathSync.native(mkdtempSync(join(tmpdir(), 'rigc-smoke-')));
     try {
-      const result = runCase(spec, work, keep);
+      const result = runCase(spec, work, keep, typecheckedCases);
       ran += 1;
       const planted = spec.plant === 'none' ? null : PLANTED[spec.plant];
       if (planted === null) {
@@ -3363,7 +3416,8 @@ function main(): number {
         if (missed.length === 0) {
           console.log(`  PASS  SMOKE_PLANT[${spec.name}]  ${planted.what}`);
           for (const note of result.notes) console.log(`          ${note}`);
-          for (const f of result.faults.slice(0, 2)) console.log(`          red: ${f.split('\n')[0].slice(0, 300)}`);
+          const redLimit = spec.plant === 'type-leak-render-core' ? TYPE_LEAK_ENTRIES.length : 2;
+          for (const f of result.faults.slice(0, redLimit)) console.log(`          red: ${f.split('\n')[0].slice(0, 300)}`);
         } else {
           bad += 1;
           console.log(`  FAIL  SMOKE_PLANT[${spec.name}]`);

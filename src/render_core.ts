@@ -367,18 +367,35 @@ export function keptPieceArrays(): PieceArrays {
  * one pose is held at a time rather than the animation's whole series. A plant
  * passes another (`RC44`).
  */
-export type CoreRawWalk = (doc: CompiledDocument, animation: string, steps: readonly number[], plant: TimelinePlant, visit: (pose: RawPose, index: number) => void, environment?: StepEnvironment, loop?: boolean) => void;
+export type CoreRawWalk = (doc: CompiledDocument, animation: string, steps: readonly number[], plant: TimelinePlant, visit: (pose: RawPose, index: number) => void, environment?: StepEnvironment, loop?: boolean, clock?: (dt: number) => number) => void;
 
 /**
  * The walk `corePoser` steps with unless a plant passes another: one pose posed, drawn and released before the next, the
  * physics clock moved by `physicsClockStep` (issue #1380), and `render --environment`'s change for each pose set before it
  * is posed (issue #1416, `StepEnvironment`). `loop` (issue #1684, `render --preroll`) walks the track looping
  * (`poseRawLoopEach`) — spine-core's poser sets the same track looping — and absent, the walk is the one it always was.
+ * `clock` (issue #1687) is what each step moves the physics clock by in place of `physicsClockStep` of the step — the
+ * pre-roll's walk passes one that reads its own step list (`Poser.animation`'s `clockSteps`) — and absent, the clock is
+ * the render's, `physicsClockStep`.
  */
-export const CORE_RAW_WALK: CoreRawWalk = (doc, animation, steps, plant, visit, environment, loop) =>
+export const CORE_RAW_WALK: CoreRawWalk = (doc, animation, steps, plant, visit, environment, loop, clock = physicsClockStep) =>
   loop === true
-    ? poseRawLoopEach(doc, animation, steps, plant, 'animation', visit, physicsClockStep, environment)
-    : poseRawAnimationEach(doc, animation, steps, plant, 'animation', visit, physicsClockStep, environment);
+    ? poseRawLoopEach(doc, animation, steps, plant, 'animation', visit, clock, environment)
+    : poseRawAnimationEach(doc, animation, steps, plant, 'animation', visit, clock, environment);
+
+/**
+ * The physics clock a walk moves by `clockSteps` (issue #1687, `Poser.animation`): the walk asks its clock once for
+ * the reset pose — a step of 0, which moves it by `physicsClockStep(0)`, nothing, as spine-core's `update(0)` at frame
+ * 0 does — and then once per step in order, and step `i` moves it by `physicsClockStep(clockSteps[i])` in place of
+ * `physicsClockStep` of the step's own length. One clock serves one walk: it counts the steps it was asked for.
+ */
+function steppedClock(clockSteps: readonly number[]): (dt: number) => number {
+  let next = -1;
+  return (dt) => {
+    const i = next++;
+    return physicsClockStep(i < 0 ? dt : clockSteps[i]);
+  };
+}
 
 /**
  * The render's physics clock (issue #1380): defined beside the walk that takes it (`./core/raw.ts`), where the mesh
@@ -794,7 +811,7 @@ export function corePoser(
       const pose = poseRawSetup(input.doc, { through, ...observe });
       return corePosed(input, pose, through, [], values);
     },
-    animation: (name, skin, fps, count, visit, environment, channels, times, loop) => {
+    animation: (name, skin, fps, count, visit, environment, channels, times, loop, clockSteps) => {
       let values: ChannelValue[] | undefined;
       const observe = channels ? { readLocals: (bones: readonly import('./model.ts').ModelBone[], sliders: readonly import('./core/constraints_slider.ts').SliderApplication[]) => { values = localChannels(bones, sliders); } } : {};
       const input = inputOf(skin);
@@ -814,6 +831,7 @@ export function corePoser(
         if (ctx.time > 0 && ctx.states.get(r.name)?.lastTime === ctx.time) steppedNow.add(r.name);
         return moved;
       };
+      const clock = clockSteps === undefined ? undefined : steppedClock(clockSteps);
       walk(input.doc, name, times === undefined ? new Array<number>(count).fill(step) : times.slice(1).map((t, i) => t - times[i]), { through, physicsStep, ...observe }, (pose, i) => {
         const stepped = [...steppedNow].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
         steppedNow.clear();
@@ -823,7 +841,7 @@ export function corePoser(
         } catch (thrown) {
           drawFailed.push(thrown);
         }
-      }, environment, loop);
+      }, environment, loop, clock);
       if (drawFailed.length > 0) throw drawFailed[0];
     },
     rest: (skin, shown) => {

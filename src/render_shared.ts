@@ -1198,8 +1198,14 @@ export interface Poser {
    * animation time the track time wrapped by the duration, the physics carried
    * across every wrap, as a player's looping track carries it; absent, the
    * track holds at its duration as it always did.
+   * `clockSteps` (issue #1687, `render --preroll`), beside `times`, is what
+   * each step moves the physics clock by before the lead: step `i` (from 1)
+   * moves it by `physicsClockStep(clockSteps[i - 1])` in place of
+   * `physicsClockStep(times[i] - times[i - 1])`, while the track time still
+   * follows `times` (`prerollTimes` says why the two part). Absent, every
+   * step moves the physics clock by its own length, as it always did.
    */
-  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean, times?: readonly number[], loop?: boolean): void;
+  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean, times?: readonly number[], loop?: boolean, clockSteps?: readonly number[]): void;
   /** The rest table for the (slot, attachment) pairs `shown` holds — see `AttachmentRest`. */
   rest(skin: string | undefined, shown: readonly AttachmentPose[][]): AttachmentRest[];
 }
@@ -1280,11 +1286,11 @@ export function sampleAnimation(source: PoseSource, name: string, fps: number, o
     if (!Number.isInteger(preroll) || preroll < 1) throw new Error(`preroll is ${String(preroll)}, not a whole number of loops at or above 1`);
     if (opts?.environment !== undefined) throw new Error('preroll and environment were both given: nothing settles which clock the schedule is read on under a pre-roll');
     // The track loops; every pose before track time `preroll · duration` is walked and drawn by no frame (issue #1684).
-    const { times, first } = prerollTimes(animation.duration, fps, preroll);
+    const { times, first, clock } = prerollTimes(animation.duration, fps, preroll);
     const recorded = (i: number, posed: Posed): void => {
       if (i >= first) frames.push(frameOf(i - first, (i - first) * step, posed, draw(), opts));
     };
-    poser.animation(name, opts?.skin, fps, times.length - 1, recorded, undefined, opts?.channels === true ? true : undefined, times, true);
+    poser.animation(name, opts?.skin, fps, times.length - 1, recorded, undefined, opts?.channels === true ? true : undefined, times, true, clock);
     return frames;
   }
   const visit = (i: number, posed: Posed): void => {
@@ -1338,13 +1344,14 @@ export function prerollWarmPoints(start: number, fps: number): number {
 }
 
 /**
- * The track times a pre-roll of `preroll` loops walks, for `Poser.animation`'s
- * `times` (issue #1684): the render's grid `j / fps` up to the last point
- * before `prerollStart`, one shorter step onto it, then the loop recorded,
- * `start + i / fps` for `i = 1..count`. `first` is the index of `start` — the
- * pose frame 0 is.
+ * The walk a pre-roll of `preroll` loops takes, for `Poser.animation`'s `times`
+ * and `clockSteps` (issues #1684, #1687): the track times — the render's grid
+ * `j / fps` up to the last point before `prerollStart`, one step onto it, then
+ * the loop recorded, `start + i / fps` for `i = 1..count` — and what each step
+ * moves the physics clock by. `first` is the index of `start`, the pose frame 0
+ * is.
  *
- * ⭐ **The walk lands on `start` exactly.** Both posers step a track by the
+ * ⭐ **The track lands on `start` exactly.** Both posers step a track by the
  * differences of `times` and add them up (`trackTime += delta`), and every
  * difference before `start` is exact — two floats within a factor of two of
  * each other subtract without rounding — so each running sum is the time it
@@ -1352,15 +1359,48 @@ export function prerollWarmPoints(start: number, fps: number): number {
  * `preroll · count` steps instead lands on `preroll · count / fps`, which is
  * the wrap only where `duration · fps` is whole: elsewhere the loop recorded
  * started at the wrong phase while frame 0 was filed at time 0.
+ *
+ * ⭐ **The physics clock lands on the grid, not on `start`** (issue #1687). The
+ * step onto `start` is a frame only where the duration is exactly `count /
+ * fps`. Where it is not — a duration read as a float32, `count / fps` less
+ * `δ` — it is a frame short by `preroll · δ`: 3.2e-7 s at 2 loops of a
+ * 2.6666665 s idle at 12 fps, against the 5.0e-9 s of `PHYSICS_CLOCK_LEAD`
+ * the clock has gathered there. A physics constraint takes the whole steps
+ * that fit, so a clock moved by that short step takes one fewer (4 in place
+ * of 5 at 12 fps against 60 Hz) and leaves 0.99998 of a step remaining where
+ * the plain walk leaves 3e-7 of one; every frame after keeps that phase, and
+ * the loop recorded is a fresh transient — measured on the selftest's
+ * four-link `preroll_probe`, its springs 26.4 units off the plain walk's loop
+ * on a stepped idle and 37.6 on an eased one, and its seam 1.38× its largest
+ * step after 10 loops (`PRE08`). ⚠️ The ⭐ above once stood alone as the
+ * walk's whole claim: it is true of the track and said nothing of the
+ * physics, which took the same step.
+ *
+ * So the physics clock is stepped by the same differences except the step
+ * onto `start`, which moves it to the grid point nearest the wrap,
+ * `round(start · fps) / fps`, and not to `start`: a whole frame where the
+ * wrap sits just short of a grid point, and nothing where it sits just past
+ * one — `δ` below 0, where that grid point is the last before `start` and the
+ * step onto `start` is the sliver past it. The loop recorded is then loop
+ * `preroll + 1` of a plain looping walk on the uniform grid, its physics clock
+ * off that walk's by rounding alone (`PRE07`), and frame 0 is still the wrap:
+ * the animation is re-phased onto it by `preroll · δ`, the one difference
+ * between the two that the physics answers. Where the duration is exactly
+ * `count / fps`, `start` is that grid point and the clock steps are the
+ * track's, so nothing moves; on a loop that is no whole number of frames at
+ * all (`PRE06`'s 1.03 s at 12 fps) the physics stays on the frame grid the
+ * same way and the animation is re-phased by under half a frame.
  */
-export function prerollTimes(duration: number, fps: number, preroll: number): { times: number[]; first: number } {
+export function prerollTimes(duration: number, fps: number, preroll: number): { times: number[]; first: number; clock: number[] } {
   const start = prerollStart(duration, preroll);
   const count = Math.round(duration * fps);
   const first = prerollWarmPoints(start, fps);
   const times = Array.from({ length: first }, (_, j) => j / fps);
   times.push(start);
   for (let i = 1; i <= count; i++) times.push(start + i / fps);
-  return { times, first };
+  const clock = times.slice(1).map((t, i) => t - times[i]);
+  if (first > 0) clock[first - 1] = Math.round(start * fps) / fps - times[first - 1];
+  return { times, first, clock };
 }
 
 /**

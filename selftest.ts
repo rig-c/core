@@ -123876,6 +123876,442 @@ function runRenderEnvironmentSuite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// render --preroll (issue #1684)
+// ---------------------------------------------------------------------------
+
+/**
+ * `render --preroll <n>` (issue #1684): the track set looping, `n` whole loops
+ * walked and drawn by no frame, then the next loop recorded — the physics
+ * carried across every wrap, as a player's looping track carries it, on both
+ * render posers.
+ *
+ * Three subjects: the skirt fixture (`fixtures/public.ts`, six chains of five
+ * links on physics, swayed from the hip on a 2 s `sway`), the spring probe of
+ * LS05–LS06 (two links on a ±12° swing, one 4 s period from t = 0) and the
+ * articulated fixture (three physics constraints over three animations).
+ *
+ * - RP01 renders each through the core and `--poser spine` with `--preroll 2
+ *   --geometry --sheet` and holds every file equal — frames.json, geometry.json
+ *   and the sheet files byte for byte, every PNG by its pixels — and that each
+ *   file records the pre-roll.
+ * - RP02 is the card's bar: on the skirt and the spring probe, after a pre-roll
+ *   of 1 loop, every physics bone's frame-0-against-last-frame difference —
+ *   its tip's distance and its rotation — is within that bone's own largest
+ *   step between two adjacent frames of the loop; without the flag the same
+ *   reading is red on both (the spring released from rest). Read off the
+ *   `geometry.json` the CLI wrote, on both posers.
+ * - RP03 plants the rejected walks on the core's side and holds each red
+ *   against spine-core: the loop flag ignored (a track that holds at its
+ *   duration through the pre-roll), and the pre-roll dropped (the recorded loop
+ *   walked from rest). The unplanted core is the positive control.
+ * - RP04: without the flag the render is the one it was — every walk the core
+ *   is asked for holds (`loop` absent) and takes `count` steps, spine-core's
+ *   track is set with `loop` false, and no file carries a `preroll` field; the
+ *   gallery's bytes are held by `RH05` and `EH06` (`render_hashes`,
+ *   `emit_hashes` `base --check`), which this change regenerates neither of.
+ * - RP05: every refusal by name, exit 2, nothing written; and `check` refuses a
+ *   frame set drawn after a pre-roll as a reference.
+ */
+function runRenderPrerollSuite(): number {
+  console.log('\n── render --preroll: a looping track walked whole loops first, alike on both posers (issue #1684) ──');
+  let bad = 0;
+  const say = (name: string, ok: boolean, detail: string, why: string): void => {
+    bad += reportCase(name, ok, detail, why);
+  };
+  const names = [
+    'RP01_A_PREROLL_RENDERS_THE_SAME_FRAMES_GEOMETRY_SHEET_AND_FRAMES_JSON_THROUGH_THE_CORE_AND_SPINE_CORE',
+    'RP02_AFTER_A_PREROLL_EVERY_PHYSICS_BONE_CLOSES_WITHIN_ITS_OWN_LARGEST_STEP_AND_FROM_REST_IT_DOES_NOT',
+    'RP03_EACH_REJECTED_WALK_PLANTED_ON_THE_CORE_IS_RED_AGAINST_SPINE_CORE',
+    'RP04_WITHOUT_THE_FLAG_EVERY_WALK_HOLDS_AND_NO_FILE_RECORDS_A_PREROLL',
+    'RP05_A_PREROLL_THE_RENDER_WOULD_NOT_WALK_IS_REFUSED_BY_NAME_AND_CHECK_REFUSES_ONE_AS_A_REFERENCE',
+  ];
+  const ORIGIN = 'issue #1684: a looping idle rendered from rest shows its physics starting from rest at every wrap; the render reaches the walk a player\'s looping track takes, and the export\'s walk has to be the core\'s';
+  const FPS = PROTOCOL_FPS;
+  const PREROLL = 2;
+  const bits = (x: unknown): string => JSON.stringify(x, (_k, v: unknown) => (typeof v === 'number' ? (Object.is(v, -0) ? '-0' : String(v)) : v));
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-render-preroll-'));
+  try {
+    // --- the subjects ----------------------------------------------------------
+    type Subject = { label: string; out: string; core: (walk?: CoreRawWalk) => Poser; spine: () => Poser; physics: string[]; lengths: Map<string, number> };
+    const problems: string[] = [];
+    const subjects: Subject[] = [];
+    const admit = (label: string, built: { out: string } | { why: string }): void => {
+      if ('why' in built) {
+        problems.push(built.why);
+        return;
+      }
+      const out = built.out;
+      const modelPath = join(out, MODEL_DOCUMENT_FILE);
+      const modelText = readFileSync(modelPath, 'utf8');
+      const atlasText = readFileSync(join(out, 'skeleton.atlas'), 'utf8');
+      const skeletonPath = join(out, 'skeleton.json');
+      const skeletonText = readFileSync(skeletonPath, 'utf8');
+      const skeleton = { path: skeletonPath, bytes: readFileSync(skeletonPath) };
+      const json = JSON.parse(skeletonText) as { bones: Array<{ name: string; length?: number }> };
+      subjects.push({
+        label,
+        out,
+        core: (walk) => corePoser(modelText, atlasText, modelPath, skeleton, undefined, walk === undefined ? {} : { walk }),
+        spine: () => spinePoser(loadOracleData(skeletonText, atlasText, label)),
+        physics: environmentResponse(skeletonText).declared.length === 0 ? [] : physicsBonesOf(skeletonText),
+        lengths: new Map(json.bones.map((b) => [b.name, b.length ?? 0])),
+      });
+    };
+    const skirt = skirtFixture();
+    const skirtOut = join(work, 'skirt');
+    const skirtBuilt = runCli(['build', '--rig', skirt.rigPath, '--motion', skirt.motionPath, '--images', skirt.imagesDir, '--out', skirtOut]);
+    admit(`the ${skirt.rig} fixture`, skirtBuilt.status === 0 ? { out: skirtOut } : { why: `the ${skirt.rig} fixture did not build (exit ${String(skirtBuilt.status)}): ${skirtBuilt.stderr.trim().split('\n').slice(-1)[0] ?? ''}` });
+    mkdirSync(join(work, 'spring'));
+    admit('the spring probe', buildSpringLoopProbe(join(work, 'spring'), 0, 4));
+    const articulatedOut = join(work, 'articulated');
+    const articulated = runCli(['build', '--rig', ARTICULATED.rigPath, '--motion', ARTICULATED.motionPath, '--manifest', ARTICULATED.manifestPath, '--out', articulatedOut]);
+    admit(`the ${ARTICULATED.rig} fixture`, articulated.status === 0 ? { out: articulatedOut } : { why: `the ${ARTICULATED.rig} fixture did not build (exit ${String(articulated.status)}): ${articulated.stderr.trim().split('\n').slice(-1)[0] ?? ''}` });
+    if (problems.length > 0 || subjects.length < 3 || subjects.some((s) => s.physics.length === 0)) {
+      for (const name of names) say(name, false, problems.join('; ') || `${subjects.length} subject(s) built, ${subjects.filter((s) => s.physics.length === 0).length} declaring no physics`, ORIGIN);
+      return bad;
+    }
+    const [skirtSubject, springSubject] = subjects;
+    const files = (root: string): string[] => {
+      const out: string[] = [];
+      const walk = (rel: string): void => {
+        for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
+          const r = rel === '' ? entry.name : `${rel}/${entry.name}`;
+          if (entry.isDirectory()) walk(r);
+          else out.push(r);
+        }
+      };
+      walk('');
+      return out.sort();
+    };
+
+    // --- RP01: through the CLI, the core and spine-core write the same files --------------------------------
+    const renders = new Map<Subject, string>();
+    {
+      const probes: string[] = [];
+      const rows: string[] = [];
+      for (const s of subjects) {
+        const coreDir = join(work, `${subjects.indexOf(s)}-preroll-core`);
+        const spineDir = join(work, `${subjects.indexOf(s)}-preroll-spine`);
+        const core = runCli(['render', '--candidate', s.out, '--geometry', '--sheet', '--preroll', String(PREROLL), '--out', coreDir]);
+        const spine = runCli(['render', '--candidate', s.out, '--geometry', '--sheet', '--preroll', String(PREROLL), '--poser', 'spine', '--out', spineDir]);
+        if (core.status !== 0 || spine.status !== 0) {
+          probes.push(`${s.label}: the renders exited ${String(core.status)} (core) and ${String(spine.status)} (spine): ${(core.stderr + spine.stderr).trim().split('\n').slice(-1)[0] ?? ''}`);
+          continue;
+        }
+        renders.set(s, coreDir);
+        if (!/\bposer {4}rigc core\b/.test(core.stdout)) probes.push(`${s.label}: the default render did not pose through the core — ${core.stdout.split('\n').find((l) => l.includes('poser')) ?? 'no poser line'}`);
+        if (!/\bposer {4}spine-core — --poser spine\b/.test(spine.stdout)) probes.push(`${s.label}: --poser spine did not pose through spine-core — ${spine.stdout.split('\n').find((l) => l.includes('poser')) ?? 'no poser line'}`);
+        if (!new RegExp(`\\bpreroll {2}${PREROLL} loop\\(s\\) of each set walked on a looping track`).test(core.stdout)) probes.push(`${s.label}: the core render printed no preroll line for ${PREROLL} loop(s)`);
+        const a = files(coreDir);
+        const b = files(spineDir);
+        if (bits(a) !== bits(b)) probes.push(`${s.label}: the two renders wrote different files: [${a.filter((f) => !b.includes(f)).join(', ')}] against [${b.filter((f) => !a.includes(f)).join(', ')}]`);
+        let frames = 0;
+        let differing = 0;
+        for (const f of a.filter((x) => b.includes(x))) {
+          const x = readFileSync(join(coreDir, f));
+          const y = readFileSync(join(spineDir, f));
+          if (/\/f\d{4}\.png$/.test(f)) frames++;
+          if (x.equals(y)) continue;
+          if (f.endsWith('.png') && Buffer.from(readPlate(join(coreDir, f)).data).equals(Buffer.from(readPlate(join(spineDir, f)).data))) continue;
+          if (/\/f\d{4}\.png$/.test(f)) differing++;
+          else probes.push(`${s.label}: ${f} differs between the core and spine-core`);
+        }
+        if (differing > 0) probes.push(`${s.label}: ${differing} of ${frames} frame(s) differ in their pixels between the core and spine-core`);
+        const sidecar = JSON.parse(readFileSync(join(coreDir, FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
+        if (sidecar.preroll !== PREROLL) probes.push(`${s.label}: frames.json records preroll ${bits(sidecar.preroll)}, not ${PREROLL}`);
+        for (const set of sidecar.sets) {
+          const geometry = JSON.parse(readFileSync(join(coreDir, set.dir, GEOMETRY_FILE), 'utf8')) as GeometryFile;
+          if (geometry.preroll !== PREROLL) probes.push(`${s.label} ${set.dir}: geometry.json records preroll ${bits(geometry.preroll)}, not ${PREROLL}`);
+          const manifest = JSON.parse(readFileSync(join(coreDir, set.dir, SHEET_MANIFEST_FILE), 'utf8')) as SheetManifest;
+          if (manifest.preroll !== PREROLL) probes.push(`${s.label} ${set.dir}: ${SHEET_MANIFEST_FILE} records preroll ${bits(manifest.preroll)}, not ${PREROLL}`);
+          if (!manifest.namespace.endsWith(`/preroll=${PREROLL}`)) probes.push(`${s.label} ${set.dir}: the sheet's namespace ${JSON.stringify(manifest.namespace)} does not name the pre-roll, so its frame keys collide with the render from rest`);
+        }
+        rows.push(`${s.label}: ${sidecar.sets.length} set(s), ${frames} frame(s), ${differing} differing`);
+      }
+      const ok = probes.length === 0;
+      say(names[0], ok, probeDetail(ok, probes.slice(0, 12), `${rows.join('; ')} — every PNG equal in its pixels, frames.json, geometry.json and the sheet files byte for byte, the default render posed by the core and the other by spine-core, each file recording preroll ${PREROLL}`), ORIGIN);
+    }
+
+    // --- RP02: the card's bar, read off the geometry.json the CLI wrote -------------------------------------
+    // Per physics bone: its tip — the origin plus `length` along its world x axis — and its world rotation. The bone's
+    // own bound is its largest step between two adjacent frames of the loop recorded; the closure is frame 0 against the
+    // last frame, which a loop repeats as its first.
+    type Closure = { bone: string; tip: number; turn: number; tipStep: number; turnStep: number };
+    const closures = (s: Subject, geometry: GeometryFile): Closure[] => {
+      const read = (frame: GeometryFile['frames'][number], bone: string): { x: number; y: number; deg: number } => {
+        const b = frame.bones.find((x) => x.name === bone);
+        if (b === undefined) return { x: Number.NaN, y: Number.NaN, deg: Number.NaN };
+        const length = s.lengths.get(bone) ?? 0;
+        return { x: b.worldX + length * b.a, y: b.worldY + length * b.c, deg: (Math.atan2(b.c, b.a) * 180) / Math.PI };
+      };
+      const turnOf = (p: number, q: number): number => {
+        const d = Math.abs(p - q) % 360;
+        return d > 180 ? 360 - d : d;
+      };
+      return s.physics.map((bone) => {
+        let tipStep = 0;
+        let turnStep = 0;
+        for (let i = 1; i < geometry.frames.length; i++) {
+          const p = read(geometry.frames[i - 1], bone);
+          const q = read(geometry.frames[i], bone);
+          tipStep = Math.max(tipStep, Math.hypot(p.x - q.x, p.y - q.y));
+          turnStep = Math.max(turnStep, turnOf(p.deg, q.deg));
+        }
+        const first = read(geometry.frames[0], bone);
+        const last = read(geometry.frames[geometry.frames.length - 1], bone);
+        return { bone, tip: Math.hypot(first.x - last.x, first.y - last.y), turn: turnOf(first.deg, last.deg), tipStep, turnStep };
+      });
+    };
+    const open = (c: Closure): boolean => !(c.tip <= c.tipStep) || !(c.turn <= c.turnStep);
+    const ratio = (c: Closure): number => Math.max(c.tip / c.tipStep, c.turn / c.turnStep);
+    {
+      const probes: string[] = [];
+      const rows: string[] = [];
+      const K = 1;
+      for (const s of [skirtSubject, springSubject]) {
+        const sets = s.core().animations.map((a) => a.name);
+        for (const [poser, extra] of [['core', []], ['spine-core', ['--poser', 'spine']]] as const) {
+          const warmDir = join(work, `rp02-${subjects.indexOf(s)}-${poser}-warm`);
+          const coldDir = join(work, `rp02-${subjects.indexOf(s)}-${poser}-cold`);
+          const warm = runCli(['render', '--candidate', s.out, '--geometry', '--preroll', String(K), ...extra, '--out', warmDir]);
+          const cold = runCli(['render', '--candidate', s.out, '--geometry', ...extra, '--out', coldDir]);
+          if (warm.status !== 0 || cold.status !== 0) {
+            probes.push(`${s.label} on ${poser}: the renders exited ${String(warm.status)} (--preroll ${K}) and ${String(cold.status)} (no flag)`);
+            continue;
+          }
+          for (const set of sets) {
+            const warmRead = closures(s, JSON.parse(readFileSync(join(warmDir, frameSetDir(set, FPS), GEOMETRY_FILE), 'utf8')) as GeometryFile);
+            const coldRead = closures(s, JSON.parse(readFileSync(join(coldDir, frameSetDir(set, FPS), GEOMETRY_FILE), 'utf8')) as GeometryFile);
+            for (const c of warmRead.filter(open)) {
+              probes.push(`${s.label} "${set}" on ${poser}, --preroll ${K}: bone "${c.bone}" ends ${c.tip.toFixed(4)} from its first tip (largest step ${c.tipStep.toFixed(4)}) and ${c.turn.toFixed(4)}° from its first rotation (largest step ${c.turnStep.toFixed(4)}°)`);
+            }
+            const coldOpen = coldRead.filter(open);
+            if (coldOpen.length === 0) probes.push(`${s.label} "${set}" on ${poser}: without the flag every physics bone closed, so this reading cannot see a loop from rest`);
+            const worstWarm = warmRead.reduce((a, b) => (ratio(b) > ratio(a) ? b : a));
+            const worstCold = coldRead.reduce((a, b) => (ratio(b) > ratio(a) ? b : a));
+            if (poser === 'core') {
+              rows.push(
+                `${s.label} "${set}" (${s.physics.length} physics bone(s)): after ${K} loop(s) the worst is "${worstWarm.bone}" at ${ratio(worstWarm).toFixed(4)} of its own largest step ` +
+                  `(tip ${worstWarm.tip.toExponential(2)} against ${worstWarm.tipStep.toFixed(3)}, ${worstWarm.turn.toExponential(2)}° against ${worstWarm.turnStep.toFixed(3)}°); ` +
+                  `from rest ${coldOpen.length} of ${s.physics.length} bone(s) end past it, the worst "${worstCold.bone}" at ${ratio(worstCold).toFixed(2)}×`,
+              );
+            }
+          }
+        }
+      }
+      const ok = probes.length === 0;
+      say(
+        names[1],
+        ok,
+        probeDetail(ok, probes.slice(0, 12), `${rows.join('; ')} — on both posers, read off geometry.json at ${FPS} fps (tip in world units)`),
+        'issue #1684, the card\'s bar: after a pre-roll of k loops each physics bone\'s t0-against-t_end difference — tip and rotation — falls under that bone\'s largest in-loop step on a damped chain, and from rest it does not',
+      );
+    }
+
+    // --- RP03: each rejected walk, planted on the core, is red against spine-core ---------------------------
+    {
+      const probes: string[] = [];
+      // By name: the two posers list a skeleton's animations in orders of their own.
+      const sampled = (poser: Poser, preroll: number): Map<string, Frame[]> => new Map(poser.animations.map((a) => [a.name, sampleAnimation(poser, a.name, FPS, { bones: true, geometry: true, preroll })]));
+      const flat = (f: Frame): string => bits([f.bones ?? null, f.attachments ?? null]);
+      const firstDiffering = (a: Map<string, Frame[]>, b: Map<string, Frame[]>): number => {
+        if (bits([...a.keys()].sort()) !== bits([...b.keys()].sort())) return 0;
+        for (const [name, frames] of a) {
+          const other = b.get(name) ?? [];
+          const at = frames.findIndex((f, i) => other[i] === undefined || flat(f) !== flat(other[i]));
+          if (at !== -1) return at;
+        }
+        return -1;
+      };
+      const PLANTS: Array<[string, (s: Subject) => CoreRawWalk]> = [
+        ['the loop flag ignored on the core — a track that holds at its duration through the pre-roll', () => (doc, animation, steps, plant, visit, env) => CORE_RAW_WALK(doc, animation, steps, plant, visit, env)],
+        [
+          'the pre-roll dropped on the core — the loop recorded walked from rest',
+          (s) => (doc, animation, steps, plant, visit, env, loop) => {
+            const count = Math.round((s.core().animations.find((a) => a.name === animation)?.duration ?? 0) * FPS);
+            const skip = steps.length - count;
+            CORE_RAW_WALK(doc, animation, steps.slice(skip), plant, (pose, i) => visit(pose, i + skip), env, loop);
+          },
+        ],
+      ];
+      const red = PLANTS.map(() => 0);
+      let poses = 0;
+      for (const s of subjects) {
+        const want = sampled(s.spine(), PREROLL);
+        poses += [...want.values()].reduce((n, x) => n + x.length, 0);
+        const at = firstDiffering(sampled(s.core(), PREROLL), want);
+        if (at !== -1) probes.push(`${s.label}: the core differs from spine-core at frame ${at} under --preroll ${PREROLL}`);
+        PLANTS.forEach(([, plant], p) => {
+          if (firstDiffering(sampled(s.core(plant(s)), PREROLL), want) !== -1) red[p]++;
+        });
+      }
+      PLANTS.forEach(([label], p) => {
+        if (red[p] === 0) probes.push(`${label} posed spine-core's walk on all ${subjects.length} subject(s), so this control cannot tell it from the looping track`);
+      });
+      const ok = probes.length === 0;
+      say(
+        names[2],
+        ok,
+        probeDetail(ok, probes.slice(0, 12), `${subjects.length} subject(s), ${poses} pose(s) of the core equal to spine-core in every bone's world transform and every attachment's vertices under a pre-roll of ${PREROLL}; planted on the core's side, each red: ${PLANTS.map(([label], p) => `${label} on ${red[p]} of ${subjects.length}`).join('; ')}`),
+        ORIGIN,
+      );
+    }
+
+    // --- RP04: without the flag, the walk is the one it always was ------------------------------------------
+    {
+      const probes: string[] = [];
+      let walks = 0;
+      let tracks = 0;
+      for (const s of subjects) {
+        // The core: every walk the sampler and the framing ask for, without the flag, holds and takes `count` steps.
+        const asked: Array<{ animation: string; steps: number; loop: boolean | undefined }> = [];
+        const observing: CoreRawWalk = (doc, animation, steps, plant, visit, env, loop) => {
+          asked.push({ animation, steps: steps.length, loop });
+          CORE_RAW_WALK(doc, animation, steps, plant, visit, env, loop);
+        };
+        const core = s.core(observing);
+        for (const a of core.animations) sampleAnimation(core, a.name, FPS, { bones: true, geometry: true });
+        framingViewport(core, 256);
+        const durations = new Map(core.animations.map((a) => [a.name, a.duration]));
+        for (const w of asked) {
+          walks++;
+          if (w.loop !== undefined) probes.push(`${s.label} "${w.animation}": a walk without the flag was asked loop ${String(w.loop)}`);
+          const d = durations.get(w.animation) ?? Number.NaN;
+          if (w.steps !== Math.round(d * FPS) && w.steps !== Math.round(d * FRAMING_FPS)) probes.push(`${s.label} "${w.animation}": a walk without the flag took ${w.steps} step(s), not round(duration · fps)`);
+        }
+        // spine-core: every track the sampler sets without the flag is set not looping.
+        const set = Object.getOwnPropertyDescriptor(AnimationState.prototype, 'setAnimation');
+        const loops: unknown[] = [];
+        try {
+          Object.defineProperty(AnimationState.prototype, 'setAnimation', {
+            value: function observed(this: AnimationState, ...args: Parameters<AnimationState['setAnimation']>) {
+              loops.push(args[2]);
+              return (set?.value as AnimationState['setAnimation']).apply(this, args);
+            },
+            configurable: true,
+            writable: true,
+          });
+          const spine = s.spine();
+          for (const a of spine.animations) sampleAnimation(spine, a.name, FPS, { bones: true });
+        } finally {
+          if (set !== undefined) Object.defineProperty(AnimationState.prototype, 'setAnimation', set);
+        }
+        tracks += loops.length;
+        if (loops.length === 0 || loops.some((l) => l !== false)) probes.push(`${s.label}: spine-core's tracks were set with loop ${bits(loops)} without the flag`);
+        // The CLI: no file of a render without the flag records a pre-roll.
+        const bare = join(work, `rp04-${subjects.indexOf(s)}`);
+        const r = runCli(['render', '--candidate', s.out, '--geometry', '--sheet', '--out', bare]);
+        if (r.status !== 0) probes.push(`${s.label}: the render without the flag exited ${String(r.status)}`);
+        else {
+          if (/\bpreroll {2}/.test(r.stdout)) probes.push(`${s.label}: the render without the flag printed a preroll line`);
+          for (const f of files(bare).filter((x) => x.endsWith('.json'))) {
+            const parsed = JSON.parse(readFileSync(join(bare, f), 'utf8')) as Record<string, unknown>;
+            if ('preroll' in parsed) probes.push(`${s.label}: ${f} records preroll ${bits(parsed.preroll)} on a render without the flag`);
+            if (f.endsWith(SHEET_MANIFEST_FILE) && String(parsed.namespace).includes('preroll=')) probes.push(`${s.label}: ${f}'s namespace names a pre-roll`);
+          }
+        }
+      }
+      const ok = probes.length === 0;
+      say(
+        names[3],
+        ok,
+        probeDetail(ok, probes.slice(0, 12), `${walks} core walk(s) without the flag, every one held (loop absent) and of round(duration · fps) steps; ${tracks} spine-core track(s), every one set not looping; no frames.json, geometry.json or ${SHEET_MANIFEST_FILE} without the flag records a preroll — the gallery's bytes are RH05's and EH06's`),
+        'issue #1684: an absent flag is today\'s render, byte for byte — `render_hashes base --check` and `emit_hashes base --check` stay green with neither base regenerated',
+      );
+    }
+
+    // --- RP05: refusals by name, exit 2, nothing written ----------------------------------------------------
+    {
+      const probes: string[] = [];
+      let checks = 0;
+      const refusedWith = (what: string, candidate: string, args: string[], says: RegExp): void => {
+        checks++;
+        const out = join(work, `rp05-out-${checks}`);
+        const r = runCli(['render', '--candidate', candidate, ...args, '--out', out]);
+        if (r.status !== 2) probes.push(`${what}: exit ${String(r.status)}, not 2`);
+        if (!says.test(r.stderr)) probes.push(`${what}: stderr does not say ${says} — ${r.stderr.trim().split('\n').slice(-1)[0] ?? ''}`);
+        if (existsSync(out)) probes.push(`${what}: wrote ${out}`);
+      };
+      const at = skirtSubject.out;
+      refusedWith('a negative count', at, ['--preroll', '-1'], /--preroll -1: negative — it takes how many whole loops/);
+      refusedWith('a count that is not whole', at, ['--preroll', '1.5'], /--preroll 1\.5: not a whole number of loops — /);
+      refusedWith('a count of 0', at, ['--preroll', '0'], /--preroll 0 walks no loop before the one recorded, which is the render from rest — leave --preroll out for it/);
+      refusedWith('a value that is not a number', at, ['--preroll', 'two'], /--preroll "two": not a number — /);
+      refusedWith('a walk past what a step list holds', at, ['--preroll', '1e12'], /--preroll 1000000000000: "sway" would walk \d+ steps at 12 fps, more than a walk's step list holds \(4294967295\)/);
+      const schedule = join(work, 'rp05-schedule.json');
+      writeFileSync(schedule, JSON.stringify({ spec: ENVIRONMENT_SPEC, steps: [{ t: 0, wind: [0, 0] }] }));
+      refusedWith('an environment beside it', at, ['--preroll', '1', '--environment', schedule], /--preroll takes no --environment: a schedule's t could be read from the first frame recorded or from the first loop walked/);
+      refusedWith('a parallax dial beside it', at, ['--preroll', '1', '--parallax', 'any'], /--parallax takes no --preroll/);
+      // A set of 0 frames, a skeleton with no physics constraint and one with no animation: the spring probe's rig under a
+      // 0.2 s loop at 1 fps with its spring, under a 1 s loop without one, and under no animation with its spring.
+      const spring = { c0_spring: { bone: 'c0', rotate: 1, inertia: 0.5, strength: 60, damping: 0.8, mass: 1, mix: 1 } };
+      const swing = (duration: number): Record<string, unknown> => ({ duration, loop: true, tracks: [{ bone: 'swing', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: duration, v: [12] }] }] });
+      for (const [label, motion, args, says] of [
+        ['a set of 0 frames', { physics: spring, animations: { short: swing(0.2) } }, ['--fps', '1'], /--preroll 1: "short" lasts 0\.2\d*s, which is 0 frames at 1 fps — a loop of it walks no step, so no pre-roll moves its physics/],
+        ['a skeleton with no physics constraint', { animations: { loop: swing(1) } }, [], /--preroll 1: the skeleton declares no physics constraint, so nothing carries from one loop into the next/],
+        ['a skeleton with no animation', { physics: spring, animations: {} }, [], /--preroll 1: the skeleton has no animation — its one frame is the setup pose, where nothing loops and no physics step runs/],
+      ] as const) {
+        const dir = join(work, `rp05-${label.replace(/\W+/g, '-')}`);
+        mkdirSync(dir);
+        const motionPath = join(dir, 'motion.json');
+        writeFileSync(motionPath, JSON.stringify({ spec: 'rigc-motion/1', archetype: 'springloop', cut: 'springloop', easings: {}, ...motion }));
+        const built = runCli(['build', '--rig', join(work, 'spring', 'rig.json'), '--motion', motionPath, '--out', join(dir, 'build')]);
+        if (built.status !== 0) {
+          checks++;
+          probes.push(`${label}: the probe did not build (exit ${String(built.status)}): ${built.stderr.trim().split('\n').slice(-1)[0] ?? ''}`);
+          continue;
+        }
+        refusedWith(label, join(dir, 'build'), ['--preroll', '1', ...args], says);
+      }
+      // The sampler's own backstops, for a caller that is not the CLI.
+      const poser = skirtSubject.core();
+      for (const [label, opts, says] of [
+        ['the sampler handed a count that is not whole', { preroll: 1.5 }, /preroll is 1\.5, not a whole number of loops at or above 1/],
+        ['the sampler handed a schedule beside it', { preroll: 1, environment: [{ t: 0, wind: [0, 0] as [number, number] }] }, /preroll and environment were both given/],
+      ] as const) {
+        checks++;
+        let thrown = '';
+        try {
+          sampleAnimation(poser, 'sway', FPS, opts);
+        } catch (err) {
+          thrown = err instanceof Error ? err.message : String(err);
+        }
+        if (!says.test(thrown)) probes.push(`${label}: threw ${JSON.stringify(thrown)}, not ${says}`);
+      }
+      // check: a frame set drawn after a pre-roll is not a reference.
+      const reference = renders.get(skirtSubject);
+      let checkExit: number | null = null;
+      if (reference === undefined) probes.push('RP01 left no render after a pre-roll to hand check');
+      else {
+        const r = runCli(['check', '--candidate', skirtSubject.out, '--frames', reference]);
+        checkExit = r.status;
+        if (r.status === 0 || !/records that these frames were rendered after a pre-roll .* so the comparison would be a number about the difference between a warm loop and a cold one/.test(r.stderr)) {
+          probes.push(`check on a frame set drawn after a pre-roll: exit ${String(r.status)} — ${r.stderr.trim().split('\n').slice(-1)[0] ?? r.stdout.trim().split('\n').slice(-1)[0] ?? ''}`);
+        }
+      }
+      const ok = probes.length === 0;
+      say(
+        names[4],
+        ok,
+        probeDetail(ok, probes.slice(0, 12), `${checks} of ${checks} refusal(s) by name — a negative count, one not whole, 0, not a number, a walk past a step list, --environment and --parallax beside it, a set of 0 frames, a skeleton with no physics constraint and one with no animation on the CLI (exit 2, no --out written), and the sampler's two backstops — and check refusing a frame set drawn after a pre-roll as a reference by name, exit ${String(checkExit)}`),
+        'issue #1684: a pre-roll the render would not walk prints a frame set from rest under a flag that says it is warm, so each is a named failure before anything is posed',
+      );
+    }
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  return bad;
+}
+
+/** The bones a Spine 4.3 skeleton's physics constraints drive, in declaration order, off its JSON. */
+function physicsBonesOf(skeletonText: string): string[] {
+  const json = JSON.parse(skeletonText) as { constraints?: Array<{ type?: string; bone?: string }> };
+  const bones: string[] = [];
+  for (const c of json.constraints ?? []) if (c.type === 'physics' && typeof c.bone === 'string' && !bones.includes(c.bone)) bones.push(c.bone);
+  return bones;
+}
+
+// ---------------------------------------------------------------------------
 // render's physics line (issue #1467)
 // ---------------------------------------------------------------------------
 import { physicsLine, PHYSICS_NONE_LINE, physicsSteppedOf } from './src/cli/core_commands.ts';
@@ -148699,6 +149135,7 @@ function main(): void {
   tally.of('ingest', runIngestSuite);
   tally.of('loop-seam', runLoopSeamSuite);
   tally.of('render-environment', runRenderEnvironmentSuite);
+  tally.of('render-preroll', runRenderPrerollSuite);
   tally.of('render-physics', runRenderPhysicsSuite);
   tally.of('sheet', runSheetSuite);
   tally.of('run-tally', () => runRunTallySuite(tally), { live: true, whole: true });

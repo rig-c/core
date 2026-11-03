@@ -1071,7 +1071,7 @@ const FLAG_MEANINGS: Record<string, string> = {
     'Each frame with a moving pair also gets an outline plate, overlaps-f<NNNN>.png: every slot in a moving pair as its contour in its own ' +
     'colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the ' +
     "author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Not with --slot/--hide",
-  parallax: 'read one named slider dial through the core poser on 9 evenly spaced values: parallax.json plus setup/extreme/diff/affine-residual heat-map parallax.png; geometry only, no assertion or pass threshold. A separate dial render mode; takes no animation, fps, other diagnostics, sheet, subset, environment or viewport flags',
+  parallax: 'read one named slider dial through the core poser on 9 evenly spaced values: parallax.json plus setup/extreme/diff/affine-residual heat-map parallax.png; geometry only, no assertion or pass threshold. A separate dial render mode; takes no animation, fps, other diagnostics, sheet, subset, environment, preroll or viewport flags',
   'extremes-only': 'write only extremes.json and readable extremes.png per set, with the same posed grid and bytes as --extremes; no ordinary frame PNGs, contact.png or frames.json. Implies --extremes; takes no --sheet, --sheet-format, --page-edges, --geometry, --folds, --pass-through, --seam, --overlaps or --angle-range',
   extremes: 'also write extremes.json and a native six-panel extremes.png per set: setup, geometry-pair min/max and premultiplied RGBA diffs, with a legend. Per-channel extrema are recorded separately and valid channels survive geometry/image SKIPs; channel refusals are named separately. Still geometry reports SKIP; a reading, not a gate. Attachment identity/count changes record a named SKIP without changing render exit; supports --slot/--hide on both posers',
   seam:
@@ -1108,6 +1108,13 @@ const FLAG_MEANINGS: Record<string, string> = {
     'runtime\'s, wind [1, 0] and gravity [0, 1]. frames.json and geometry.json record it, and the framing reads it. A ' +
     'malformed file, a half no physics constraint answers, two steps on one frame and a step after every set\'s last frame ' +
     'are refused by name. An inspection of what the rig offers, not a scene',
+  preroll:
+    'walk each set this many whole loops on a looping track before the loop recorded, drawn by no frame, the physics carried ' +
+    'across every wrap as a player\'s looping track carries it — so a spring that converges is warm on the first frame. Frame i is the ' +
+    'pose at track time (n·count + i)/fps, filed under index i and time i/fps; on either poser. frames.json, geometry.json and ' +
+    'sheet-manifest.json record it, and the framing reads it. A value that is not a whole number of 1 or more, a walk past what a step ' +
+    'list holds, a skeleton with no animation or no physics constraint, a set of 0 frames, and --environment or --parallax beside it ' +
+    'are refused by name; check refuses such a frame set as a reference',
   poser:
     "`render`, `inspect` and `check`: which implementation poses the frames (on `check`, the candidate's) — `core` (rigc's own, reading the skeleton.model.json a " +
     'build writes beside the pair) or `spine` (spine-core). Default: `core` when that document and the atlas sit ' +
@@ -1300,6 +1307,7 @@ const FLAG_VALUES: Record<string, string> = {
   'texture-from': '<path>',
   poser: 'core|spine',
   environment: '<schedule.json>',
+  preroll: '<n>',
   'pass-through': '<cloth>:<leg>[,<cloth>:<leg>…]',
   seam: '<slot>:<slot>[,<slot>:<slot>…]',
   'angle-range': '<bone>:<relative-to>[,…]',
@@ -1768,6 +1776,7 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render --candidate <dir | skeleton.json> [--animation <name>] [--skin <name>] [--fps 12] [--max 256] [--geometry] [--folds] [--extremes | --extremes-only] [--poser core|spine] [--out render/]',
       'rigc render … --slot <name[,name…]> | --hide <name[,name…]>   (a subset of the slots, on the whole rig\'s grid)',
       'rigc render … --environment <schedule.json>   (the wind and gravity the physics answers, in time)',
+      'rigc render … --preroll <n>   (n whole loops walked on a looping track first, so the loop recorded has its physics warm)',
       'rigc render … --pass-through <cloth>:<leg>[,…]   (the frames where a cloth drawn over a leg passes through it)',
       'rigc render … --seam <slot>:<slot>[,…]   (joint gaps, visible ghosts and each named slot’s background exposure)',
       'rigc render … --parallax <dial>   (geometry reading on the named dial, model/core only)',
@@ -1776,7 +1785,7 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
       'rigc render … --sheet [--sheet-format json-hash] [--page-edges pot|free]   (deterministic sprite sheets + JSON hash table + sheet-manifest.json per set)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'parallax', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'parallax', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'poser', 'out'],
     overrides: {
       'page-edges': {
         meaning:

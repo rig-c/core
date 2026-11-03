@@ -118,6 +118,8 @@ export interface SheetManifest {
   slots?: string[];
   hidden?: string[];
   environment?: EnvironmentStep[];
+  /** The whole loops walked before the loop these frames record (`render --preroll`, issue #1684); absent without it. */
+  preroll?: number;
   pinned?: PinnedViewport;
   fps: number;
   duration: number;
@@ -182,6 +184,7 @@ export interface BuildSheetSetOptions {
   skin?: string;
   subset?: SlotSubset;
   environment?: EnvironmentStep[];
+  preroll?: number;
   pinned?: PinnedViewport;
   /** For negative-control testing in `selftest.ts` only: reverse the input order handed to `packAtlas`. */
   reversePackInputs?: boolean;
@@ -262,9 +265,9 @@ function sanitizeNamespaceSegment(segment: string): string {
 
 /**
  * Build the collision-free frame-key namespace `<rig>/<anim>[/<variant>]` for a
- * rendered set. Non-default skin, slot subset, or environment schedule are
- * encoded in `<variant>` in fixed order so multiple exports loaded into a shared
- * texture cache cannot collide on frame keys.
+ * rendered set. Non-default skin, slot subset, environment schedule or pre-roll
+ * are encoded in `<variant>` in fixed order so multiple exports loaded into a
+ * shared texture cache cannot collide on frame keys.
  */
 export function sheetNamespaceOf(opts: {
   rigName: string;
@@ -272,6 +275,7 @@ export function sheetNamespaceOf(opts: {
   skin?: string;
   subset?: SlotSubset;
   environment?: EnvironmentStep[];
+  preroll?: number;
 }): string {
   const rig = sanitizeNamespaceSegment(opts.rigName);
   const anim = sanitizeNamespaceSegment(opts.setName);
@@ -282,6 +286,7 @@ export function sheetNamespaceOf(opts: {
     const digest = createHash('sha256').update(JSON.stringify(opts.environment)).digest('hex').slice(0, 8);
     variants.push(`env=${digest}`);
   }
+  if (opts.preroll !== undefined) variants.push(`preroll=${opts.preroll}`);
   return variants.length === 0 ? `${rig}/${anim}` : `${rig}/${anim}/${variants.join('+')}`;
 }
 
@@ -715,6 +720,7 @@ export function buildSheetSet(opts: BuildSheetSetOptions): SheetSetPack {
     skin: opts.skin,
     subset: opts.subset,
     environment: opts.environment,
+    preroll: opts.preroll,
   });
 
   const padding = SHEET_PADDING;
@@ -868,6 +874,7 @@ export function buildSheetSet(opts: BuildSheetSetOptions): SheetSetPack {
         ? { slots: [...opts.subset.names] }
         : { hidden: [...opts.subset.names] }),
     ...(opts.environment === undefined ? {} : { environment: opts.environment }),
+    ...(opts.preroll === undefined ? {} : { preroll: opts.preroll }),
     ...(opts.pinned === undefined ? {} : { pinned: opts.pinned }),
     fps: opts.fps,
     duration,

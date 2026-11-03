@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.0](https://github.com/rig-c/core/compare/v3.1.1...v3.2.0) (2026-11-03)
+
+
+### Features
+
+* **render:** --preroll &lt;n&gt;, a looping idle recorded with its physics warm ([#1684](https://github.com/rig-c/core/issues/1684)) ([#1685](https://github.com/rig-c/core/issues/1685)) ([33a89ac](https://github.com/rig-c/core/commit/33a89ac760c99f8458b87a8ee7926c63e3988240))
+
 ## [3.1.1](https://github.com/rig-c/core/compare/v3.1.0...v3.1.1) (2026-11-03)
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.1.1](https://github.com/rig-c/core/compare/v3.1.0...v3.1.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **render:** take render_core's types from render_shared, and type-check the runtime-free entries from the install ([#1680](https://github.com/rig-c/core/issues/1680)) ([3853fd9](https://github.com/rig-c/core/commit/3853fd964cd95ea4f411b46061e47dd46f735687)), closes [#1679](https://github.com/rig-c/core/issues/1679)
+* **smoke:** read RELEASING.md's import-surface table in LF, so the Windows leg finds it ([#1682](https://github.com/rig-c/core/issues/1682)) ([50bd68c](https://github.com/rig-c/core/commit/50bd68cfb0e225bb7185e0abf765e8eeb2a53e01))
+
 ## [3.1.0](https://github.com/rig-c/core/compare/v3.0.1...v3.1.0) (2026-11-01)
 
 

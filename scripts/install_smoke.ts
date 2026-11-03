@@ -774,7 +774,8 @@ interface ImportSurfaceRow {
  * so the list of runtime-free entries is never copied by hand (issue #1679).
  */
 function readImportSurfaceTable(): ImportSurfaceRow[] {
-  const text = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8');
+  // A Windows checkout writes CRLF; the table is read in LF (issue #1680's windows leg).
+  const text = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8').replace(/\r\n/g, '\n');
   const section = /(?:^|\n)#### The import surface\n([\s\S]*?)(?=\n#{2,4} )/.exec(text)?.[1] ?? '';
   const table = /\|\s*entry\s*\|\s*named by\s*\|\s*needs installed beside the package\s*\|\n\|\s*---\s*\|\s*---\s*\|\s*---\s*\|\n((?:\|[^\n]+\n)+)/.exec(section)?.[1] ?? '';
   const rows: ImportSurfaceRow[] = [];

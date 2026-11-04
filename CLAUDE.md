@@ -333,6 +333,14 @@ session rotated — the reader rule above, measured on ourselves. So it is here.
 | `bun cli.ts bench 3 --candidate <dir>` | the ladder still reproduces its rung. `docs/LADDER.md` §*B1's proof* carries that proof beneath the two commands that produce it — and every figure on that page is one **named** candidate's, so compare against the run you passed and not against the first `bench` line the page shows |
 | `bun cli.ts check --candidate <dir> --frames <dir>` | the candidate still *looks* like the reference. The gate cannot see a wrong animation — it passed a build with every easing reversed — so a change to timelines, curves or the rasteriser is not verified until this has run |
 
+**A lane's acceptance verdict is PR CI, not a pool run.** CI runs the full selftest in
+parallel shards on every PR head, so a lane runs typecheck, lint and the `--only` suites its
+diff touches, then hands over. `verify:nova` runs the full selftest on the pool only when the
+issue names why: the change is about the run's own time or memory, or CI is unavailable. A
+re-run on the same head with the same command names what changed, and the same failure twice
+is a STOP. Running the same verdict twice was the measured largest cost in a sibling
+repository's lanes: 37 % of a day's pool time went to runs that ended red.
+
 Neither of the first two existed before 2026-08-22, and both found real defects on
 their first run — a `let` assigned inside a callback that made 30 later reads
 type-check against `never`, and a spread that quietly overwrote the file paths in

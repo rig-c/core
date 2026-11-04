@@ -1108,6 +1108,8 @@ const FLAG_MEANINGS: Record<string, string> = {
     'runtime\'s, wind [1, 0] and gravity [0, 1]. frames.json and geometry.json record it, and the framing reads it. A ' +
     'malformed file, a half no physics constraint answers, two steps on one frame and a step after every set\'s last frame ' +
     'are refused by name. An inspection of what the rig offers, not a scene',
+  physics: 'pose with physics on (default) or off. Off suppresses every physics constraint after timeline application on both posers. frames.json records physicsMode off and check refuses that reference',
+  'boundary-from': 'read visible whole-figure pixel-boundary displacement against an earlier render on the identical viewport and frame grid. Writes boundary.json, no threshold or pass verdict',
   preroll:
     'walk each set this many whole loops on a looping track before the loop recorded, drawn by no frame, the physics carried ' +
     'across every wrap as a player\'s looping track carries it — so a spring that converges is warm on the first frame. Frame i is the ' +
@@ -1307,6 +1309,8 @@ const FLAG_VALUES: Record<string, string> = {
   'texture-from': '<path>',
   poser: 'core|spine',
   environment: '<schedule.json>',
+  physics: '<on|off>',
+  'boundary-from': '<dir>',
   preroll: '<n>',
   'pass-through': '<cloth>:<leg>[,<cloth>:<leg>…]',
   seam: '<slot>:<slot>[,<slot>:<slot>…]',
@@ -1785,7 +1789,7 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
       'rigc render … --sheet [--sheet-format json-hash] [--page-edges pot|free]   (deterministic sprite sheets + JSON hash table + sheet-manifest.json per set)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'parallax', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'parallax', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'physics', 'boundary-from', 'poser', 'out'],
     overrides: {
       'page-edges': {
         meaning:

@@ -243,6 +243,8 @@ export interface FrameSet {
 }
 
 export interface FramesSidecar {
+  /** Absent means on, including frame sets written before this field existed. */
+  physicsMode?: 'off';
   spec: string;
   example?: string;
   rung?: string;
@@ -427,6 +429,8 @@ export interface UvWindow {
 
 /** Options for `piecesOf` and the samplers that call it. */
 export interface PoseOptions {
+  /** Suppress every physics constraint after animation application. */
+  physicsMode?: 'off';
   /** Also read local bone/deform channels and mapped slider times, and retain original attachment source identity outside JSON, for --extremes. */
   channels?: boolean;
   /** Also record each piece's original-art UVs — see `PieceTexture`. */
@@ -1184,7 +1188,7 @@ export interface Poser {
   /** `slotSubsetOf` against this skeleton posed under `skin` — refused by `SlotSubsetError`. */
   subset(opts: Pick<PoseOptions, 'slots' | 'hidden'> | undefined, skin: string | undefined): SlotSubset | undefined;
   /** The setup pose under `skin` (absent: no skin set at all). */
-  setup(skin: string | undefined, channels?: boolean): Posed;
+  setup(skin: string | undefined, channels?: boolean, physicsMode?: 'off'): Posed;
   /**
    * Animation `name` under `skin`, not looping: `visit(i, posed)` for every
    * `i` from 0 to `count`, the pose at `i/fps`. The caller has checked `name`.
@@ -1205,7 +1209,7 @@ export interface Poser {
    * follows `times` (`prerollTimes` says why the two part). Absent, every
    * step moves the physics clock by its own length, as it always did.
    */
-  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean, times?: readonly number[], loop?: boolean, clockSteps?: readonly number[]): void;
+  animation(name: string, skin: string | undefined, fps: number, count: number, visit: (index: number, posed: Posed) => void, environment?: (index: number) => EnvironmentChange | undefined, channels?: boolean, times?: readonly number[], loop?: boolean, clockSteps?: readonly number[], physicsMode?: 'off'): void;
   /** The rest table for the (slot, attachment) pairs `shown` holds — see `AttachmentRest`. */
   rest(skin: string | undefined, shown: readonly AttachmentPose[][]): AttachmentRest[];
 }
@@ -1290,14 +1294,15 @@ export function sampleAnimation(source: PoseSource, name: string, fps: number, o
     const recorded = (i: number, posed: Posed): void => {
       if (i >= first) frames.push(frameOf(i - first, (i - first) * step, posed, draw(), opts));
     };
-    poser.animation(name, opts?.skin, fps, times.length - 1, recorded, undefined, opts?.channels === true ? true : undefined, times, true, clock);
+    poser.animation(name, opts?.skin, fps, times.length - 1, recorded, undefined, opts?.channels === true ? true : undefined, times, true, clock, opts?.physicsMode);
     return frames;
   }
   const visit = (i: number, posed: Posed): void => {
     frames.push(frameOf(i, i * step, posed, draw(), opts));
   };
   // Without an environment the call is the one it always was, so a poser that takes none is asked nothing new.
-  if (opts?.channels) poser.animation(name, opts.skin, fps, count, visit, opts.environment === undefined ? undefined : environmentAt(opts.environment, fps), true);
+  if (opts?.physicsMode === 'off') poser.animation(name, opts.skin, fps, count, visit, opts.environment === undefined ? undefined : environmentAt(opts.environment, fps), opts.channels, undefined, undefined, undefined, 'off');
+  else if (opts?.channels) poser.animation(name, opts.skin, fps, count, visit, opts.environment === undefined ? undefined : environmentAt(opts.environment, fps), true);
   else if (opts?.environment === undefined) poser.animation(name, opts?.skin, fps, count, visit);
   else poser.animation(name, opts.skin, fps, count, visit, environmentAt(opts.environment, fps));
   return frames;
@@ -1413,7 +1418,7 @@ export function prerollTimes(duration: number, fps: number, preroll: number): { 
  */
 export function sampleSetupPose(source: PoseSource, opts?: PoseOptions): Frame[] {
   const poser = poserOf(source);
-  const posed = opts?.channels ? poser.setup(opts.skin, true) : poser.setup(opts?.skin);
+  const posed = opts?.physicsMode === 'off' ? poser.setup(opts.skin, opts.channels, 'off') : opts?.channels ? poser.setup(opts.skin, true) : poser.setup(opts?.skin);
   return [frameOf(0, 0, posed, drawResolver(poser, opts)(), opts)];
 }
 
@@ -1737,6 +1742,7 @@ export interface GeometryFile {
   /** The setup pose, sampled the way `sampleSetupPose` samples it. */
   setup: Omit<GeometryFrame, 'index' | 'time'>;
   frames: GeometryFrame[];
+  physicsMode?: 'off';
 }
 
 /**
@@ -1784,6 +1790,7 @@ export function geometryFileOf(
   skin: string | undefined,
   environment?: EnvironmentStep[],
   preroll?: number,
+  physicsMode?: 'off',
 ): GeometryFile {
   const geometryFrame = (frame: Frame, where: string): Omit<GeometryFrame, 'index' | 'time'> => {
     if (frame.bones === undefined || frame.attachments === undefined) {
@@ -1800,7 +1807,7 @@ export function geometryFileOf(
     ...geometryFrame(frame, `frame ${frame.index}`),
   }));
   const poser = poserOf(source);
-  const setupFrame = sampleSetupPose(poser, { ...(skin === undefined ? {} : { skin }), bones: true, geometry: true })[0];
+  const setupFrame = sampleSetupPose(poser, { ...(skin === undefined ? {} : { skin }), bones: true, geometry: true, ...(physicsMode === undefined ? {} : { physicsMode }) })[0];
   const setup = geometryFrame(setupFrame, 'the setup pose');
   const file: GeometryFile = {
     spec: GEOMETRY_SPEC,
@@ -1809,6 +1816,7 @@ export function geometryFileOf(
     ...(skin === undefined ? {} : { skin }),
     ...(environment === undefined ? {} : { environment }),
     ...(preroll === undefined ? {} : { preroll }),
+    ...(physicsMode === undefined ? {} : { physicsMode }),
     fps,
     viewport: sidecarViewport(viewport),
     bones: poser.bones.map(({ name, parent }) => ({ name, parent })),

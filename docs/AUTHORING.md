@@ -130,6 +130,7 @@ commands take it and what its default is.
 | `split --rig … --motion … --slot <name> --out <dir>` | the answer to a mesh refused because its triangles are **several pieces that share no vertex** — two legs after the triangles bridging them were deleted. It reads the two specs and writes them back into an absent or empty `--out` with one mesh per piece: piece 1 stays in the slot, piece k gets a new slot `<slot>_<k>` after it, each with the original's uvs and weights unchanged, its triangles renumbered outline first where the hull rule needs it, and every deform key re-sliced to the new indices — plus `split.json`, where every original vertex and triangle went. One piece is said so and nothing is written; what it cannot carry is refused by name ([AUTHORING §3.4.11](../docs/AUTHORING.md)) <a id="cmd-split"></a> |
 | `explain --rig … --motion …` | the compiled rig as a table — every bone with its resolved parent, the slots in draw order, every timeline key by key. Writes nothing. What to reach for when a rig compiles and still looks wrong <a id="cmd-explain"></a> |
 | `render --candidate <dir>` | PNG frames plus a contact sheet, in `render/`, one directory per set: `<anim>@<fps>fps/` rather than `<anim>/` at any rate but the default — `--fps 24` writes `<anim>@24fps/`, and the default 12 writes `<anim>/`. `--hide <slot,…>` or `--slot <slot,…>` draws part of the rig on the **same grid** as the whole, so the two frames overlay and the difference is the part; `frames.json` records the subset and `check` refuses such a set as a reference. `--geometry` adds a `geometry.json` per set: every frame's bone world transforms and skinned attachment vertices, with the rest geometry, on the frames' own grid. `--folds` adds a `folds.json` per set and prints one line per mesh with a triangle turned over against the setup pose: the frames, the worst frame's count and which triangles, their world box and their setup-pose area. `--pass-through <cloth>:<leg>` adds a `pass-through.json` per set and prints the frames where a cloth drawn over a leg has its side inside the leg's drawn outline, with the depth and the world box — a reading, not a gate. `--seam <slot>:<slot>` adds a `seam.json` per set and prints, per pair, the frames where two slots that meet open background inside the joint (a gap) or show the overlap band of one past the other (a ghost), with the worst frame's cell count and world box; `ghostA` and `ghostB` partition the same ghost by which named pair member drew it, each with its own frames, spans and worst; `gapOpen` and `gapCovered` partition `gap` by zero versus positive rendered alpha from the whole skeleton, including faint and clipped drawings; ghost counts only visible contributions after draw order; `exposureA`/`exposureB` report each named slot’s whole-drawing background exposure even without a band ([AUTHORING §8.8](../docs/AUTHORING.md#88-where-two-slots-stop-meeting--render---seam)) — a reading, not a gate; the exit status never moves. `--overlaps` adds an `overlaps.json` per set and prints one `OVERLAP "<under>" under "<over>"` line per pair of slots where the one drawn later covers the earlier one and the motion moves it — the frames, and the most pixels covered and the frame of them — with an outline plate per covered frame; the render reports what was drawn, and the draw-order key is the author's remedy — a reading, not a gate. `--extremes` adds `extremes.json` and a native six-panel `extremes.png` (setup, geometry-pair min/max and three premultiplied RGBA diffs with a legend), plus one `EXTREMES` line per set. Per-channel minima/maxima and the farthest original-vertex geometry pair are distinct readings; valid channel extrema survive a geometry/image SKIP, with channel refusals reported separately; still or uncomparable geometry reports a named SKIP without changing render exit status. `--extremes-only` writes the same `extremes.json` and readable `extremes.png` bytes while skipping ordinary frame rasterization/encoding, `contact.png` and `frames.json`; it implies `--extremes` and takes no other diagnostic or sheet output flags. Look at min, max and diff before a person does ([AUTHORING §8.11](../docs/AUTHORING.md#811-min-max-and-diff-before-a-person-looks--render---extremes)). `--angle-range <bone>:<relative-to>` prints how far one bone turns against another over each set: the lowest and highest angle and the frames they fall on — a reading, not a gate. `--viewport <x,y,w,h>` or `--viewport-from <frames.json>` draws over a given box instead of a fitted one, so two builds land on one pixel grid; a slot that reaches past it is named by set and frame, and `frames.json` records it. `--environment <schedule.json>` draws the rig under the wind and gravity its physics answers, in time — the same frames on the core and on spine-core; an inspection of the response the rig states, not a scene. `--preroll <n>` walks each set `n` whole loops on a looping track before the loop it records, so a looping idle is drawn with its physics already warm, as a player's looping track carries it ([AUTHORING §8.13](../docs/AUTHORING.md#813-a-loop-with-its-physics-warm--render---preroll)). `--sheet [--sheet-format json-hash] [--page-edges pot\|free]` also packs each set's straight-alpha transparent frames into `sheet.png` + `sheet.json` (TexturePacker JSON Hash with a shared world-origin `anchor` and `2`-px clamped edge extrusion, verified through `pixi.js@8.22.0` and `phaser@3.90.0` by `tools/sheet_readers.ts`) and `sheet-manifest.json` (`rigc-sheet/1`), leaving diagnostic `f####.png` and `contact.png` unchanged ([AUTHORING §8.10](../docs/AUTHORING.md#810-sprite-sheets-from-a-render--render---sheet)) — a self-contained sprite object per animation set; when animations play and how a scene is composed remains the consumer's <a id="cmd-render"></a> |
+| `render … --physics off --boundary-from <dir>` | Suppress every physics constraint on both posers and read visible boundary displacement from a second render on the same viewport and frame grid. `frames.json` records off, `check` refuses it as a reference, and `boundary.json` carries per-frame distances or named SKIPs. See §8.14. |
 | `preview --candidate <dir>` | one self-contained `.html` that plays it, headed by the line `validate <dir>` prints for it and the rigc version — a refused candidate is still previewed, and its header says so in the gate's words. Repeat `--candidate` for one page with a pane per candidate, in the order given; a green `build` ends by naming this command for its own `--out` <a id="cmd-preview"></a> |
 | `vote --candidate a --candidate b` | one `.html` that asks a human which; `vote --record <file>` checks the answer into `votes.jsonl` <a id="cmd-vote"></a> |
 | `pose --images <dir> --frame <png>` | reads part placements **out of** a picture <a id="cmd-pose"></a> |
@@ -9949,6 +9950,52 @@ could put it mid-loop. The mesh comparison's `warmupSteps` (MESH_REDUCTION, P10)
 still refused above 0, would reach the same looping walk; counted in steps rather
 than loops, it would move every compared frame off its `FrameRef` time unless the
 steps were whole loops.
+
+### 8.14 Physics-off renders and boundary comparisons
+
+`rigc render --candidate <dir> --physics off --out <off>` suppresses every physics
+constraint on both posers, after the animation timelines apply. Every other
+constraint and the animation clock keep their ordinary walk. `--physics on` is the
+default. Any other value is refused by name. An omitted mode retains the existing
+render bytes. Off records `physicsMode: "off"` in `frames.json`, geometry and sheet
+metadata, and adds a `physics=off` variant to sheet frame keys. A reference
+without the field means on. `check` refuses an off reference because its candidate
+is posed with physics on.
+
+To compare two whole-figure renders, first render the reference, then render the
+second with `--viewport-from <reference-dir> --boundary-from <reference-dir>`.
+For example, render the public gallery physics recipe normally, then render it
+with those two flags and `--physics off`. Use the same animation selection, skin,
+fps and pre-roll on both runs. The shared viewport fixes the world box, scale and
+pixel dimensions. Check the viewport's recorded `pinned.outside` when interpreting
+an outline that reaches the canvas edge.
+
+`boundary.json` (`rigc-boundary-difference/1`) records each matching frame's maximum
+symmetric nearest-boundary distance in **L-infinity pixels**, and the maximum over
+the frames read. A boundary pixel is visible foreground with at least one
+four-neighbour background pixel, or a foreground pixel on the canvas edge. Holes
+contribute boundaries too. Foreground means the rendered RGBA differs from the
+recorded background exactly. Background-coloured art has no observable coverage
+in this reading, and anything outside the viewport is absent. This is a pixel
+reading with no registration, threshold or pass verdict.
+
+An identical on/on pair reads zero. An on/off pair measures the visible outline
+change on the chosen grid. Empty boundaries report `SKIP`, never zero. A frame
+schedule, viewport, background, skin, set roster or file mismatch also reports
+`SKIP` with a reason. Missing or unreadable frames remain unavailable. Mixed
+readable and empty frames report `PARTIAL` with the per-frame reasons. Both sides
+must record the same slot selection. `scope` records that selection explicitly. A backdrop is part of the visible outline when it is drawn, so a
+full-canvas opaque backdrop can make the distance zero even while the character
+moves. For `gallery/look`, use `--hide plate` on both renders to read the character
+without its backdrop. Every other drawn slot still contributes to that outline.
+`--extremes-only` takes no `--boundary-from`, and the reference directory must differ
+from `--out`.
+
+`--extremes` chooses a pair within one animation and reads corresponding authored
+vertices and local channels. Subtracting two extreme readings does not compare
+the same frames' visible outlines. `diff` compares skeleton data, and `check`
+reposes and registers a candidate against reference pictures. Neither reads two
+already-rendered whole-figure boundaries on an unchanged grid.
 
 ## 9. Checking against the frames — `rigc check`
 

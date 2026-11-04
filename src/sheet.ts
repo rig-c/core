@@ -120,6 +120,7 @@ export interface SheetManifest {
   environment?: EnvironmentStep[];
   /** The whole loops walked before the loop these frames record (`render --preroll`, issue #1684); absent without it. */
   preroll?: number;
+  physicsMode?: 'off';
   pinned?: PinnedViewport;
   fps: number;
   duration: number;
@@ -185,6 +186,7 @@ export interface BuildSheetSetOptions {
   subset?: SlotSubset;
   environment?: EnvironmentStep[];
   preroll?: number;
+  physicsMode?: 'off';
   pinned?: PinnedViewport;
   /** For negative-control testing in `selftest.ts` only: reverse the input order handed to `packAtlas`. */
   reversePackInputs?: boolean;
@@ -276,6 +278,7 @@ export function sheetNamespaceOf(opts: {
   subset?: SlotSubset;
   environment?: EnvironmentStep[];
   preroll?: number;
+  physicsMode?: 'off';
 }): string {
   const rig = sanitizeNamespaceSegment(opts.rigName);
   const anim = sanitizeNamespaceSegment(opts.setName);
@@ -287,6 +290,7 @@ export function sheetNamespaceOf(opts: {
     variants.push(`env=${digest}`);
   }
   if (opts.preroll !== undefined) variants.push(`preroll=${opts.preroll}`);
+  if (opts.physicsMode !== undefined) variants.push(`physics=${opts.physicsMode}`);
   return variants.length === 0 ? `${rig}/${anim}` : `${rig}/${anim}/${variants.join('+')}`;
 }
 
@@ -721,6 +725,7 @@ export function buildSheetSet(opts: BuildSheetSetOptions): SheetSetPack {
     subset: opts.subset,
     environment: opts.environment,
     preroll: opts.preroll,
+    physicsMode: opts.physicsMode,
   });
 
   const padding = SHEET_PADDING;
@@ -875,6 +880,7 @@ export function buildSheetSet(opts: BuildSheetSetOptions): SheetSetPack {
         : { hidden: [...opts.subset.names] }),
     ...(opts.environment === undefined ? {} : { environment: opts.environment }),
     ...(opts.preroll === undefined ? {} : { preroll: opts.preroll }),
+    ...(opts.physicsMode === undefined ? {} : { physicsMode: opts.physicsMode }),
     ...(opts.pinned === undefined ? {} : { pinned: opts.pinned }),
     fps: opts.fps,
     duration,

@@ -804,14 +804,14 @@ export function corePoser(
       const result = poseRawDial(input.doc, override, name, { through });
       return { posed: corePosed(input, result.pose, through, []), read: result.read, applied: result.applied };
     },
-    setup: (skin, channels) => {
+    setup: (skin, channels, physicsMode) => {
       const input = inputOf(skin);
       let values: ChannelValue[] | undefined;
       const observe = channels ? { readLocals: (bones: readonly import('./model.ts').ModelBone[], sliders: readonly import('./core/constraints_slider.ts').SliderApplication[]) => { values = localChannels(bones, sliders); } } : {};
-      const pose = poseRawSetup(input.doc, { through, ...observe });
+      const pose = poseRawSetup(input.doc, { through, ...observe, ...(physicsMode === 'off' ? { physicsStep: () => false } : {}) });
       return corePosed(input, pose, through, [], values);
     },
-    animation: (name, skin, fps, count, visit, environment, channels, times, loop, clockSteps) => {
+    animation: (name, skin, fps, count, visit, environment, channels, times, loop, clockSteps, physicsMode) => {
       let values: ChannelValue[] | undefined;
       const observe = channels ? { readLocals: (bones: readonly import('./model.ts').ModelBone[], sliders: readonly import('./core/constraints_slider.ts').SliderApplication[]) => { values = localChannels(bones, sliders); } } : {};
       const input = inputOf(skin);
@@ -827,6 +827,7 @@ export function corePoser(
       const steppedNow = new Set<string>();
       const inner = plants.physicsStep ?? stepPhysics;
       const physicsStep: PhysicsStepper = (r, w, length, ctx) => {
+        if (physicsMode === 'off') return false;
         const moved = inner(r, w, length, ctx);
         if (ctx.time > 0 && ctx.states.get(r.name)?.lastTime === ctx.time) steppedNow.add(r.name);
         return moved;

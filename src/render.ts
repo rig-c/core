@@ -502,8 +502,8 @@ export function spinePoser(data: SkeletonData): Poser {
     bones: data.bones.map((bone) => ({ name: bone.name, parent: bone.parent?.name ?? null })),
     slots: data.slots.map((slot) => ({ name: slot.name, bone: slot.boneData.name })),
     subset: (opts, skin) => slotSubsetOf(data, opts, skin),
-    setup: (skin) => spinePosed(setupPosed(data, skin)),
-    animation: (name, skin, fps, count, visit, environment, _channels, times, loop, clockSteps) => {
+    setup: (skin, _channels, physicsMode) => spinePosed(setupPosed(data, skin, physicsMode)),
+    animation: (name, skin, fps, count, visit, environment, _channels, times, loop, clockSteps, physicsMode) => {
       const skeleton = skeletonUnderSkin(data, skin);
       const state = new AnimationState(new AnimationStateData(data));
       // Not looping: the last frame sits at the animation's duration, and a looping
@@ -524,12 +524,12 @@ export function spinePoser(data: SkeletonData): Poser {
           setSkeletonEnvironment(skeleton, environment?.(i));
           // `clockSteps` (issue #1687, `render --preroll`): what the step moves the physics clock by, where that is not its own length.
           skeleton.update(times === undefined ? clock : physicsClockStep(clockSteps?.[i - 1] ?? delta));
-          skeleton.updateWorldTransform(Physics.update);
+          skeleton.updateWorldTransform(physicsMode === 'off' ? Physics.none : Physics.update);
         } else {
           state.apply(skeleton);
           setSkeletonEnvironment(skeleton, environment?.(i));
           skeleton.update(0);
-          skeleton.updateWorldTransform(Physics.reset);
+          skeleton.updateWorldTransform(physicsMode === 'off' ? Physics.none : Physics.reset);
         }
         visit(i, posed);
       }
@@ -592,11 +592,11 @@ function steppedPhysicsOf(skeleton: Skeleton): string[] {
  * `sampleSetupPose` and the geometry export's `rest` table both pose from, so
  * the two cannot come to describe different rest poses.
  */
-function setupPosed(data: SkeletonData, skin: string | undefined): Skeleton {
+function setupPosed(data: SkeletonData, skin: string | undefined, physicsMode?: 'off'): Skeleton {
   const skeleton = skeletonUnderSkin(data, skin);
   skeleton.setupPose();
   skeleton.update(0);
-  skeleton.updateWorldTransform(Physics.reset);
+  skeleton.updateWorldTransform(physicsMode === 'off' ? Physics.none : Physics.reset);
   return skeleton;
 }
 

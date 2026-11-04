@@ -1,5 +1,5 @@
 /** Closed physics-off and same-grid boundary controls for issue #1690. */
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -110,6 +110,12 @@ export function runPhysicsOffSuite(report?: Say): number {
     say('PO08_PLANTED_BOUNDARY_SHIFT', shifted.status === 'READ' && shifted.maxPixels === 3, JSON.stringify(shifted));
     const empty = boundaryDistance(new Plate(12, 12), plate(7), [0, 0, 0, 0]);
     say('PO09_EMPTY_IS_SKIP', empty.status === 'SKIP', JSON.stringify(empty));
+    const oldBoundary = readFileSync(join(off, 'boundary.json'), 'utf8');
+    const reuse = render(off, []);
+    say('PO10_REUSED_OUTPUT_REMOVES_OLD_BOUNDARY', reuse.status === 0 && !existsSync(join(off, 'boundary.json')), `plain render exit ${reuse.status}, old boundary present ${existsSync(join(off, 'boundary.json'))}`);
+    writeFileSync(join(off, 'boundary.json'), oldBoundary);
+    const only = cli(['render', '--candidate', out, '--out', off, '--extremes-only']);
+    say('PO11_EXTREMES_ONLY_REMOVES_OLD_BOUNDARY', only.status === 0 && !existsSync(join(off, 'boundary.json')), `extremes-only exit ${only.status}, old boundary present ${existsSync(join(off, 'boundary.json'))}`);
   } catch (error) { say('PO00_MEASUREMENT_AVAILABLE', false, error instanceof Error ? error.stack ?? error.message : String(error)); }
   finally { rmSync(work, { recursive: true, force: true }); }
   return bad;

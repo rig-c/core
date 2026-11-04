@@ -1200,6 +1200,8 @@ export function cmdRender(flags: Record<string, string>): void {
   }
 
   mkdirSync(outRoot, { recursive: true });
+  // A prior observation cannot describe the new frames, including an observation-only render.
+  rmSync(join(outRoot, 'boundary.json'), { force: true });
   if (extremesOnly) {
     // Reuse the same posed grid and plates; selecting extremes needs no ordinary pixels.
     // Clear only the selected sets, just as the ordinary render does. No frames.json

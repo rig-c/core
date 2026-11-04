@@ -9989,7 +9989,8 @@ full-canvas opaque backdrop can make the distance zero even while the character
 moves. For `gallery/look`, use `--hide plate` on both renders to read the character
 without its backdrop. Every other drawn slot still contributes to that outline.
 `--extremes-only` takes no `--boundary-from`, and the reference directory must differ
-from `--out`.
+from `--out`. Reusing an output directory clears its previous `boundary.json`
+before writing the new render, including an `--extremes-only` render.
 
 `--extremes` chooses a pair within one animation and reads corresponding authored
 vertices and local channels. Subtracting two extreme readings does not compare

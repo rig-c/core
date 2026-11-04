@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/rig-c/core/compare/v3.2.1...v3.3.0) (2026-11-04)
+
+
+### Features
+
+* **render:** suppress physics and compare visible boundaries ([#1691](https://github.com/rig-c/core/issues/1691)) ([a099b71](https://github.com/rig-c/core/commit/a099b71b2ab2dcc1ccde40f8f3826016ea3bbf7b))
+
 ## [3.2.1](https://github.com/rig-c/core/compare/v3.2.0...v3.2.1) (2026-11-03)
 
 

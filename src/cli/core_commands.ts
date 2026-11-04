@@ -1,3 +1,4 @@
+import { boundaryComparison } from '../boundary.ts';
 import { sampleParallax, parallaxPlate } from '../parallax_render.ts';
 import { textureScaleReading, textureScaleLines, TEXTURE_SCALE_FPS } from '../texture_scale.ts';
 import { extremesOf, extremesText, extremesPlate, extremesLine, extremesRefusal } from '../extremes.ts';
@@ -723,6 +724,8 @@ export function cmdRender(flags: Record<string, string>): void {
   // The pre-roll (issue #1684), read and refused as early, and refused beside a schedule: under a pre-roll a schedule's
   // `t` could be read on the recording's clock or on the walk's, the two give different physics, and nothing settles it.
   const preroll = readPrerollFlag(flags);
+  if (flags.physics !== undefined && flags.physics !== 'on' && flags.physics !== 'off') throw new UsageError(`--physics ${JSON.stringify(flags.physics)}: required on or off`);
+  const physicsMode = flags.physics === 'off' ? 'off' as const : undefined;
   if (preroll !== undefined && environment !== undefined) {
     throw new UsageError(
       `--preroll takes no --environment: a schedule's t could be read from the first frame recorded or from the first loop walked, ` +
@@ -734,7 +737,7 @@ export function cmdRender(flags: Record<string, string>): void {
   const given = readGivenViewport(flags);
   const extremesOnly = flags['extremes-only'] !== undefined;
   if (extremesOnly) {
-    for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range']) {
+    for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range', 'boundary-from']) {
       if (flags[flag] !== undefined) {
         throw new UsageError(`--extremes-only takes no --${flag}: it writes only extremes.json and, when readable, extremes.png. Drop --${flag}, or use --extremes for ordinary frames and additional outputs`);
       }
@@ -753,6 +756,7 @@ export function cmdRender(flags: Record<string, string>): void {
   const sheetFormat = wantsSheet ? readSheetFormat(flags) : undefined;
   const sheetPageEdges = wantsSheet ? readPageEdges(flags) : undefined;
   const outRoot = resolve(flags.out ?? 'render');
+  if (flags['boundary-from'] !== undefined && realpathAhead(flags['boundary-from']) === realpathAhead(outRoot)) throw new UsageError('--boundary-from must name an earlier render directory different from --out');
   const geometry = flags.geometry !== undefined;
   const extremes = extremesOnly || flags.extremes !== undefined;
   // The fold reading (issue #1383) is its own flag rather than a part of --geometry, so a caller that asked for
@@ -850,7 +854,7 @@ export function cmdRender(flags: Record<string, string>): void {
     posersAsked(flags),
   );
   if (flags.parallax !== undefined) {
-    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'viewport', 'viewport-from']) {
+    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'physics', 'boundary-from', 'viewport', 'viewport-from']) {
       if (flags[flag] !== undefined) throw new UsageError(`--parallax takes no --${flag}: it samples one named dial on its own 9-value grid; drop --${flag} or run ordinary render separately`);
     }
     if (flags.poser !== undefined && flags.poser !== 'core') throw new UsageError('--parallax requires --poser core: it reads only a rigc compiled model');
@@ -898,13 +902,14 @@ export function cmdRender(flags: Record<string, string>): void {
   // what the frames under it draw.
   // The pre-roll rides on it for the environment's reason (issue #1684): it changes the pose, so the framing reads it.
   const pose =
-    skin === undefined && subset === undefined && environment === undefined && preroll === undefined
+    skin === undefined && subset === undefined && environment === undefined && preroll === undefined && physicsMode === undefined
       ? undefined
       : {
           ...(skin === undefined ? {} : { skin }),
           ...subsetFields(subset),
           ...(environment === undefined ? {} : { environment: environment.steps }),
           ...(preroll === undefined ? {} : { preroll }),
+          ...(physicsMode === undefined ? {} : { physicsMode }),
         };
   if (skin !== undefined) console.log(`  ..    skin     ${skin}`);
   if (subset !== undefined) console.log(`  ..    ${subset.mode.padEnd(8)} ${subset.names.join(', ')}`);
@@ -1019,7 +1024,7 @@ export function cmdRender(flags: Record<string, string>): void {
     if (geometry) {
       for (const [name, frames] of sampled) {
         const animation = name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name;
-        geometryTexts.set(name, geometryText(geometryFileOf(poser, animation, fps, frames, viewport, skin, environment?.steps, preroll)));
+        geometryTexts.set(name, geometryText(geometryFileOf(poser, animation, fps, frames, viewport, skin, environment?.steps, preroll, physicsMode)));
       }
     }
     // The fold reading, off the very attachments the frames were drawn from, against the rest table the geometry
@@ -1151,6 +1156,7 @@ export function cmdRender(flags: Record<string, string>): void {
               subset,
               environment: environment?.steps,
               preroll,
+              physicsMode,
               pinned,
             }),
           );
@@ -1194,6 +1200,8 @@ export function cmdRender(flags: Record<string, string>): void {
   }
 
   mkdirSync(outRoot, { recursive: true });
+  // A prior observation cannot describe the new frames, including an observation-only render.
+  rmSync(join(outRoot, 'boundary.json'), { force: true });
   if (extremesOnly) {
     // Reuse the same posed grid and plates; selecting extremes needs no ordinary pixels.
     // Clear only the selected sets, just as the ordinary render does. No frames.json
@@ -1289,7 +1297,7 @@ export function cmdRender(flags: Record<string, string>): void {
         : ` + ${sheetPack.pages.map((p) => `${p.image} + ${p.table}`).join(' + ')} + ${SHEET_MANIFEST_FILE} (${sheetPack.pages.length} page(s), ${sheetPack.pageEdges})`;
     const extras = `${sheet ? ` + ${SHEET_FILE}` : ''}${sheetNote}${geometryOut === undefined ? '' : ` + ${GEOMETRY_FILE}`}${foldNote}${passNote}${seamNote}${overlapNote}`;
     console.log(`  ..    ${name.padEnd(16)} ${frames.length} frame(s), ${how}${extras} -> ${dir}`);
-    if (physics !== undefined) console.log(`  ..    ${physicsLine(physics.stepped, physicsDeclared, fps, frames.length)}`);
+    if (physics !== undefined) console.log(`  ..    ${physicsLine(physics.stepped, physicsDeclared, fps, frames.length, physicsMode)}`);
     for (const mesh of foldReading?.meshes ?? []) {
       const key = `${mesh.slot}\u0000${mesh.attachment}`;
       const fault = faultsSaid.has(key) ? null : setupFaultLine(mesh);
@@ -1330,6 +1338,7 @@ export function cmdRender(flags: Record<string, string>): void {
     ...(environment === undefined ? {} : { environment: environment.steps }),
     // Written only when a pre-roll was asked for (issue #1684), for the same reason.
     ...(preroll === undefined ? {} : { preroll }),
+    ...(physicsMode === undefined ? {} : { physicsMode }),
     // Written only when the box was given (issue #1414): a fitted render says nothing and stays the bytes it was.
     ...(given === undefined ? {} : { pinned: pinnedRecord(given.by, outside) }),
     background: BACKGROUND,
@@ -1340,6 +1349,13 @@ export function cmdRender(flags: Record<string, string>): void {
   };
   writeFileSync(join(outRoot, FRAMES_SIDECAR), `${JSON.stringify(sidecar, null, 2)}\n`);
   console.log(`rigc: wrote ${join(outRoot, FRAMES_SIDECAR)}`);
+  if (flags['boundary-from'] !== undefined) {
+    const reading = boundaryComparison(resolve(flags['boundary-from']), outRoot, sidecar);
+    writeFileSync(join(outRoot, 'boundary.json'), `${JSON.stringify(reading, null, 2)}\n`);
+    const detail = 'reason' in reading ? reading.reason : `max ${String(reading.maxPixels)} L-infinity px over ${reading.frames.length} frame(s)`;
+    console.log(`  ..    boundary ${reading.status}: ${detail}`);
+    console.log(`rigc: wrote ${join(outRoot, 'boundary.json')}`);
+  }
 }
 
 /**
@@ -1371,11 +1387,11 @@ export function physicsSteppedOf(frames: readonly Frame[], fps: number): { stepp
  * `render`'s `physics:` line for one set (issue #1467): how many constraints were stepped at the set's rate, and — when
  * fewer than the rig declares — the ones that took no step, by name, with why a constraint takes none.
  */
-export function physicsLine(stepped: readonly string[], declared: readonly string[], fps: number, frames: number): string {
+export function physicsLine(stepped: readonly string[], declared: readonly string[], fps: number, frames: number, physicsMode?: 'off'): string {
   const head = `physics: ${stepped.length} constraint(s) stepped at ${fps} fps`;
   const idle = declared.filter((name) => !stepped.includes(name));
   if (idle.length === 0) return head;
-  const why = frames === 1 ? 'a single pose takes no step' : 'inactive, or a mix of 0, on every frame';
+  const why = physicsMode === 'off' ? '--physics off suppresses every physics constraint' : frames === 1 ? 'a single pose takes no step' : 'inactive, or a mix of 0, on every frame';
   return `${head} — ${idle.length} of the ${declared.length} declared took none: ${idle.map((n) => JSON.stringify(n)).join(', ')} (${why})`;
 }
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runPhysicsOffSuite } from './selftest_physics_off.ts';
 import { runParallaxSuite } from './selftest_parallax.ts';
 import * as poseSearch from './src/pose.ts';
 import { runExtremesSuite } from './selftest_extremes.ts';
@@ -149516,6 +149517,7 @@ function main(): void {
   tally.of('loop-seam', runLoopSeamSuite);
   tally.of('render-environment', runRenderEnvironmentSuite);
   tally.of('render-preroll', runRenderPrerollSuite);
+  tally.of('render-physics-off', () => runPhysicsOffSuite(reportCase));
   tally.of('render-physics', runRenderPhysicsSuite);
   tally.of('sheet', runSheetSuite);
   tally.of('run-tally', () => runRunTallySuite(tally), { live: true, whole: true });

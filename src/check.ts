@@ -1298,6 +1298,9 @@ export function checkAgainstFrames(options: CheckOptions): CheckReport {
         'difference between two worlds. Render the reference frames without --environment.',
     );
   }
+  if (located.sidecar?.physicsMode === 'off') {
+    throw new CheckError('frames.json records physicsMode off, while check poses the candidate with physics on. Render the reference with --physics on.');
+  }
   // A frame set drawn after a pre-roll (`render --preroll`, issue #1684) shows the physics warm; check poses the
   // candidate from rest, so the score would be a number about the difference between a warm loop and a cold one.
   const referencePreroll = located.sidecar?.preroll;

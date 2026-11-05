@@ -23,6 +23,14 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the run on its older head, and the
+# organisation's concurrent-job cap is shared: cancelling the superseded run
+# releases its runner slots. A push to main or a dispatch has no pull request
+# number, so it is grouped by its own commit and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   readme:
     runs-on: ubuntu-latest

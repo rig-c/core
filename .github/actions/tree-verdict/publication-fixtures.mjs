@@ -150,3 +150,31 @@ process.exit(Number.isInteger(result.status) ? result.status : 1);
     refresh() { files[path] = Bun.YAML.stringify(raw); files['package.json'] = JSON.stringify(pkg); },
     read(file) { if (!(file in files)) throw new Error(`fixture input missing: ${file}`); return files[file]; } };
 }
+
+/** Two valid prospective contracts; the second lacks its own job reader. */
+export function mixedPublicationFixture(repo) {
+  const f = publicationFixture(repo);
+  const command = 'bun run secondary-check';
+  f.pkg.scripts['secondary-check'] = 'node -e "process.exit(19)"';
+  const declaration = { schema: 'tree-verdict-lifecycle/2', workflow: '.github/workflows/secondary-ci.yml', gate: 'secondary-full/2',
+    chain: command, commands: [command], covers: { [command]: ['secondary'] },
+    jobs: { secondary: { path: ['validate-secondary'], role: 'plain', legs: [{ matrix: {}, apiName: 'validate-secondary' }] } },
+    producer: { job: 'secondary-receipt', step: 'receipt' }, checkoutPolicy: 'event-sha' };
+  const checkout = { uses: 'actions/checkout@v4' };
+  const doc = { on: { push: { branches: ['main'] } }, jobs: {
+    'validate-secondary': { 'runs-on': 'ubuntu-latest', steps: [checkout, { run: command }] },
+    'secondary-receipt': { 'runs-on': 'ubuntu-latest', if: '${{ success() }}', needs: 'validate-secondary', steps: [checkout,
+      { id: 'receipt', run: 'bun helper/.github/actions/tree-verdict/producer.mjs --declaration scripts/secondary-verdict.json --out "$RUNNER_TEMP/secondary-receipt.json"' }] },
+  } };
+  f.files[declaration.workflow] = Bun.YAML.stringify(doc);
+  f.files['scripts/secondary-verdict.json'] = JSON.stringify(declaration);
+  const entry = f.declaration.workflows[0].publishes.at(-1);
+  const proof = { id: 'reuse-secondary', uses: entry.actionUses, with: { purpose: 'publish', declaration: 'scripts/secondary-verdict.json' } };
+  f.doc.jobs.publish.steps.splice(f.doc.jobs.publish.steps.findIndex(step => step.id === 'publication-reader'), 0, proof);
+  entry.verdictStep = 'reuse-secondary'; entry.declaration = 'scripts/secondary-verdict.json';
+  const alias = f.publishSteps.at(-1);
+  alias.env.TREE_VERDICT_PATH = '${{ steps.reuse-secondary.outputs.verdict-path }}';
+  alias.env.TREE_VERDICT_TOOLS = '${{ steps.reuse-secondary.outputs.tooling-path }}';
+  f.refresh();
+  return f;
+}

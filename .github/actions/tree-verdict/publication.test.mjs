@@ -4,8 +4,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { inspectPublication } from './publication.mjs';
-import { publicationFixture, hash } from './publication-fixtures.mjs';
+import { publicationFixture, mixedPublicationFixture, hash } from './publication-fixtures.mjs';
 import { stable } from './coverage.mjs';
+import { compileCoverage } from './planner.mjs';
 import { lintWorkflows } from '../../../scripts/lint_workflows.ts';
 const lint = fileURLToPath(new URL('../../../scripts/lint_workflows.ts', import.meta.url));
 function cli(f, label) {
@@ -251,13 +252,9 @@ const unsupportedWrapperBodies = [
   '/usr/bin/command npm publish --access public',
   'pnpm exec npm publish --access public',
   'unsupported-runner npm publish --access public',
-  'npx npm pack .',
-  '/usr/bin/env npm pack .',
-  'pnpm exec npm pack .',
   'bash -c "npm publish --access public"',
   "sh -c 'npm publish --access public'",
   'eval "npm publish --access public"',
-  'bash -c "npm pack ."',
   'echo ready # npm publish diagnostic',
   'echo "npm publish diagnostic"',
   "printf '%s' 'npm publish diagnostic'",
@@ -292,3 +289,102 @@ for (const repo of ['parts', 'review']) {
     expect(cli(f, `${repo} guard positive controls`).status).toBe(0);
   });
 }
+
+function addUninventoriedJob(f, body) {
+  f.doc.jobs['uninventoried-publication'] = { 'runs-on': 'ubuntu-latest', steps: [{ run: body }] };
+  f.refresh();
+}
+for (const subcommand of ['pub', 'publ', 'publi', 'publis', 'pa', 'pac']) test(`A1 npm prefix ${subcommand} refuses in a new job`, () => {
+  const f = publicationFixture('parts');
+  addUninventoriedJob(f, `npm ${subcommand}`);
+  const result = cli(f, `A1 npm ${subcommand}`);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('PUBLICATION_SYNTAX');
+});
+test('A1 abbreviated tarball producer and publish in a new ungated job refuse', () => {
+  const f = publicationFixture('parts');
+  addUninventoriedJob(f, 'set -euo pipefail\nt="$(npm pac . --ignore-scripts --pack-destination .)"\nnpm pub "$t" --provenance --access public');
+  const result = cli(f, 'A1 abbreviated new ungated job');
+  expect(result.status).toBe(1); expect(result.stderr).toContain('PUBLICATION_SYNTAX');
+});
+for (const repo of ['parts', 'review']) test(`A2 ${repo} every tarball must share the job reader contract`, () => {
+  const f = mixedPublicationFixture(repo);
+  const first = compileCoverage(JSON.parse(f.files['scripts/tree-verdict.json']), f.read, 'scripts/tree-verdict.json');
+  const second = compileCoverage(JSON.parse(f.files['scripts/secondary-verdict.json']), f.read, 'scripts/secondary-verdict.json');
+  expect(first.gate).not.toBe(second.gate);
+  const result = cli(f, `A2 ${repo} mixed valid contracts`);
+  expect(result.status).toBe(1); expect(result.stderr).toContain('PUBLICATION_READER_WIRING');
+});
+for (const manager of ['bun', 'yarn', 'pnpm']) {
+  for (const subcommand of ['pub', 'publ', 'publi', 'publis', 'publish']) test(`A3 ${manager} ${subcommand} refuses in a new job`, () => {
+    const f = publicationFixture('parts'); addUninventoriedJob(f, `${manager} ${subcommand} --access public`);
+    const result = cli(f, `A3 ${manager} ${subcommand}`);
+    expect(result.status).toBe(1); expect(result.stderr).toContain('PUBLICATION_SYNTAX');
+  });
+}
+test('A4 immutable actual parts CI lints green with its explicit empty heavy inventory', () => {
+  const f = publicationFixture('parts');
+  const actual = f.originals['.github/workflows/ci.yml'];
+  expect(hash(actual)).toBe('fa6209d489aab894a55f4dea4f500ce9eebc745a2a5bd52a7c24df1cdf86bdb4');
+  f.files['.github/workflows/ci.yml'] = actual;
+  f.declaration = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{ path: '.github/workflows/ci.yml', heavyJobs: [] }] };
+  expect(cli(f, 'A4 immutable actual parts CI').status).toBe(0);
+});
+for (const body of [
+  'echo "npm pack --dry-run failed"',
+  'cat <<EOF\nordinary CI data\nEOF',
+  'echo `date`',
+  'npx npm pack .',
+  'bash -c "npm pack ."',
+]) test(`A4 no-publish-pair syntax remains outside publication refusal ${body}`, () => {
+  const f = publicationFixture('parts'); addUninventoriedJob(f, body);
+  expect(cli(f, `A4 no publish pair ${body}`).status).toBe(0);
+});
+const capture = 'alias_tgz="$(npm pack . --ignore-scripts --pack-destination .)"';
+for (const [position, producer] of [
+  ['false-and', `false && ${capture}`],
+  ['true-or', `true || ${capture}`],
+  ['and-continuation', `false &&\n${capture}`],
+  ['or-suffix', `${capture} || true`],
+  ['subshell', `(${capture})`],
+  ['conditional-group', `false && {\n${capture}\n}`],
+]) test(`A5 capture ${position} refuses with an inherited unrelated path`, () => {
+  const f = publicationFixture('parts');
+  alias(f).run = `set -euo pipefail\n${producer}\nnpm publish "$alias_tgz" --access public\n`;
+  alias(f).env.alias_tgz = 'unrelated-inherited.tgz';
+  entry(f).invocations[0].producer.command = 'npm pack . --ignore-scripts --pack-destination .';
+  f.refresh();
+  const result = cli(f, `A5 ${position}`);
+  expect(result.status).toBe(1); expect(result.stderr).toContain('PUBLISH_PRODUCER');
+});
+for (const [name, plant] of Object.entries({
+  'publish always': f => { alias(f).if = '${{ always() }}'; },
+  'publish always conjunction': f => { alias(f).if = "${{ always() && steps.target.outputs.publish == 'true' }}"; },
+  'publish failure': f => { alias(f).if = '${{ failure() }}'; },
+  'job always conjunction': f => { f.doc.jobs.publish.if = "${{ always() && needs.release.outputs.publish == 'true' }}"; },
+  'job ignored failure': f => { f.doc.jobs.publish['continue-on-error'] = true; },
+})) test(`HQ checked sound ${name}`, () => {
+  const f = publicationFixture('parts'); plant(f); f.refresh();
+  expect(cli(f, `checked sound ${name}`).status).toBe(1);
+});
+for (const body of [
+  'cat <<EOF\nnpm publish\nEOF',
+  'echo "$(npm publish --access public)"',
+  'npx npm@latest publish',
+  'corepack npm publish',
+  'yarn npm publish',
+  'npm \\\n publish --access public',
+  'echo ordinary; npm publish --access public',
+]) test(`HQ checked sound new-job publication ${body}`, () => {
+  const f = publicationFixture('parts'); addUninventoriedJob(f, body);
+  const result = cli(f, `checked sound ${body}`);
+  expect(result.status).toBe(1); expect(result.stderr).toContain('WFL002_PUBLISH_SUITE_WITHOUT_VERDICT');
+});
+
+for (const subcommand of ['pa', 'pac']) test(`A1 global-option pack prefix ${subcommand} refuses in a new job`, () => {
+  const f = publicationFixture('parts');
+  addUninventoriedJob(f, `npm --silent ${subcommand}`);
+  const result = cli(f, `A1 npm --silent ${subcommand}`);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('PUBLICATION_SYNTAX: line 1: abbreviated npm publication command unsupported');
+});

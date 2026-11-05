@@ -86,15 +86,25 @@ function executable(command) {
 }
 // HQ's conservative guard also reads text inside arguments and inline comments.
 // Canonical invocation admission remains the separate shell lexer above.
+function publishPrefix(value) {
+  return value.length >= 3 && 'publish'.startsWith(value);
+}
+function packPrefix(value) {
+  return value.length >= 2 && 'pack'.startsWith(value);
+}
+function publisherWord(value) {
+  const name = value.split('/').at(-1);
+  return name.endsWith('npm') || name === 'bun' || name === 'yarn';
+}
 function publicationWords(text) {
-  if (!text.includes('npm') || !/\b(?:publish|pack)\b/.test(text)) return [];
+  if (!/\bpub(?:l(?:i(?:s(?:h)?)?)?)?\b/.test(text)) return [];
   return [...text.matchAll(/[A-Za-z0-9_./-]+/g)].map(match => ({
     value: match[0], start: match.index, end: match.index + match[0].length,
   }));
 }
 function hasPublicationPair(words) {
-  return words.some(word => word.value.endsWith('npm')) &&
-    words.some(word => ['publish', 'pack'].includes(word.value));
+  return words.some(word => publisherWord(word.value)) &&
+    words.some(word => publishPrefix(word.value));
 }
 function refusePublicationLine(body, offset, reason) {
   const line = body.slice(0, offset).split('\n').length;
@@ -112,7 +122,7 @@ function guardPublicationText(body, calls, admitted) {
     if (!/^\s*#/.test(line)) {
       const words = publicationWords(line);
       if (hasPublicationPair(words)) {
-        const relevant = words.filter(word => word.value.endsWith('npm') || ['publish', 'pack'].includes(word.value));
+        const relevant = words.filter(word => publisherWord(word.value) || publishPrefix(word.value));
         if (relevant.some(word => !admitted.some(command =>
           offset + word.start >= command.start && offset + word.end <= command.end))) {
           refusePublicationLine(body, offset, 'unsupported publication executable form');
@@ -123,8 +133,17 @@ function guardPublicationText(body, calls, admitted) {
   }
 }
 export function inspectPublication(body) {
-  const { tokens } = lex(body);
-  if (tokens.some(token => token.operator && token.value === '<<')) fail('heredoc publication inventory unsupported');
+  const text = body.split('\n').filter(line => !/^\s*#/.test(line)).join('\n').replace(/[\\'"]/g, '');
+  const carriesPublish = hasPublicationPair(publicationWords(text));
+  let tokens;
+  try {
+    tokens = lex(body).tokens;
+    if (tokens.some(token => token.operator && token.value === '<<')) fail('heredoc publication inventory unsupported');
+  } catch (error) {
+    if (carriesPublish) refusePublicationLine(body, 0, error.message);
+    return { tokens: [], calls: [], publishes: [], packs: [], writes: [] };
+  }
+  if (carriesPublish && /\\\r?\n/.test(body)) refusePublicationLine(body, body.indexOf('\\'), 'publication continuation unsupported');
   const calls = commands(tokens);
   const publishes = [], packs = [], writes = [];
   for (const call of calls) {
@@ -138,10 +157,17 @@ export function inspectPublication(body) {
     if (['echo', 'printf', '[', 'test'].includes(first)) continue;
     if (first === 'npm' || first.endsWith('/npm')) {
       if (argv[1]?.dynamic) refusePublicationLine(body, call.start, 'dynamic npm subcommand unsupported');
+      const subcommand = argv[1]?.value ?? '';
+      if (publishPrefix(subcommand) && subcommand !== 'publish' || packPrefix(subcommand) && subcommand !== 'pack') {
+        refusePublicationLine(body, call.start, 'abbreviated npm publication command unsupported');
+      }
       const mode = argv[1]?.value.startsWith('-') ?
-        argv.findIndex((token, index) => index > 0 && ['publish', 'pack'].includes(token.value)) :
+        argv.findIndex((token, index) => index > 0 && (publishPrefix(token.value) || packPrefix(token.value))) :
         ['publish', 'pack'].includes(argv[1]?.value) ? 1 : -1;
       if (mode > 0) {
+        if (!['publish', 'pack'].includes(argv[mode].value)) {
+          refusePublicationLine(body, call.start, 'abbreviated npm publication command unsupported');
+        }
         const found = { ...call, argv, mode };
         (argv[mode].value === 'publish' ? publishes : packs).push(found);
       }
@@ -186,17 +212,37 @@ export function selectStep(all, selector) {
   return found.length === 1 ? found[0] : undefined;
 }
 function topLevelAt(tokens, offset) {
-  let depth = 0, beginning = true;
+  let depth = 0, groups = 0, beginning = true;
   for (const token of tokens) {
     if (token.start >= offset) break;
-    if (token.operator) { beginning = true; continue; }
+    if (token.operator) {
+      if (token.value === '(') groups++;
+      if (token.value === ')' && groups > 0) groups--;
+      beginning = true;
+      continue;
+    }
     if (!token.quoted && beginning) {
-      if (['if', 'case', 'for', 'while', 'until', 'select'].includes(token.value)) depth++;
-      if (['fi', 'esac', 'done'].includes(token.value)) depth--;
+      if (['if', 'case', 'for', 'while', 'until', 'select', '{'].includes(token.value)) depth++;
+      if (['fi', 'esac', 'done', '}'].includes(token.value)) depth--;
     }
     beginning = !token.quoted && ['then', 'else', 'do', 'fi', 'esac', 'done'].includes(token.value);
   }
-  return depth === 0;
+  return depth === 0 && groups === 0;
+}
+function unconditionalCapture(analysis, write) {
+  if (!write || !topLevelAt(analysis.tokens, write.start)) return false;
+  let start = 0, conditional = false, previous;
+  for (const token of analysis.tokens) {
+    if (['&&', '||', '!'].includes(token.value) && !token.quoted) conditional = true;
+    if (token.operator && (token.value === ';' || token.value === '\n')) {
+      if (token.value === '\n' && ['&&', '||'].includes(previous?.value)) continue;
+      if (write.start >= start && write.start < token.end) return !conditional;
+      start = token.end;
+      conditional = false;
+    }
+    previous = token;
+  }
+  return !conditional;
 }
 export function validatePublicationBody(body, analysis) {
   if (analysis.tokens.some(token => token.operator && ['<', '>', '<<', '>>', '&', '|'].includes(token.value))) fail('publication body redirects, pipelines or background execution unsupported');
@@ -347,7 +393,7 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
         const candidates = packed?.packs.filter(pack => pack.variable === publish.variable && pack.command === producer.command) ?? [];
         const writes = analysis.writes.filter(write => write.name === publish.variable);
         if (!producer || producer.variable !== publish.variable || packStep !== step || candidates.length !== 1 ||
-          !candidates[0].directCapture || !topLevelAt(analysis.tokens, writes[0]?.start ?? publish.start) || candidates[0].start >= publish.start || writes.length !== 1 || !noFailure(packStep)) report('PUBLISH_PRODUCER', location, 'tarball needs its declared same-job producer and a single preceding assignment in this run-step scope');
+          !candidates[0].directCapture || !unconditionalCapture(analysis, writes[0]) || candidates[0].start >= publish.start || writes.length !== 1 || !noFailure(packStep)) report('PUBLISH_PRODUCER', location, 'tarball needs its declared same-job producer and a single preceding assignment in this run-step scope');
       }
     }
     if (!modern) continue;
@@ -372,6 +418,11 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
     const reader = declaredReaders[0], step = reader && selectStep(all, reader.step);
     if (declaredReaders.length !== 1 || !step) { report('PUBLICATION_READER_WIRING', location, 'tarball job needs its own declared lifecycle reader step'); continue; }
     const readerEntry = jobEntries.find(entry => entry.verdictStep === reader.verdictStep && entry.declaration === reader.declaration);
+    const tarballEntries = jobEntries.filter(entry => entry.invocations?.some(item => item.kind === 'tarball'));
+    const oneContract = tarballEntries.every(entry => entry.declaration === reader.declaration &&
+      entry.verdictStep === reader.verdictStep && entry.actionUses === readerEntry?.actionUses &&
+      (entry.declarationInput ?? entry.declaration) === (readerEntry?.declarationInput ?? readerEntry?.declaration));
+    if (!oneContract) report('PUBLICATION_READER_WIRING', location, 'every tarball entry must match the job reader declaration and proof step/source');
     const proof = selectStep(all, reader.verdictStep);
     const expected = `node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration ${reader.declaration} --verdict-path "$TREE_VERDICT_PATH"`;
     if (!/^[\w-]+(?:\/[\w.-]+)*\.json$/.test(reader.declaration) || !readerEntry || !unconditional(step) || !rootShell(job, step, context) || step.run?.trim() !== expected || !proofWired(job, proof, readerEntry) ||

@@ -500,17 +500,25 @@ publication lint alone supplies no hosted no-cut runtime verdict.
 ### Bounded shell and producer forms
 
 The direct-invocation lexer tracks quotes, comments, escaped command words and
-nested `$(...)`. A separate conservative guard inspects argument strings and
-inline comments too. Any npm-suffixed token plus literal `publish` or `pack`
-requires an admitted direct invocation; other forms refuse by run-line number
-with `PUBLICATION_SYNTAX`. Only whole-line `#` comments are skipped. This also
-refuses quoted `bash -c`/`eval` commands, `echo "npm publish"`, `npm run publish`
-and `npm view package publish`; diagnostics can rephrase such text. Queries such
-as `npm view package version` contain no publication pair. A substituted
-publication, backtick, heredoc, unmodeled variable write or unsupported executable
-form also refuses. The parser reads all branches of supported `if`/early-exit and
-literal version-tag `case` bodies. Publish flags are bounded to literal
-provenance/dry-run/access/tag arguments.
+nested `$(...)`. A separate conservative text guard keys on **publish** and its
+prefixes of at least three characters. It scans argument strings and inline
+comments for npm, Bun, Yarn or pnpm publication pairs. Only whole-line `#`
+comments are skipped. Other forms refuse by run-line number with
+`PUBLICATION_SYNTAX`, including quoted `bash -c`/`eval` commands, quoted publish
+diagnostics, `npm run publish` and `npm view package publish`.
+
+Only full, direct `npm publish` is admitted. Abbreviations `pub`, `publ`, `publi`
+and `publis`, and `bun`/`yarn`/`pnpm` publish commands or those prefixes, refuse
+by name. The canonical lexer also recognizes npm pack; its abbreviations `pa`
+and `pac` refuse. Pack text alone leaves the text guard inactive. Unrelated
+heredocs, backticks and other unsupported lexer syntax produce no publication
+analysis when the step carries no publish pair. Such syntax with a publish pair
+refuses. Queries such as `npm view package version` remain outside the guard.
+
+A substituted publication, publication continuation, unmodeled variable write or
+unsupported publication executable form refuses. The parser reads all branches
+of supported `if`/early-exit and literal version-tag `case` bodies. Publish flags
+are bounded to literal provenance/dry-run/access/tag arguments.
 Parts' unquoted `$tag` requires exactly its measured literal empty-or-`--tag rc`
 assignment and version case. An arbitrary expansion refuses.
 
@@ -519,10 +527,12 @@ top-level direct command capture in the same run-step shell. The declaration
 matches the exact captured command. Supported producers are literal `npm pack`
 with `--pack-destination` and optional `--ignore-scripts`, and the measured
 `bun scripts/alias_tarball.ts pack --name ... --out "$RUNNER_TEMP/..."` form with
-an optional literal `--pack-timeout-ms`. The job reader is the gate. Producer
+an optional literal `--pack-timeout-ms`. Every tarball entry in the job must match that reader's declaration, verdict
+step and pinned proof source. The job reader is the gate. Producer
 shape checks connect the local variable to the declared pack, while the consumer's
 equality checks establish its payload relationship. Independent steps may each
-assign `alias_tgz`. Reassignment, output transforms, another job/step's variable,
+assign `alias_tgz`. Captures in `&&`/`||` lists, negated commands, groups or nested conditional
+positions refuse. Reassignment, output transforms, another job/step's variable,
 and unmodeled variable transport refuse with `PUBLISH_PRODUCER`.
 
 `WFL002_PUBLISH_SUITE_WITHOUT_VERDICT` includes named reasons for syntax,
@@ -537,8 +547,11 @@ Portable source fixtures retain these exact main snapshots:
 - parts `f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950`
 - review `112fe8d316dd32748f7bd94e5fc6bc269ab27f8c`
 
-`publication-fixtures/sources.json` binds every release YAML, package manifest and
-helper copy by SHA-256. SHAPE fixtures keep release YAML byte-identical and refuse
+`publication-fixtures/sources.json` binds every release YAML, package manifest,
+helper copy and the actual parts CI snapshot by SHA-256. The actual parts CI
+control uses `heavyJobs: []` and the exact
+`fa6209d489aab894a55f4dea4f500ce9eebc745a2a5bd52a7c24df1cdf86bdb4` source,
+including its quoted npm-pack diagnostic and unrelated shell syntax. SHAPE fixtures keep release YAML byte-identical and refuse
 only missing wiring. FULLY WIRED fixtures split target/publication jobs and add
 only necessary job wiring, IDs, action/reader steps and environments. Tests compare
 all publish bodies and helper bytes with the snapshots and execute the actual lint

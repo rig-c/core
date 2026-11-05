@@ -1,9 +1,10 @@
-// Temporary #1702 paired launcher probe. Both arms execute in ONE Bun parent.
+// Temporary #1702 2x2 target/temp and npm-cache location control.
 // Node outside the probe is solely an independent 600-second tree-kill watchdog.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 const json = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 const hash = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
@@ -36,7 +37,7 @@ export function distribution(rows, phase, kind) {
 }
 
 function pair() {
-  if (!process.versions.bun) throw new Error('Both paired arms require the same Bun parent');
+  if (!process.versions.bun) throw new Error('Root control requires the original Bun parent');
   const root = resolve(process.env.MEASURE_ROOT);
   const out = join(root, 'artifacts');
   const node = process.env.MEASURE_NODE;
@@ -56,81 +57,87 @@ function pair() {
   const runtime = '@esotericsoftware/spine-core';
   const runtimeVersion = manifest.devDependencies?.[runtime];
   if (!runtimeVersion) throw new Error('Runtime version missing from tarball; refusing to guess');
-  const report = { schema: 'paired-bun-npm-launcher/1', result: 'STARTED', packageHead: process.env.MEASURE_HEAD,
+  const originalTemp = resolve(tmpdir());
+  // This reads actual runner configuration; no assumed historical npm-cache path.
+  // The query may itself create a debug log, so the snapshot below says so.
+  const originalCache = resolve(read('npm', ['config', 'get', 'cache']));
+  const token = `rigc-root-control-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+  const targets = { original: join(originalTemp, token), relocated: join(root, 'targets', token) };
+  const caches = { original: join(originalCache, token), relocated: join(root, 'caches', token) };
+  const arms = [
+    { name: 'base', targetTempD: false, cacheD: false },
+    { name: 'temp', targetTempD: true, cacheD: false },
+    { name: 'cach', targetTempD: false, cacheD: true },
+    { name: 'both', targetTempD: true, cacheD: true },
+  ];
+  const report = { schema: 'paired-windows-roots/1', result: 'STARTED', packageHead: process.env.MEASURE_HEAD,
     runUrl: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
     package: { name: manifest.name, version: manifest.version, sha256: hash(tarball), runtimeVersion },
-    versions: { parentBun: process.versions.bun, parentExecPath: process.execPath, node: read(node, ['--version']) },
+    versions: { parentBun: process.versions.bun, parentExecPath: process.execPath, node: read(node, ['--version']), npm: read('npm', ['--version']) },
     npmLocations: read('where.exe', ['npm']), node, npmCli,
     runner: { image: process.env.ImageOS, imageVersion: process.env.ImageVersion, arch: process.arch },
-    protocol: { replicates: 5, installationCalls: 30, startupCalls: 4, parent: 'Same Bun process and node:child_process.spawnSync implementation',
-      arms: { bare: "spawnSync('npm', args, options)", node: 'spawnSync(nodePath, [npmCli, ...args], options)' },
-      order: 'Per replicate, alternate first arm; interleave both arms within package/runtime/review stages',
-      state: 'Separate initially empty cache and install home for each arm of each replicate; equal directory depth/name length; same tarball; preceding stages warm only that sequence cache',
-      options: { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    originalDefaults: { osTmpdir: originalTemp, npmCache: originalCache,
+      tempEnvironment: Object.fromEntries(Object.entries(process.env).filter(([k]) => ['TEMP','TMP','TMPDIR'].includes(k.toUpperCase()))),
+      cacheSnapshotAfterConfigProbe: { exists: existsSync(originalCache), cacacheExists: existsSync(join(originalCache, '_cacache')), logsExist: existsSync(join(originalCache, '_logs')) },
+      note: 'Default cache contents are retained, not cleared or consumed by samples. Initial-state snapshot follows one npm config query, which may create a log. Historical cache location/content and exact TEMP variable values were not logged.' },
+    historicalEvidence: { job: 'https://github.com/rig-c/core/actions/runs/42051220785/job/127327516071', installRootObserved: 'C: runner profile AppData/Local/Temp/rigc-smoke-*', cacheLocation: 'UNAVAILABLE' },
+    protocol: { replicates: 4, installationCalls: 48, arms, targets, caches,
+      launcher: "Same Bun parent: spawnSync('npm', args, options); no explicit Node launcher arm",
+      order: 'Four Latin rotations of base/temp/cach/both; interleave arms within each package/runtime/review stage',
+      state: 'Each replicate/arm starts with its own empty project and empty cache; cache persists only across its package/runtime/review sequence. Original-location cache children never read the existing default cache contents.',
+      options: { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, watchdogSeconds: 600,
       instrumentation: { npm_config_timing: 'true', npm_config_loglevel: 'verbose', npm_config_logs_max: '10000' },
-      scripts: 'No ignore-scripts or foreground-scripts override; effective defaults recorded; --no-audit --no-fund on every install',
-      watchdogSeconds: 600,
-      limitation: 'Sampled clean tarball, not 69 original calls or full smoke. Absolute A/B paths differ for isolation; shapes/settings match. OS cache and sequence effects remain; five pairs cannot establish a tail. Same timing injection in both arms.' },
-    startup: [], rows: [] };
-  report.npmDefaults = Object.fromEntries(['ignore-scripts', 'foreground-scripts', 'registry', 'prefer-offline', 'prefer-online'].map(k => [k, read(node, [npmCli, 'config', 'get', k])]));
+      scripts: 'No ignore-scripts or foreground-scripts override; effective defaults recorded. Every install uses --no-audit --no-fund.',
+      limitation: 'Target directory and TEMP/TMP/TMPDIR relocation form ONE combined factor; cache location is the independent second factor. This is location-matched cold state, not exact historical/default cache contents. Tarball and logs stay on runner temp in every arm; historical tarballs were packed below their case root. Folder length, OS cache, policies and physical devices are not separately isolated. Sampled clean tarball, not 69 calls/full smoke.' },
+    rows: [] };
+  report.npmDefaults = Object.fromEntries(['ignore-scripts', 'foreground-scripts', 'registry', 'prefer-offline', 'prefer-online'].map(k => [k, read('npm', ['config', 'get', k])]));
   const save = () => json(join(out, 'report.json'), report);
-  const start = performance.now();
-  const end = start + 600000;
-  function run(arm, args, cwd, cache, temp, tag, phase, kind, replicate) {
-    const logs = join(out, tag);
-    for (const d of [cwd, cache, temp, logs]) mkdirSync(d, { recursive: true });
-    const overrides = { TEMP: temp, TMP: temp, TMPDIR: temp, npm_config_cache: cache, npm_config_logs_dir: logs,
+  const start = performance.now(), end = start + 600000;
+  function environment(state, logs) {
+    const overrides = { npm_config_cache: state.cache, npm_config_logs_dir: logs,
       npm_config_logs_max: '10000', npm_config_timing: 'true', npm_config_loglevel: 'verbose' };
-    const env = { ...process.env, ...overrides };
-    const row = { arm, phase, kind, replicate, args, cwd, environmentOverrides: overrides, status: null };
-    (phase === 'startup' ? report.startup : report.rows).push(row);
-    save();
+    if (state.arm.targetTempD) Object.assign(overrides, { TEMP: state.temp, TMP: state.temp, TMPDIR: state.temp });
+    return { overrides, env: { ...process.env, ...overrides } };
+  }
+  function install(state, args, kind, replicate) {
+    const { arm, home, cache, temp } = state;
+    const tag = `${replicate}-${kind}-${arm.name}`, logs = join(out, tag);
+    for (const d of [home, cache, temp, logs]) mkdirSync(d, { recursive: true });
+    const { env, overrides } = environment(state, logs);
+    const row = { arm: arm.name, targetTempD: arm.targetTempD, cacheD: arm.cacheD, phase: 'measured', kind, replicate, args, cwd: home,
+      environmentOverrides: overrides, inheritedTempEnvironment: report.originalDefaults.tempEnvironment, status: null };
+    report.rows.push(row); save();
     const remaining = Math.floor(end - performance.now());
     if (remaining <= 0) throw new Error('CENSORED_GLOBAL_LIMIT');
-    // Same capture/options as install_smoke.run(). Bare npm does NOT enter its
-    // .cmd/.bat-only shell branch. The timeout is an equal guard on both arms.
-    const opts = { ...options(cwd, env), timeout: remaining };
     console.log(`START ${tag} ${JSON.stringify(args)}`);
     const before = performance.now();
-    const r = arm === 'bare' ? spawnSync('npm', args, opts) : spawnSync(node, [npmCli, ...args], opts);
+    const r = spawnSync('npm', args, { ...options(home, env), timeout: remaining });
     row.seconds = (performance.now() - before) / 1000;
     row.status = typeof r.status === 'number' ? r.status : 1;
     row.signal = r.signal; row.error = r.error?.message ?? null;
-    // Exactly the original run() status/output interpretation; all streams are
-    // saved only AFTER timing, and neither arm streams output to a file in spawn.
-    const stdout = typeof r.stdout === 'string' ? r.stdout : '';
-    const stderr = typeof r.stderr === 'string' ? r.stderr : '';
-    writeFileSync(join(logs, 'stdout.txt'), stdout);
-    writeFileSync(join(logs, 'stderr.txt'), stderr);
+    writeFileSync(join(logs, 'stdout.txt'), typeof r.stdout === 'string' ? r.stdout : '');
+    writeFileSync(join(logs, 'stderr.txt'), typeof r.stderr === 'string' ? r.stderr : '');
     row.timing = readTiming(logs);
-    if (existsSync(join(cwd, 'package-lock.json'))) writeFileSync(join(logs, 'package-lock.json'), readFileSync(join(cwd, 'package-lock.json')));
+    if (existsSync(join(home, 'package-lock.json'))) writeFileSync(join(logs, 'package-lock.json'), readFileSync(join(home, 'package-lock.json')));
     save();
     console.log(`END ${tag} ${row.seconds.toFixed(6)}s status=${row.status}`);
-    if (row.status !== 0) throw new Error(`STOP_COMMAND: ${tag}`);
-    return { row, stdout, stderr };
+    if (row.status !== 0) throw new Error(`STOP_INSTALL: ${tag}`);
+    return row;
   }
   try {
-    for (let rep = 1; rep <= 2; rep++) for (const arm of rep % 2 ? ['bare', 'node'] : ['node', 'bare']) {
-      const base = join(root, 'startup', `rep-${rep}`, arm);
-      const got = run(arm, ['--version'], join(base, 'empty'), join(base, 'cache'), join(base, 'temp'), `startup-${rep}-${arm}`, 'startup', 'version', rep);
-      got.row.npmVersion = got.stdout.trim();
-    }
-    const versions = [...new Set(report.startup.map(r => r.npmVersion))];
-    if (versions.length !== 1) throw new Error('NPM_VERSION_MISMATCH');
-    report.versions.npm = versions[0];
-    for (let rep = 1; rep <= 5; rep++) {
-      const arms = rep % 2 ? ['bare', 'node'] : ['node', 'bare'];
-      const states = Object.fromEntries(arms.map(arm => {
-        const base = join(root, 'installs', `rep-${rep}`, arm);
+    for (let rep = 1; rep <= 4; rep++) {
+      const offset = rep - 1, order = [...arms.slice(offset), ...arms.slice(0, offset)];
+      const states = Object.fromEntries(order.map(arm => {
+        const base = join(arm.targetTempD ? targets.relocated : targets.original, `rep-${rep}`, arm.name);
         const home = join(base, 'empty');
-        const cache = join(root, 'caches', `rep-${rep}`, arm);
+        const cache = join(arm.cacheD ? caches.relocated : caches.original, `rep-${rep}`, arm.name);
         if (existsSync(home) || existsSync(cache)) throw new Error('OUTPUT_REUSE_REFUSED');
         mkdirSync(home, { recursive: true });
         json(join(home, 'package.json'), { name: 'rigc-install-smoke', private: true, version: '0.0.0' });
-        return [arm, { home, cache, temp: join(base, 'temp') }];
+        return [arm.name, { arm, home, cache, temp: join(base, 'temp') }];
       }));
-      for (const kind of ['package', 'runtime', 'review']) for (const arm of arms) {
-        const { home, cache, temp } = states[arm];
+      for (const kind of ['package', 'runtime', 'review']) for (const arm of order) {
+        const state = states[arm.name], { home } = state;
         let target, args;
         if (kind === 'package') { target = manifest.name; args = ['install', tarball, '--no-audit', '--no-fund']; }
         if (kind === 'runtime') { target = runtime; args = ['install', `${runtime}@${runtimeVersion}`, '--no-save', '--no-audit', '--no-fund']; }
@@ -138,31 +145,40 @@ function pair() {
           rmSync(join(home, 'node_modules', '@esotericsoftware'), { recursive: true, force: true });
           const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.rigc;
           if (!bin) throw new Error('No rigc bin in shared tarball');
-          const refusal = spawnSync(node, [join(home, 'node_modules', ...manifest.name.split('/'), bin), 'review', 'check', 'build'], { ...options(home, process.env), timeout: 15000 });
+          const refusalLogs = join(out, `refusal-${rep}-${arm.name}`);
+          mkdirSync(refusalLogs, { recursive: true });
+          const { env } = environment(state, refusalLogs);
+          const refusal = spawnSync(node, [join(home, 'node_modules', ...manifest.name.split('/'), bin), 'review', 'check', 'build'], { ...options(home, env), timeout: 15000 });
           const named = /REVIEW_NOT_INSTALLED: (\S+) is not installed/.exec(refusal.stderr ?? '');
-          json(join(out, `refusal-${rep}-${arm}.json`), { status: refusal.status, stdout: refusal.stdout, stderr: refusal.stderr });
+          json(join(refusalLogs, 'refusal.json'), { status: refusal.status, stdout: refusal.stdout, stderr: refusal.stderr });
           if (refusal.status !== 2 || !named) throw new Error('Cannot derive review target from installed shim refusal');
           target = named[1]; args = ['install', '-D', target, '--no-audit', '--no-fund'];
         }
-        const { row } = run(arm, args, home, cache, temp, `${rep}-${kind}-${arm}`, 'measured', kind, rep);
+        const row = install(state, args, kind, rep);
         const installed = join(home, 'node_modules', ...target.split('/'), 'package.json');
-        if (!existsSync(installed)) throw new Error('Install exited zero without target package manifest');
-        row.installedVersion = JSON.parse(readFileSync(installed, 'utf8')).version;
-        save();
+        if (!existsSync(installed)) throw new Error('Install exited zero without target manifest');
+        row.installedVersion = JSON.parse(readFileSync(installed, 'utf8')).version; save();
       }
     }
-    report.result = 'PAIRED_COMPLETE';
+    report.result = 'ROOTS_COMPLETE';
   } catch (error) { report.result = 'INCOMPLETE_OR_FAILED'; report.error = String(error); process.exitCode = 1; }
   report.secondsIncludingProbes = (performance.now() - start) / 1000;
-  report.pairs = [];
-  for (const kind of ['package', 'runtime', 'review']) for (let replicate = 1; replicate <= 5; replicate++) {
+  report.contrasts = [];
+  for (const kind of ['package', 'runtime', 'review']) for (let replicate = 1; replicate <= 4; replicate++) {
     const rows = report.rows.filter(r => r.kind === kind && r.replicate === replicate);
-    const a = rows.find(r => r.arm === 'bare'), b = rows.find(r => r.arm === 'node');
-    if (a?.status === 0 && b?.status === 0 && a.installedVersion && b.installedVersion) report.pairs.push({ kind, replicate, order: rows.map(r => r.arm), bareSeconds: a.seconds, nodeSeconds: b.seconds, bareMinusNodeSeconds: a.seconds - b.seconds, sameInstalledVersion: a.installedVersion === b.installedVersion });
+    const cells = Object.fromEntries(rows.map(r => [r.arm, r]));
+    if (arms.every(a => cells[a.name]?.status === 0 && cells[a.name]?.installedVersion)) {
+      const v = n => cells[n].seconds;
+      report.contrasts.push({ kind, replicate, order: rows.map(r => r.arm), seconds: Object.fromEntries(arms.map(a => [a.name, v(a.name)])),
+        targetTempEffectAtOriginalCache: v('temp') - v('base'), targetTempEffectAtDCache: v('both') - v('cach'),
+        cacheEffectAtOriginalTemp: v('cach') - v('base'), cacheEffectAtDTemp: v('both') - v('temp'),
+        interaction: v('both') - v('temp') - v('cach') + v('base'),
+        sameInstalledVersion: new Set(rows.map(r => r.installedVersion)).size === 1 });
+    }
   }
-  if (report.result === 'PAIRED_COMPLETE' && (report.rows.length !== 30 || report.pairs.length !== 15 || report.pairs.some(p => !p.sameInstalledVersion))) { report.result = 'WORKLOAD_MISMATCH'; process.exitCode = 1; }
+  if (report.result === 'ROOTS_COMPLETE' && (report.rows.length !== 48 || report.contrasts.length !== 12 || report.contrasts.some(p => !p.sameInstalledVersion))) { report.result = 'WORKLOAD_MISMATCH'; process.exitCode = 1; }
   save();
-  const lines = ['## Same-Bun-parent launcher pairs', '', `Result: ${report.result}. Package SHA-256: ${report.package.sha256}.`, '', '| Kind | Replicate | First arm | Bare npm (s) | Node CLI (s) | Difference (s) |', '| --- | ---: | --- | ---: | ---: | ---: |', ...report.pairs.map(p => `| ${p.kind} | ${p.replicate} | ${p.order[0]} | ${p.bareSeconds.toFixed(6)} | ${p.nodeSeconds.toFixed(6)} | ${p.bareMinusNodeSeconds.toFixed(6)} |`), '', 'Both arms capture output synchronously under Bun; raw npm timing intervals overlap. Sampled workload only.'];
+  const lines = ['## Target/temp x cache root control', '', `Result: ${report.result}. Package SHA-256: ${report.package.sha256}.`, '', '| Kind | Replicate | base (s) | temp only (s) | cache only (s) | both (s) |', '| --- | ---: | ---: | ---: | ---: | ---: |', ...report.contrasts.map(p => `| ${p.kind} | ${p.replicate} | ${p.seconds.base.toFixed(6)} | ${p.seconds.temp.toFixed(6)} | ${p.seconds.cach.toFixed(6)} | ${p.seconds.both.toFixed(6)} |`), '', 'All arms use original Bun bare npm and synchronous capture. Default-location cache children start empty; existing default cache contents are retained, not reproduced. Raw npm timers overlap.'];
   writeFileSync(join(out, 'summary.md'), lines.join('\n') + '\n');
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
 }

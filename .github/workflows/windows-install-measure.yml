@@ -1,4 +1,4 @@
-# Temporary paired launcher diagnostic for #1702. Remove before PR ready.
+# Temporary 2x2 root diagnostic for #1702. Remove before PR ready.
 name: windows-install-measure
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
 jobs:
   pack:
     if: >-
-      github.event.label.name == 'core-1702-launcher' &&
+      github.event.label.name == 'core-1702-roots' &&
       github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -49,7 +49,7 @@ jobs:
         with:
           name: install-diagnostic-package
           path: ${{ runner.temp }}/diagnostic-package
-      - name: Pair original and explicit Node launchers under the same Bun parent
+      - name: Compare target/temp and cache roots under the original Bun launcher
         shell: pwsh
         env:
           MEASURE_ROOT: ${{ runner.temp }}/install-diagnostic
@@ -72,7 +72,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-launcher-pair-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-roots-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/install-diagnostic/artifacts/
           if-no-files-found: error
           retention-days: 7

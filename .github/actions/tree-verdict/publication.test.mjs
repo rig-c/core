@@ -61,6 +61,88 @@ for (const repo of ['parts', 'review']) {
 const reader = f => f.doc.jobs.publish.steps.find(step => step.id === 'publication-reader');
 const alias = f => f.publishSteps.at(-1);
 const entry = f => f.declaration.workflows[0].publishes.at(-1);
+
+function coreReaderFixture() {
+  const f = publicationFixture('parts');
+  f.pkg.scripts.prepublishOnly = 'bun scripts/prepublish_gate.ts';
+  f.declaration.workflows[0].publicationReaders[0].kind = 'core-prepublish';
+  reader(f).run = 'bun scripts/prepublish_gate.ts';
+  for (const item of f.declaration.workflows[0].publishes) {
+    item.lifecycle = 'prepublishOnly';
+    item.readerCommand = 'bun scripts/prepublish_gate.ts';
+  }
+  f.refresh();
+  return f;
+}
+
+test('core-prepublish named reader accepts its exact unconditional hook before every publication', () => {
+  const f = coreReaderFixture();
+  expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+  expect(cli(f, 'core named reader').status).toBe(0);
+});
+
+test('core-prepublish refuses a consistently substituted valid secondary declaration', () => {
+  for (const path of ['scripts/secondary-verdict.json', 'scripts/tree-verdict.json']) {
+    const f = mixedPublicationFixture('parts');
+    const inventory = f.declaration.workflows[0];
+    const secondary = f.files['scripts/secondary-verdict.json'];
+    f.files[path] = secondary;
+    if (path === 'scripts/tree-verdict.json') {
+      const workflow = Bun.YAML.parse(f.files['.github/workflows/secondary-ci.yml']);
+      workflow.jobs['secondary-receipt'].steps[1].run = workflow.jobs['secondary-receipt'].steps[1].run.replace(
+        'scripts/secondary-verdict.json', path);
+      f.files['.github/workflows/secondary-ci.yml'] = Bun.YAML.stringify(workflow);
+    }
+    const proof = f.doc.jobs.publish.steps.find(step => step.id === 'reuse-secondary');
+    proof.with.declaration = path;
+    inventory.publicationReaders[0] = { ...inventory.publicationReaders[0], kind: 'core-prepublish',
+      declaration: path, verdictStep: 'reuse-secondary' };
+    f.pkg.scripts.prepublishOnly = 'bun scripts/prepublish_gate.ts';
+    reader(f).run = 'bun scripts/prepublish_gate.ts';
+    reader(f).env = { TREE_VERDICT_TOOLS: '${{ steps.reuse-secondary.outputs.tooling-path }}',
+      TREE_VERDICT_PATH: '${{ steps.reuse-secondary.outputs.verdict-path }}' };
+    for (const item of inventory.publishes) {
+      item.declaration = path; item.verdictStep = 'reuse-secondary';
+      item.lifecycle = 'prepublishOnly'; item.readerCommand = 'bun scripts/prepublish_gate.ts';
+    }
+    for (const step of f.publishSteps) step.env.TREE_VERDICT_PATH = '${{ steps.reuse-secondary.outputs.verdict-path }}';
+    f.refresh();
+    const result = cli(f, `core substituted contract ${path}`);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('CORE_READER_CONTRACT');
+    expect(result.stderr).not.toContain('COVER_');
+  }
+});
+
+for (const [name, plant] of Object.entries({
+  conditional: f => { reader(f).if = '${{ success() }}'; },
+  'ignored failure': f => { reader(f)['continue-on-error'] = true; },
+  'extra argument': f => { reader(f).run += ' --skip'; },
+  'swallowed nonzero': f => { reader(f).run += ' || true'; },
+  'after pack or publish': f => { const steps = f.doc.jobs.publish.steps; const before = reader(f); steps.splice(steps.indexOf(before), 1); steps.push(before); },
+  'wrong named kind': f => { f.declaration.workflows[0].publicationReaders[0].kind = 'other'; },
+  'mixed hook contracts': f => { entry(f).readerCommand = 'bun scripts/other.ts'; },
+})) test(`core-prepublish named reader refuses ${name}`, () => {
+  const f = coreReaderFixture();
+  plant(f); f.refresh();
+  expect(lintWorkflows(f.declaration, f.read).join('\n')).toContain('PUBLICATION_READER_WIRING');
+});
+
+test('helper admits a fixed scoped literal and refuses variables, substitutions and malformed scoped names', () => {
+  for (const name of ['@sample/parts', '"$ALIAS"', '@sample/$ALIAS', '"$(echo alias)"', '@sample/parts/extra', '@/parts']) {
+    const f = publicationFixture('parts');
+    const step = alias(f), producer = entry(f).invocations[0].producer;
+    const actual = /--name ([\w-]+)/.exec(step.run)?.[1];
+    expect(actual).toBeDefined();
+    step.run = step.run.replace(`--name ${actual}`, `--name ${name}`);
+    producer.command = producer.command.replace(`--name ${actual}`, `--name ${name}`);
+    f.refresh();
+    const faults = lintWorkflows(f.declaration, f.read);
+    if (name === '@sample/parts') expect(faults).toEqual([]);
+    else expect(faults.join('\n')).toContain('PUBLICATION_SYNTAX');
+  }
+});
+
 const plants = {
   'reader after publication': f => { const all = f.doc.jobs.publish.steps, step = reader(f); all.splice(all.indexOf(step), 1); all.push(step); },
   'conditional reader': f => { reader(f).if = "${{ steps.target.outputs.publish == 'true' }}"; },

@@ -202,11 +202,16 @@ the commit that introduces these files, and is not maintained afterwards.
    `gh api -X POST repos/rig-c/core/actions/runs/<id>/approve`, or **Approve
    and run** in the Actions tab. Every cut needs this — see below for why, and
    for why the branch name is not worth memorising.
-6. **Merge it.** That is the cut.
+6. **Obtain HQ's sign on the current release head, then merge it.** Its
+   parent must equal the current base tip when it is signed. If main moved,
+   wait for release-please to regenerate and obtain a sign on that head. This
+   release PR needs its own sign; an adoption PR's approval does not authorize
+   a cut. Merge the signed head explicitly. That is the cut.
 7. Watch the second `release` run: it tags `vX.Y.Z`, creates the GitHub release,
-   runs the selftest's six shards and their merge on the tag (`gate`), and
-   publishes (`publish`, whose log says which tally it accepted — see
-   *Publishing* below). Its last step confirms the published package installs and
+   reuses completed CI coverage of the identical tree or runs the common six
+   shards and semantic merge (`gate`). The named reader in `publish` verifies
+   proof or exact tally coverage before packing and publishing all three
+   tarballs. Its log names the accepted source or the full fallback. Its last step confirms the published package installs and
    builds, waiting up to 15 minutes for the registry to serve it — if that step
    ends saying the confirmation was NOT taken, the registry was still
    processing and nothing is wrong with the cut: re-run the confirmation
@@ -367,100 +372,96 @@ serves them it reads 213 of 213 files the same. `rig-c` also lists a
 `0.0.0-stage` version npm created while it processed that first publish; it
 is npm's, and it is left alone.
 
-**How the other names are published.** After `npm publish` has published `rig-c`
-from the checkout — gated by `prepublishOnly`, below — the next steps of the same
-job, one per alias, run `bun scripts/alias_tarball.ts pack --name <alias> --out
-"$RUNNER_TEMP/alias-<alias>"`: each packs the same checkout, extracts the tarball into the
-runner's temp directory, rewrites the one `"name"` line of the extracted
-`package.json`, packs that again, and prints the path only after `compare`
-reads it as the package's files. `npm publish <that tarball> --provenance
---access public` publishes it — `--access public` is what keeps the scoped
-`@rig-c/core` from publishing restricted, which is npm's default for a scope.
-The scoped name changes nothing else in that path: `npm pack` names its tarball
-`rig-c-core-<version>.tgz`, and neither the tool nor the smoke reads a
-tarball by its file name. The
-checkout is never modified, so the confirmation reads the tree the gate read.
-**No lifecycle script runs on the alias, by design:** `npm publish <tarball>`
-runs none, and a second `prepublishOnly` could not mean anything — renaming the
-package in the checkout leaves the tree modified, which the tally reader
-refuses (`TALLY_DIRTY`), so it would run the whole selftest again over a tree
-that is no longer the commit the gate ran at. The gate's verdict is about this
-commit, and each alias is this commit's files. `CUR122` holds `release.yml` to
-that order and to the alias names `ALIASES` in `scripts/alias_tarball.ts`
-states — one step per name, and every name in both confirmation calls, so
-dropping either alias from the publish or from a confirmation is red — and
-`CUR121` drives the tool under every name and the confirmation's reading of
-each alias over fakes that differ each way they can.
+**How all three names are published.** The `publish` job runs the exact named
+reader `bun scripts/prepublish_gate.ts` unconditionally before every pack and
+publish. A nonzero reader exit stops the job. The canonical package is packed
+with `canonical_tgz="$(npm pack . --pack-destination .)"` and published with
+`npm publish "$canonical_tgz" --provenance --access public`. npm prints a basename;
+the existing `/rig-c-*.tgz` ignore rule covers this runner-checkout output. The
+pack leaves every preexisting tracked input byte unchanged. The package has no
+`prepare` or `prepack` hook, and `npm pack` does not run `prepublishOnly`.
+
+The next steps, one per alias, retain `bun scripts/alias_tarball.ts pack --name
+<alias> --out "$RUNNER_TEMP/alias-<alias>"`. Each packs the same checkout, rewrites
+only the name in an extraction, and compares every unpacked file before printing
+the tarball path. Both aliases then use `npm publish "$alias_tgz" --provenance
+--access public`. All three publications remain in `release.yml` on the hosted
+runner, and OIDC write permission belongs to that publishing job alone. The
+manual folder `prepublishOnly` hook remains in package.json. The tarball jobs
+invoke the named reader once and invoke no folder hook.
+
+The reader-to-last-publish interval must retain the same checkout and tracked
+source tree. The workflow contains no later checkout. The publication lint checks
+its declared commands and order, but does not detect every arbitrary source/tree
+mutation between those steps; that boundary is tracked by core#1709. `CUR122`
+retains every alias pack/comparison and both confirmation calls.
 
 **An alias is kept, and never retired by a release step** ([#1278](https://github.com/rig-c/core/issues/1278)). It stays for as long as links from outside this repository point at it — the npm page, forum threads, articles, badges other READMEs copied — and it never gets a version of its own: every cut publishes every name from one run, or none. Retiring it (deprecating, un-publishing, letting the name fall behind the package's version line) is not a release step and not a convention; it is a separate card that opens only after three things are written down in it: **npm history** — what is lost when the alias stops (download history, the package page, the provenance links of every version published under it); **external links** — an inventory of what points at the alias name and where each resolves after the rename and after a retirement (GitHub redirects the repository URL; nothing but the alias covers the npm page); and **what the alias says** — one sentence in the README naming the package's current name, and no `npm deprecate`, because a banner on every install is a retirement wearing an alias's name. The same policy holds for every package of the toolchain (`spine-rigc` → `rig-c`, `spine-parts` → `rig-parts` → `@rig-c/parts`, `spine-html` → `rig-play` → `@rig-c/play`).
 
-`prepublishOnly` runs `scripts/prepublish_gate.ts` before npm packs anything,
-so a tree that fails its own gates cannot be published — by the workflow or by
-hand. It runs `bun run typecheck` and `bun run lint` and then the selftest, the
-same gate CI runs on
-every push, and they run over the same corpus: the publish job runs
-`bun run fetch-examples` before `npm publish`, as each of the shard jobs runs it
-before its share of the selftest. The selftest comes by one of two paths:
+### Tree coverage and the publish reader
 
-- **`RIGC_PREPUBLISH_TALLY` unset** — by hand, or anywhere else — the full
-  selftest in this process, `bun run selftest`, which is what `prepublishOnly`
-  ran before issue #1249.
-- **`RIGC_PREPUBLISH_TALLY=<path>`** — the release run — the merged tally
-  document the run's `gate` job wrote, read and held to the tree being
-  published. It is accepted only when its commit is that tree's
-  `git rev-parse HEAD`, the tree has no change against that commit, the
-  `selftest.ts` that wrote it is the one on disk, every shard of its declared
-  count is in it once and exited 2 over no FAIL line, the merge exited 0 over
-  no FAIL line, and every registered suite is in it exactly once. Anything else
-  — no file, a file that is not one, another commit, a red, partial or
-  inconsistent tally — prints each reason under its name (`TALLY_COMMIT`,
-  `TALLY_DIRTY`, `TALLY_SOURCE`, `TALLY_SHARD_MISSING`, `TALLY_SHARD_RED`,
-  `TALLY_MERGE_EXIT`, `TALLY_FORGED`, `TALLY_SUITE_MISSING`, `TALLY_SPEC`,
-  `TALLY_ABSENT`) and runs the full selftest instead. There is no other
-  variable, flag or shortcut: the variable names evidence that is checked, and
-  evidence that does not check out is a reason to run the gate, never to skip
-  it. `TY46` drives the reader over the merge's own document and one plant per
-  refusal.
+On a default-branch push, `ci.yml` first calls the shared action pinned at
+`b2e5cfb5f24b8743ee2a05298a34984ee47485a3`. Reuse requires successful source
+coverage of the complete declared chain on the identical Git tree, including all
+six shard legs and the semantic merge. PR API head SHA and the actual tested
+synthetic checkout are separate receipt fields. The required `test` check names
+the reused run/tested SHA or reads the actual merge verdict. A fresh successful
+run collects `tree-verdict/2` evidence after coverage jobs complete and executes
+no chain in the collector. A reused main run produces no new receipt.
 
-**Reading the publish step's log.** On the accepted path the step prints, after
-typecheck and lint,
+The exact chain and coverage inventory live in `scripts/tree-verdict.json`.
+`bun scripts/lint_workflows.ts scripts/lint_workflows.declarations.json .` checks
+the real full CI and release files. The gate identity hashes the complete declared
+chain and coverage. A missing receipt, changed tree, failed API lookup or changed
+source coverage runs the original gate. Dispatch always follows the fresh gate;
+registry confirmation still reads the registry artifact.
 
-```text
-prepublish: accepted tally <path> for <sha>: <n> suites, <m> case lines, 0 FAIL
-```
+`prepublishOnly` runs `scripts/prepublish_gate.ts` before npm packs anything in a
+manual folder publication. It retains typecheck, lint and exact-commit tally/selftest
+semantics. This is the same gate CI reads on every push, and they run over the same corpus.
+The release job runs `bun run fetch-examples` before the named reader, as each shard
+does before its selftest. The ordinary folder path accepts the old merged tally
+only after typecheck and lint. A refused or absent tally runs the full selftest.
 
-— `<sha>` is the commit the gate ran at and this tree is at, `<n>` the
-registered suites and `<m>` the case lines the merged run printed. A step that
-prints `prepublish: the tally RIGC_PREPUBLISH_TALLY names was NOT accepted, so
-the full selftest runs:` followed by its reasons is the fallback: the publish
-is still gated, by a one-process selftest in this job, and takes the ~19 minutes
-that costs. That is a cut to read, not one that went wrong — the reasons say
-which clause the tally failed.
+The release workflow's named reader checks whole-chain evidence **before** those
+commands. A verified current-tree source proof skips typecheck, lint and selftest.
+A legacy `selftest-merged/1` tally can skip the whole chain only when its existing
+pure `tallyDecision` accepts the exact commit, clean tree, selftest source, shards,
+merge and suite census, and the source run/attempt's API records also show
+successful typecheck, lint and merge steps from that same checked-out workflow.
+The old document's fields and schema are retained. The reader rechecks source
+identity and the clean checkout after its API reads. With neither kind accepted,
+it executes `bun run typecheck && bun run lint && bun run selftest` once and keeps
+the first nonzero exit. No ephemeral completion producer is used.
 
-**What runs where.** `release.yml`'s release push is `plan` (release-please:
-the release commit, the tag, the GitHub release) → `gate` (the selftest as six
-shards and their merge, `selftest-shards.yml`, on the verified push SHA — the same reusable
-workflow `ci.yml` calls on every change, so the two cannot drift; `CUR120`) →
-`publish` (check out that verified push SHA, fetch the corpus, download the
-`selftest-merged-tally` artifact, `npm publish` with `RIGC_PREPUBLISH_TALLY` set
-on that step alone, then the alias's publish from the tarball
-`scripts/alias_tarball.ts` packs) → the confirmation of both names. `CUR119` holds that order, the one
-condition `gate` and `publish` run under — `plan`'s resolved `publish` output,
-whichever event resolved it — the OIDC token on `publish` alone, release-please
-held to a push, and what each dispatch reaches: a `version` dispatch reaches
-`confirm` only, and a `tag` dispatch runs `plan`'s resolve step, then `gate`,
-then `publish` (*Republishing a cut whose publish failed*, below). The publish job fetches the corpus
-even when the tally is accepted, because the fallback has to read the tree the
-gate read. Without `examples/` the core suite's corpus controls are red rather
-than HOLEs — a construct no row reaches is never a pass — so a publish gate with
-no corpus measures a different environment from the one CI admitted every
-commit in, and v1.6.0 was tagged and then refused by it on exactly those
-controls (issue #1003). `CUR112` holds the two workflows to that order. ⚠️ The
-tag and the GitHub release exist before `gate` runs, as they did before the
-publish's own selftest: a red gate leaves a tagged, released, unpublished
-version — the shape v1.6.0 was left in, and the one a dispatch now repairs.
-There is no build step to guard: the package ships its TypeScript sources and
-bun runs them.
+**Reading the log.** A verified tree source prints `TREE_VERDICT_REUSED` with its
+run and actual tested SHA, followed by `accepted current tree proof`. A fully
+covered exact tally prints `accepted tally <path> for <sha>` and the source run
+and attempt, then `skipped entire covered chain`. A refusal prints its reasons
+and `no whole-chain release evidence accepted; running the full original chain`.
+Legacy folder tally refusals retain `TALLY_COMMIT`, `TALLY_DIRTY`, `TALLY_SOURCE`,
+`TALLY_SHARD_MISSING`, `TALLY_SHARD_RED`, `TALLY_MERGE_EXIT`, `TALLY_FORGED`,
+`TALLY_SUITE_MISSING`, `TALLY_SPEC` and `TALLY_ABSENT`. Whole-chain source coverage
+refusals use `TALLY_COVERAGE` in the release reader.
+
+**What runs where.** `plan` resolves the verified push SHA or dispatched tag.
+`reuse` runs only for a resolved cut. `gate` runs under exactly
+`!cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true'`.
+`admit` reads the lookup result and the gate's actual result/verdict, including a
+skipped reused gate. `publish` reads only `needs.admit.outputs.ready == 'true'`.
+It checks out the resolved target, retains the dispatch HEAD/provenance guard,
+looks up publish-purpose proof again, fetches the corpus and downloads a tally
+only for a fresh gate. The unconditional named reader precedes all three packs
+and publications. A missing download reaches the reader's full fallback. A
+confirmation-only dispatch reaches `confirm` alone.
+
+The first actual cut after adoption is a separate report gate. It requires its
+own HQ-signed current-base release PR and must report both hosted reuse log
+lines, cut duration, and the real provenance attestations of all three names.
+Static controls and trace stubs do not satisfy that cut gate. The first authentic
+`tree-verdict/2` receipt is produced by the adoption PR's CI; a valid tree-proof
+hit remains unmeasured until that receipt exists. The adoption task itself
+performs no release or registry publication.
 
 ### Republishing a cut whose publish failed
 

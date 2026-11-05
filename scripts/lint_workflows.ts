@@ -7,6 +7,8 @@ import { PUBLISH_LIFECYCLE_HOOKS, selectStep, validatePublications, type StepSel
 export interface WorkflowDeclaration {
   path: string;
   heavyJobs: string[];
+  /** The one bounded cut-only activation, in core's release workflow. */
+  activation?: 'release-cut';
   guard?: { job: string; step: string; uses: string; sourceWorkflow: string; declaration?: string; declarationInput?: string };
   publicationReaders?: PublicationReader[];
   publishes?: ({
@@ -75,10 +77,19 @@ export function lintWorkflows(declarations: Declarations, read: (path: string) =
           sourceMatches = map(declared) && declared.workflow === g.sourceWorkflow;
         }
         const reuseGuard = `needs.${g?.job}.outputs.reused != 'true'`;
-        if (!g || !guard || guard.if !== undefined || guard['continue-on-error'] !== undefined || !active(lookup) ||
+        const plan = map(jobs.plan) ? jobs.plan : undefined;
+        const cutActivation = d.activation === 'release-cut' && d.path === '.github/workflows/release.yml' &&
+          g?.job === 'reuse' && heavy === 'gate' && !!plan && map(plan.outputs) &&
+          plan.outputs.publish === expr('steps.target.outputs.publish') &&
+          steps(plan).some(step => step.id === 'target' && active(step)) &&
+          !!guard && needs(guard, 'plan') && needs(job, 'plan') &&
+          condition(guard.if) === "needs.plan.outputs.publish == 'true'" &&
+          condition(job.if) === `!cancelled() && needs.plan.outputs.publish == 'true' && ${reuseGuard}`;
+        const activationValid = d.activation === undefined ? guard?.if === undefined &&
+          [reuseGuard, `always() && ${reuseGuard}`, `!cancelled() && ${reuseGuard}`].includes(condition(job.if)) : cutActivation;
+        if (!g || !guard || !activationValid || guard['continue-on-error'] !== undefined || !active(lookup) ||
           lookup?.uses !== g.uses || !sourceMatches ||
-          output !== expr(`steps.${g.step}.outputs.reused`) || !needs(job, g.job) ||
-          ![reuseGuard, `always() && ${reuseGuard}`, `!cancelled() && ${reuseGuard}`].includes(condition(job.if))) {
+          output !== expr(`steps.${g.step}.outputs.reused`) || !needs(job, g.job)) {
           error('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED', `${d.path} jobs.${heavy}`, 'declared heavy job needs a fail-closed tree-verdict guard');
         }
       }

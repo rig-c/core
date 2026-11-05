@@ -3,7 +3,13 @@
  *
  *     bun scripts/prepublish_gate.ts
  *
- * Always `bun run typecheck` and `bun run lint` first. Then one of two paths:
+ * The release workflow first verifies a current tree proof, or a complete
+ * exact-commit tally together with successful typecheck/lint/merge coverage.
+ * Accepted whole-chain evidence skips all three commands. Otherwise the
+ * original typecheck, lint and full selftest run once, in that order.
+ *
+ * Ordinary folder publication retains the original flow: typecheck and lint
+ * first, then one of two selftest paths:
  *
  *   - `RIGC_PREPUBLISH_TALLY` unset or empty: the full one-process selftest,
  *     `bun run selftest`, exactly what this script replaced.
@@ -21,8 +27,7 @@
  *     was refused and runs the full selftest, so the publish waits for the gate
  *     rather than skipping it.
  *
- * 🔒 This is not a way past the selftest, and there is deliberately no second
- * variable, flag or shortcut. The document is evidence that the full selftest
+ * The legacy document is evidence that the full selftest
  * already ran over exactly this commit, in the same workflow run, as the shards
  * and the merge whose verdict `ci.yml` and `release.yml` both read; the variable
  * points at that evidence, and the evidence is checked rather than believed.
@@ -38,11 +43,12 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /** The merged tally document's format word. */
 export const MERGED_TALLY_SPEC = 'selftest-merged/1';
 
-/** The variable that names the document. The only one this script reads. */
+/** The variable that names the legacy merged selftest document. */
 export const PREPUBLISH_TALLY_VARIABLE = 'RIGC_PREPUBLISH_TALLY';
 
 /** One shard as the merge read it off that shard's own document. */
@@ -231,19 +237,163 @@ function run(root: string, script: string): number {
   return ran.status ?? 1;
 }
 
-function main(): number {
-  const root = resolve(import.meta.dir, '..');
+export interface TallyCoverageContext {
+  repository: string;
+  runId: number;
+  attempt: number;
+  workflow: '.github/workflows/ci.yml' | '.github/workflows/release.yml';
+}
+
+type ApiObject = Record<string, unknown>;
+type ReadApi = (path: string) => Promise<ApiObject>;
+const object = (value: unknown): value is ApiObject => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/** Full-chain evidence is separate from the legacy document's selftest-only claim. */
+export async function coveredTallyDecision(
+  root: string, parsed: unknown, path: string, context: TallyCoverageContext, readApi: ReadApi,
+): Promise<TallyDecision> {
+  const exact = tallyDecision(parsed, path, treeOf(root));
+  if (!exact.accepted) return exact;
+  try {
+    const tally = parsed as MergedTally;
+    if (!/^[\w.-]+\/[\w.-]+$/.test(context.repository) || !Number.isSafeInteger(context.runId) || context.runId < 1 ||
+      !Number.isSafeInteger(context.attempt) || context.attempt < 1) throw new Error('source run identity is missing');
+    const source = Bun.YAML.parse(readFileSync(join(root, context.workflow), 'utf8')) as { jobs?: Record<string, { uses?: string }> };
+    const caller = context.workflow === '.github/workflows/ci.yml' ? 'selftest' : 'gate';
+    if (source.jobs?.[caller]?.uses !== './.github/workflows/selftest-shards.yml') throw new Error('source does not call the common gate');
+    const shards = Bun.YAML.parse(readFileSync(join(root, '.github/workflows/selftest-shards.yml'), 'utf8')) as {
+      jobs: {
+        shard: { name?: string; strategy?: { matrix?: Record<string, unknown> } };
+        test: { steps: Array<{ name?: string; run?: string; if?: unknown; 'continue-on-error'?: unknown }> };
+      };
+    };
+    const matrix = shards.jobs.shard.strategy?.matrix;
+    const legs = matrix?.shard;
+    if (!matrix || Object.keys(matrix).length !== 1 || !Array.isArray(legs) || legs.length !== tally.n ||
+      new Set(legs).size !== legs.length || legs.some(value => !Number.isInteger(value) || value < 1 || value > tally.n) ||
+      shards.jobs.shard.name !== 'shard ${{ matrix.shard }}') throw new Error('source static shard coverage differs from the tally');
+    const steps = shards.jobs.test.steps;
+    const merge = steps.findIndex(step => step.run?.startsWith('bun selftest.ts --merge '));
+    const checks = ['bun run typecheck', 'bun run lint'].map(command => {
+      const matches = steps.filter(step => step.run === command);
+      const step = matches[0];
+      if (matches.length !== 1 || !step || step.if !== undefined || step['continue-on-error'] !== undefined ||
+        steps.indexOf(step) >= merge) throw new Error(`${command} is not unconditional before the merge`);
+      return step.name ?? `Run ${command}`;
+    });
+    if (merge < 0) throw new Error('semantic merge is absent');
+    const apiRoot = `/repos/${context.repository}/actions/runs/${context.runId}`;
+    const run = await readApi(apiRoot);
+    if (run.id !== context.runId || run.run_attempt !== context.attempt || run.path !== context.workflow || run.head_sha !== tally.commit ||
+      !object(run.repository) || run.repository.full_name !== context.repository ||
+      !object(run.head_repository) || run.head_repository.full_name !== context.repository ||
+      !(run.status === 'completed' && run.conclusion === 'success' || run.status === 'in_progress' && run.conclusion === null)) {
+      throw new Error('source run/attempt/workflow/commit differs or is unsuccessful');
+    }
+    const response = await readApi(`${apiRoot}/attempts/${context.attempt}/jobs?per_page=100`);
+    if (!Array.isArray(response.jobs) || response.total_count !== response.jobs.length || response.jobs.length > 100) throw new Error('job inventory is incomplete');
+    const jobs = response.jobs.filter(object);
+    const expected = [...legs.map(value => `${caller} / shard ${String(value)}`), `${caller} / test`];
+    for (const name of expected) {
+      const found = jobs.filter(job => job.name === name);
+      if (found.length !== 1 || found[0].run_id !== context.runId || found[0].run_attempt !== context.attempt ||
+        found[0].head_sha !== tally.commit || found[0].status !== 'completed' || found[0].conclusion !== 'success') {
+        throw new Error(`missing or unsuccessful source job ${name}`);
+      }
+    }
+    const mergeJob = jobs.find(job => job.name === `${caller} / test`);
+    const actual = Array.isArray(mergeJob?.steps) ? mergeJob.steps.filter(object) : [];
+    const mergeName = steps[merge].name ?? `Run ${steps[merge].run}`;
+    for (const name of [...checks, mergeName]) {
+      const found = actual.filter(step => step.name === name);
+      if (found.length !== 1 || found[0].status !== 'completed' || found[0].conclusion !== 'success') throw new Error(`source step ${name} did not execute successfully`);
+    }
+    const latest = await readApi(apiRoot);
+    if (latest.run_attempt !== context.attempt || latest.head_sha !== tally.commit || latest.path !== context.workflow) {
+      throw new Error('source run changed during verification');
+    }
+    const unchanged = tallyDecision(parsed, path, treeOf(root));
+    if (!unchanged.accepted) return unchanged;
+    return { accepted: true, line: `${exact.line}; typecheck, lint and merge covered by run ${context.runId} attempt ${context.attempt}` };
+  } catch (error) {
+    return { accepted: false, reasons: [`TALLY_COVERAGE: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+}
+
+async function verifiedTreeProof(root: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (!env.TREE_VERDICT_TOOLS || !env.TREE_VERDICT_PATH) return false;
+  try {
+    const declarationModule = await import(pathToFileURL(join(env.TREE_VERDICT_TOOLS, 'declaration.mjs')).href) as {
+      readDeclaration: (path: string) => { covered: boolean; workflow: string; gate: string };
+    };
+    const helper = await import(pathToFileURL(join(env.TREE_VERDICT_TOOLS, 'publish.mjs')).href) as {
+      publishCli: (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
+    };
+    const declaration = declarationModule.readDeclaration(join(root, 'scripts/tree-verdict.json'));
+    return declaration.covered && await helper.publishCli(['--verdict', env.TREE_VERDICT_PATH,
+      '--workflow', declaration.workflow, '--gate', declaration.gate, '--checkout', root], env) === 0;
+  } catch { return false; }
+}
+
+interface PrepublishServices {
+  run?: (root: string, script: string) => number;
+  coverage?: (root: string, parsed: unknown, path: string, env: NodeJS.ProcessEnv) => Promise<TallyDecision>;
+}
+
+async function releaseTallyCoverage(root: string, parsed: unknown, path: string, env: NodeJS.ProcessEnv): Promise<TallyDecision> {
+  const readApi: ReadApi = async route => {
+    const response = await fetch(`${env.GITHUB_API_URL ?? 'https://api.github.com'}${route}`, {
+      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${env.GITHUB_TOKEN ?? ''}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) throw new Error(`source API HTTP ${response.status}`);
+    const value: unknown = await response.json();
+    if (!object(value)) throw new Error('source API returned no object');
+    return value;
+  };
+  return coveredTallyDecision(root, parsed, path, { repository: env.GITHUB_REPOSITORY ?? '',
+    runId: Number(env.GITHUB_RUN_ID), attempt: Number(env.GITHUB_RUN_ATTEMPT), workflow: '.github/workflows/release.yml' }, readApi);
+}
+
+/** The normal entry uses this checkout. A probe may supply a separate read-only validation root. */
+export async function runPrepublish(root: string, env: NodeJS.ProcessEnv = process.env, services: PrepublishServices = {}): Promise<number> {
+  const execute = services.run ?? run;
+  const release = env.GITHUB_ACTIONS === 'true' && !!env.GITHUB_REPOSITORY &&
+    env.GITHUB_WORKFLOW_REF?.startsWith(`${env.GITHUB_REPOSITORY}/.github/workflows/release.yml@`) &&
+    ['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME ?? '');
+  if (release) {
+    if (await verifiedTreeProof(root, env)) {
+      console.log('prepublish: accepted current tree proof; skipped typecheck, lint and selftest');
+      return 0;
+    }
+    const named = env[PREPUBLISH_TALLY_VARIABLE];
+    if (named) {
+      const path = resolve(named), parsed = readTally(path);
+      const decision = isDecision(parsed) ? parsed : await (services.coverage ?? releaseTallyCoverage)(root, parsed, path, env);
+      if (decision.accepted) {
+        console.log(`prepublish: ${decision.line}; skipped entire covered chain`);
+        return 0;
+      }
+      for (const reason of decision.reasons) console.error(`prepublish: ${reason}`);
+    }
+    console.log('prepublish: no whole-chain release evidence accepted; running the full original chain');
+    for (const script of ['typecheck', 'lint', 'selftest']) {
+      const code = execute(root, script);
+      if (code !== 0) return code;
+    }
+    return 0;
+  }
   for (const script of ['typecheck', 'lint']) {
-    const code = run(root, script);
+    const code = execute(root, script);
     if (code !== 0) {
       console.error(`prepublish: \`bun run ${script}\` exited ${code}, so nothing is published`);
       return code;
     }
   }
-  const named = process.env[PREPUBLISH_TALLY_VARIABLE];
+  const named = env[PREPUBLISH_TALLY_VARIABLE];
   if (named === undefined || named === '') {
     console.log(`prepublish: ${PREPUBLISH_TALLY_VARIABLE} is not set, so the full selftest runs`);
-    return run(root, 'selftest');
+    return execute(root, 'selftest');
   }
   const path = resolve(named);
   const read = readTally(path);
@@ -254,7 +404,7 @@ function main(): number {
   }
   console.error(`prepublish: the tally ${PREPUBLISH_TALLY_VARIABLE} names was NOT accepted, so the full selftest runs:`);
   for (const reason of decision.reasons) console.error(`  ${reason}`);
-  return run(root, 'selftest');
+  return execute(root, 'selftest');
 }
 
-if (import.meta.main) process.exit(main());
+if (import.meta.main) process.exit(await runPrepublish(resolve(import.meta.dir, '..')));

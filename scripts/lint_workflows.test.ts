@@ -1,6 +1,60 @@
 import { test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { lintWorkflows, type Declarations } from './lint_workflows.ts';
 import { workflowFixture } from '../.github/actions/tree-verdict/fixtures.mjs';
+
+test('the real complete core CI and release files pass the coverage compiler and workflow lint', () => {
+  const root = resolve(import.meta.dir, '..');
+  const declaration = JSON.parse(readFileSync(join(root, 'scripts/lint_workflows.declarations.json'), 'utf8')) as Declarations;
+  expect(declaration.workflows.some(workflow => workflow.path === '.github/workflows/ci.yml')).toBe(true);
+  expect(declaration.workflows.some(workflow => workflow.path === '.github/workflows/release.yml')).toBe(true);
+  expect(lintWorkflows(declaration, path => readFileSync(join(root, path), 'utf8'))).toEqual([]);
+});
+
+function releaseActivationFixture() {
+  const jobs: Record<string, Record<string, unknown>> = {
+    plan: { outputs: { publish: '${{ steps.target.outputs.publish }}' },
+      steps: [{ id: 'target', run: 'echo "publish=true" >> "$GITHUB_OUTPUT"' }] },
+    reuse: { needs: 'plan', if: "${{ needs.plan.outputs.publish == 'true' }}",
+      outputs: { reused: '${{ steps.lookup.outputs.reused }}' },
+      steps: [{ id: 'lookup', uses: './.github/actions/tree-verdict', with: { workflow: '.github/workflows/ci.yml' } }] },
+    gate: { needs: ['plan', 'reuse'],
+      if: "${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}",
+      uses: './.github/workflows/selftest-shards.yml' },
+  };
+  const declaration: Declarations = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{
+    path: '.github/workflows/release.yml', heavyJobs: ['gate'], activation: 'release-cut',
+    guard: { job: 'reuse', step: 'lookup', uses: './.github/actions/tree-verdict', sourceWorkflow: '.github/workflows/ci.yml' },
+  }] };
+  return { jobs, declaration, read: () => Bun.YAML.stringify({ on: { push: { branches: ['main'] } }, jobs }) };
+}
+
+test('release-cut admits exactly the cut-only fail-closed heavy activation', () => {
+  const f = releaseActivationFixture();
+  expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+});
+
+test('release-cut refuses changed activation, dependency, output and ignored failure by name', () => {
+  const plants: Array<(jobs: Record<string, Record<string, unknown>>) => void> = [
+    jobs => { jobs.gate.if = "${{ always() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}"; },
+    jobs => { jobs.gate.if = "${{ !cancelled() && needs.plan.outputs.publish == 'true' || needs.reuse.outputs.reused != 'true' }}"; },
+    jobs => { jobs.gate.if = "${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' && true }}"; },
+    jobs => { jobs.gate.needs = ['reuse']; },
+    jobs => { jobs.reuse.needs = []; },
+    jobs => { delete jobs.reuse.if; },
+    jobs => { jobs.reuse['continue-on-error'] = true; },
+    jobs => { jobs.plan.outputs = { publish: '${{ steps.other.outputs.publish }}' }; },
+    jobs => { jobs.plan.steps = [{ id: 'target', if: 'false', run: 'true' }]; },
+    jobs => { jobs.reuse.steps = [{ id: 'lookup', if: 'false', uses: './.github/actions/tree-verdict', with: { workflow: '.github/workflows/ci.yml' } }]; },
+  ];
+  for (const plant of plants) {
+    const f = releaseActivationFixture();
+    plant(f.jobs);
+    expect(lintWorkflows(f.declaration, f.read).join('\n')).toContain('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED');
+  }
+});
+
 function fixture(suite = 'selftest') {
   const declaration: Declarations = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{
     path: '.github/workflows/ci.yml', heavyJobs: ['suite'],

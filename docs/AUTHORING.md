@@ -383,6 +383,7 @@ What the flags mean:
 | `--extremes` | `render` only: add `extremes.json` and an `EXTREMES` line per set; a moving set with comparable geometry and readable images also gets a native six-panel `extremes.png`: setup, geometry-pair min/max and three premultiplied RGBA diffs with a legend. Per-channel extrema are independent of that geometry pair; valid channels survive geometry/image SKIPs, and channel refusals are named separately. Still or uncomparable geometry is a named SKIP, with no invented pair or PNG; observation failures do not change a successful render's exit status. Supports `--slot`/`--hide` on both posers, on the whole rig's viewport. Without the flag, no extremes observations are added — **§8.11** |
 | `--folds` | `render` only: also read which mesh triangles **fold** — turn over against the setup pose — and write a `folds.json` into each frame directory: per mesh, the frames with a folded triangle, the worst frame's count and which triangles, by index, with their world box and setup-pose area. One printed line per mesh that folds; a triangle degenerate or inverted at the setup pose is said once and never counted. A reading, not a gate. Every other file is byte for byte what the render writes without it, `geometry.json` included. Refused with `--slot`/`--hide`, for `--geometry`'s reason — **§8.3** |
 | `--pass-through` | `render` only: `<cloth>:<leg>[,<cloth>:<leg>…]` — also read where each cloth slot **passes through** its leg slot, and write a `pass-through.json` into each frame directory: the frames where the cloth draws over the leg and its drawn side lies inside the leg's drawn outline by 2 steps or more, each with the depth and the world box. One printed line per pair, and one per frame that passes through. The first name must draw over the second for a frame to be read — the declared order, never both. A reading, not a gate. Every other file is byte for byte what the render writes without it. An unknown slot, a slot that draws on no frame, a malformed list and a pair named twice are refused by name, and so is `--slot`/`--hide` beside it — **§8.5** |
+| `--seam-cells` | `render` only, with `--seam`: add exact `cells` lists to `gapOpen`/`gapCovered` hits (including `worst`), with setup-pose top and underlying slot names at the same world cell. Without `--seam` it is refused before output. No effect on the counts — **§8.8** |
 | `--seam` | `render` only: `<slot>:<slot>[,<slot>:<slot>…]` — also read, for each pair, where the two drawings **stop meeting**, and write a `seam.json` into each frame directory: per pair, the frames with a **gap** (background inside the joint, where the two covered together at the setup pose) and the frames with a **ghost** (the visible overlap band of one showing where, from its partner's point of view, nothing was drawn), plus `exposureA`/`exposureB` for each named slot’s positive-alpha drawing on otherwise empty skeleton background, each with its cell count, area and world box, and as runs of frames with their times. One printed line per pair; a pair whose drawings share no cell at the setup pose is a **SKIP**. A reading, not a gate: the exit status never moves. Every other file is byte for byte what the render writes without it. An unknown slot, a slot with itself, a slot that draws on no frame, a malformed list and a pair named twice in either order are refused by name, and so is `--slot`/`--hide` beside it — **§8.8** |
 | `--overlaps` | `render` only: also read **which slot each frame drew over which**, and write an `overlaps.json` into each frame directory: per frame, every pair of slots where the slot drawn later covers pixels the earlier one drew (drawn at 128 of 255 or more, on the frames' own pixels), with the pixel count and the pixel box. One `OVERLAP` line per pair that covers anything — its frames as runs, how many of the set, and the most pixels and the frame of them — and one line counting the pairs that are layering the motion does not move. Each frame with a moving pair also gets an **outline plate**, `overlaps-f<NNNN>.png`: every slot in a moving pair as its contour in its own colour, dashed where a slot drawn later covers it, named at its top. The render reports what was drawn; who should be in front is the author's, and the draw-order key in the motion spec is the remedy. A reading, not a gate. Every other file is byte for byte what the render writes without it, and `frames.json` gains each set's `overlaps` record. Refused beside `--slot`/`--hide` — **§8.9** |
 | `--angle-range` | `render` only: `<bone>:<relative-to>[,<bone>:<relative-to>…]` — also read, for each pair, the range of the first bone's world direction against the second's over each set's frames, and print one line per pair per set: the lowest and the highest angle in degrees, the span, and the frame each was first reached on. A reading, not a gate: nothing is written, and every file is the bytes the render writes without it. An unknown bone (with the bones there are), a bone against itself, a malformed list and a pair named twice are refused by name, and so is a bone with no direction on a frame — **§8.7** |
@@ -9395,6 +9396,33 @@ block carries the definitions above in words.
 | hit `cell` | number | world units | a cell's side |
 | hit `area` | number | world units² | `px × cell²` |
 | hit `box` | `[minX, minY, maxX, maxY]` | world units, y up | the counted cells' whole squares, in Spine world |
+
+**Exact cells, opt-in.** Add `--seam-cells` beside `--seam` to retain the
+cells counted by the existing gap classifier. Only `gapOpen` and `gapCovered`
+hits gain `cells`; `gap`, `ghost` and exposure hits keep their old shape. Each
+entry is `{ x, y, setupTop, setupUnder }`: `x,y` are the cell **centre** in world
+units, y up; the hit's `cell` gives the square's side. Lists are in descending
+`y`, then ascending `x` order (top row first, left to right), with no duplicates.
+Every nonempty hit has `cells.length === px`; absent hits still mean zero and
+SKIP pairs remain unmeasured. `worst` carries the same list as its frame hit.
+
+`setupTop` is the topmost slot whose setup drawing emits positive rendered alpha
+at that **same world cell**, and `setupUnder` is the next distinct covering slot
+beneath it in setup draw order. Each is a slot name or `null` if absent. All
+slots participate, including third slots, faint alpha, texture holes and clipped
+fragments; multiple fragments of one slot count as one layer. These are setup
+layers, not the current frame's cover, not spatial neighbors, and not a cell
+carried back by the seam's inverse attachment maps. A currently open cell can
+therefore name setup art; a cell beyond all setup art has two null names.
+
+This is an additive opt-in extension of **`rigc-seam/1`**: readers ignoring
+unknown hit keys retain every existing number and meaning. Exact-object readers
+must opt into the new shape. With the flag absent no setup attribution is sampled
+or rasterized and the sidecar bytes remain unchanged. With it present, setup is
+sampled lazily once per recipe/skin and its rendered-alpha layers are cached per
+distinct seam cell side across pairs and animation sets; only listed cells query
+the cache. Determinism controls compare two complete flagged renders, not just
+list lengths.
 
 A downstream warning is a projection of this file and needs nothing re-measured:
 one span of one kind is `{ pair: "<a>|<b>", frames: span.frames, times:

@@ -145385,6 +145385,7 @@ function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slo
 
 import { carry, SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
 import { seamCellControls } from './fixtures/seam_controls.ts';
+import { seamListControls, seamListFaults } from './fixtures/seam_list_controls.ts';
 import { seamContactControls } from './fixtures/seam_contact_controls.ts';
 import { seamContactRenderControls } from './fixtures/seam_contact_render.ts';
 
@@ -145736,6 +145737,7 @@ function runSeamCoverageControls(work: string): number {
 function runSeamSuite(): number {
   console.log('\n── seam: where two slots that meet stop meeting (issue #1456) ──');
   let bad = 0;
+  for (const row of seamListControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1695: exact opt-in cells, setup layers and unchanged default bytes');
   for (const row of seamCellControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1656: visibility, local material correspondence and whole-slot background exposure');
   for (const row of seamContactControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1659: raw swept gaps do not establish material separation');
   const say = (name: string, ok: boolean, detail: string, why: string): void => {
@@ -145763,9 +145765,11 @@ function runSeamSuite(): number {
   const seamed = render(built, 'seam', ['--seam', flag]);
   const again = render(built, 'again', ['--seam', flag]);
   const spine = render(built, 'spine-poser', ['--seam', flag, '--poser', 'spine']);
+  const listed = render(built, 'listed', ['--seam', flag, '--seam-cells']);
+  const listedAgain = render(built, 'listed-again', ['--seam', flag, '--seam-cells']);
   const plain = render(built, 'plain', []);
   const skipped = render(apartBuilt, 'skip', ['--seam', 'skirt:leg']);
-  for (const [name, run] of [['--seam', seamed], ['--seam again', again], ['--seam --poser spine', spine], ['plain', plain], ['--seam, the leg beside the skirt', skipped]] as const) {
+  for (const [name, run] of [['--seam', seamed], ['--seam again', again], ['--seam --poser spine', spine], ['--seam-cells', listed], ['--seam-cells again', listedAgain], ['plain', plain], ['--seam, the leg beside the skirt', skipped]] as const) {
     if (run !== null && run.status !== 0) pre.push(`render ${name} exited ${String(run.status)}: ${run.stderr.trim().slice(0, 300)}`);
   }
   const sets = ['swing', 'swing_behind', 'rest', 'squash', 'turn', 'apart', 'shift', 'rigid'];
@@ -145946,6 +145950,24 @@ function runSeamSuite(): number {
       probeDetail(ok, probes, `every set's ${SEAM_FILE}: the core's render, --poser spine's render and seamsOf over spine-core's frames and rest table read the same, byte for byte`),
       'issue #1456 Bar 2: the figures come from the posed vertices and the atlas alpha, which both posers hand over — two answers would be a reading of the poser',
     );
+  }
+
+  {
+    const faults = [...pre];
+    let hits = 0;
+    for (const set of sets) {
+      const a = fileOf(dir('listed'), set), b = fileOf(dir('listed-again'), set);
+      if (a === null || b === null) { faults.push(`${set}: missing listed sidecar`); continue; }
+      if (!readFileSync(join(dir('listed'), set, SEAM_FILE)).equals(readFileSync(join(dir('listed-again'), set, SEAM_FILE)))) faults.push(`${set}: listed render bytes differ`);
+      for (const pair of a.pairs) {
+        faults.push(...seamListFaults(pair));
+        hits += pair.gapOpen.frames.length + pair.gapCovered.frames.length;
+      }
+    }
+    if (hits === 0) faults.push('no nonempty gap hits tested');
+    say('SE57_RENDERED_LISTS_EQUAL_COUNTS_ON_EVERY_FRAME', faults.length === 0, probeDetail(faults.length === 0, faults, `${sets.length} sets, ${hits} partition hits checked; two flagged renders byte-identical`), 'issue #1695 bars 1 and 4: all rendered partition hits have exact sorted lists');
+    const refused = runCli(['render', '--candidate', built, '--seam-cells', '--out', dir('list-refused')]);
+    say('SE58_LIST_FLAG_REQUIRES_A_PAIR', refused.status === 2 && refused.stderr.includes('--seam-cells needs --seam') && !existsSync(dir('list-refused')), `exit ${refused.status}: ${refused.stderr.trim()}`, 'a detail flag without a pair is refused before output');
   }
 
   // SE07 — deterministic: a second run writes the same bytes.

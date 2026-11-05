@@ -1,0 +1,236 @@
+{
+  "schema": "tree-verdict-publication-measurement/1",
+  "scope": "Prior macOS measurement; not hosted Actions or registry provenance verification",
+  "node": "v22.23.4",
+  "npmVersions": [
+    "10.9.9",
+    "12.2.2"
+  ],
+  "registry": "ephemeral 127.0.0.1 HTTP only",
+  "receipts": [
+    {
+      "path": "lifecycle/receipts.json",
+      "sha256": "d7295d34e3db8319ca6eda012148cd78f441c92ded4651970aa46418684b399d"
+    },
+    {
+      "path": "lifecycle/http-put-receipts.json",
+      "sha256": "4fc967da970dc1aa0c55077eb8193f26611a11d537de05c736a722ea424b021f"
+    },
+    {
+      "path": "pack-controls/receipts.json",
+      "sha256": "6aba21cbb72a522d98448488d5a7b9f2d4dcbad12e54e510e6f65178558020d4"
+    },
+    {
+      "path": "npm-toolchain.json",
+      "sha256": "1344cca409be084a74ae99f46be121dcbd2c4445a5fe82a1489771748cb48c2e"
+    }
+  ],
+  "rows": [
+    {
+      "label": "installed-folder-publish",
+      "exit": 0,
+      "seconds": 0.582,
+      "markers": [
+        "prepublishOnly",
+        "prepack",
+        "prepare",
+        "postpack",
+        "publish",
+        "postpublish"
+      ],
+      "puts": 1,
+      "argvSha256": "ec69e23b2fcafc52611f389d38e44f4eb969aff9df59c6fd744eb9dbf608fc67"
+    },
+    {
+      "label": "installed-pack",
+      "exit": 0,
+      "seconds": 0.295,
+      "markers": [
+        "prepack",
+        "prepare",
+        "postpack"
+      ],
+      "puts": 0,
+      "argvSha256": "cd0ca8f43fc41da70367f8af9419bf7c366e5621807591f524f739babeb4522c"
+    },
+    {
+      "label": "installed-tarball-publish",
+      "exit": 0,
+      "seconds": 0.184,
+      "markers": [],
+      "puts": 1,
+      "argvSha256": "0e1c7576a8a88003f656373623c0b50c2fb4774349967f29d48654316b2a2c2a"
+    },
+    {
+      "label": "installed-pack-ignore",
+      "exit": 0,
+      "seconds": 0.214,
+      "markers": [
+        "prepare"
+      ],
+      "puts": 0,
+      "argvSha256": "3ecce35902a352ba75b1109b5c0a54eeb2ebc53312b7c96b7bf78a04c39f92a7"
+    },
+    {
+      "label": "installed-pack-consumer-ignore-shell",
+      "exit": 0,
+      "seconds": 0.434,
+      "markers": [],
+      "puts": 0,
+      "argvSha256": "5b1a3835bbc873f89d66a0d9d43823ff20b9ccd4051a6832bd0a21503bd6b451"
+    },
+    {
+      "label": "installed-folder-failing-prepublish",
+      "exit": 23,
+      "seconds": 0.209,
+      "markers": [],
+      "puts": 0,
+      "argvSha256": "ec69e23b2fcafc52611f389d38e44f4eb969aff9df59c6fd744eb9dbf608fc67"
+    },
+    {
+      "label": "installed-existing-tarball-failing-folder-prepublish",
+      "exit": 0,
+      "seconds": 0.181,
+      "markers": [],
+      "puts": 1,
+      "argvSha256": "0e1c7576a8a88003f656373623c0b50c2fb4774349967f29d48654316b2a2c2a"
+    },
+    {
+      "label": "target-latest-folder-publish",
+      "exit": 0,
+      "seconds": 0.531,
+      "markers": [
+        "prepublishOnly",
+        "prepack",
+        "prepare",
+        "postpack",
+        "publish",
+        "postpublish"
+      ],
+      "puts": 1,
+      "argvSha256": "09c2d36fbe2b6309532049dd8d67495d8f51bec124495866837348df2b3c102a"
+    },
+    {
+      "label": "target-latest-pack",
+      "exit": 0,
+      "seconds": 0.325,
+      "markers": [
+        "prepack",
+        "prepare",
+        "postpack"
+      ],
+      "puts": 0,
+      "argvSha256": "ecd38200cf255d8ead9cf7f78b6977c44b466981415aaab6577ccc2ab7d338d0"
+    },
+    {
+      "label": "target-latest-tarball-publish",
+      "exit": 0,
+      "seconds": 0.207,
+      "markers": [],
+      "puts": 1,
+      "argvSha256": "c28a800650ff35512e4aa26544e49b7a443516be88e3f3ba9b540cf01bb4eab2"
+    },
+    {
+      "label": "target-latest-pack-ignore",
+      "exit": 0,
+      "seconds": 0.195,
+      "markers": [],
+      "puts": 0,
+      "argvSha256": "e5786c74bdc80c0d69502e2ac2513876874936368ceebcc81631036ba344185f"
+    },
+    {
+      "label": "target-latest-pack-consumer-ignore-shell",
+      "exit": 0,
+      "seconds": 0.194,
+      "markers": [],
+      "puts": 0,
+      "argvSha256": "1f61ac8bd7c1d13cd34cdffff1888dc71b44458d418728dae5b8dc0387b62239"
+    },
+    {
+      "label": "target-latest-folder-failing-prepublish",
+      "exit": 23,
+      "seconds": 0.226,
+      "markers": [],
+      "puts": 0,
+      "argvSha256": "09c2d36fbe2b6309532049dd8d67495d8f51bec124495866837348df2b3c102a"
+    },
+    {
+      "label": "target-latest-existing-tarball-failing-folder-prepublish",
+      "exit": 0,
+      "seconds": 0.208,
+      "markers": [],
+      "puts": 1,
+      "argvSha256": "c28a800650ff35512e4aa26544e49b7a443516be88e3f3ba9b540cf01bb4eab2"
+    },
+    {
+      "label": "installed-parts-absolute-ignore",
+      "exit": 0,
+      "seconds": 0.274,
+      "markers": [
+        "prepare"
+      ],
+      "puts": 0,
+      "argvSha256": "2b3cb839e35a14bed687ee1682df69607233f816ad98a93476c094215bf2b61c"
+    },
+    {
+      "label": "installed-failing-prepack",
+      "exit": 24,
+      "seconds": 0.189,
+      "markers": [
+        "prepack"
+      ],
+      "puts": 0,
+      "argvSha256": "d95c86a3a38704206cd2e93322ea655df578e0f45bd2b258efc4d8433586e629"
+    },
+    {
+      "label": "installed-failing-prepare",
+      "exit": 24,
+      "seconds": 0.233,
+      "markers": [
+        "prepack",
+        "prepare"
+      ],
+      "puts": 0,
+      "argvSha256": "eaa2a0dab64c8d679023ee506ead55b0e0524c5284c2cb17b593e1ffb6dc3f99"
+    },
+    {
+      "label": "target-latest-parts-absolute-ignore",
+      "exit": 0,
+      "seconds": 0.271,
+      "markers": [],
+      "puts": 0,
+      "argvSha256": "4d85c1d2389208268af390ae9e3b7dc77cd79ea929a80d81b3b269297dd04238"
+    },
+    {
+      "label": "target-latest-failing-prepack",
+      "exit": 24,
+      "seconds": 0.215,
+      "markers": [
+        "prepack"
+      ],
+      "puts": 0,
+      "argvSha256": "a1604bb619d00dc926b3aaaecc8f1ca0280a3cde76929350abb9bd5b2ebb77d7"
+    },
+    {
+      "label": "target-latest-failing-prepare",
+      "exit": 24,
+      "seconds": 0.255,
+      "markers": [
+        "prepack",
+        "prepare"
+      ],
+      "puts": 0,
+      "argvSha256": "4569a63039305726df0f3fae5de131d10de6dc41ed510807fcb9322b5fb99869"
+    }
+  ],
+  "tarballs": [
+    {
+      "npm": "10.9.9",
+      "sha256": "ff3a7ba8b1e0bccc42d86bf0fa5b468f2ae5d400df2041441eef20ae02028f12"
+    },
+    {
+      "npm": "12.2.2",
+      "sha256": "ab839fb9c838bd119721449b320c35cf1540205b48a0b33b65c8ddf8215eb1eb"
+    }
+  ]
+}

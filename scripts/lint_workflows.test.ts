@@ -33,6 +33,89 @@ test('WFL001 planted default-branch heavy job without guard is red', () => {
   expect(lintWorkflows(f.declaration, f.read).join('')).toContain('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED');
   console.log('PLANT WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED: exit=1; unguarded heavy rejected=1');
 });
+
+function partsMergeFixture(prefix = 'always() && ') {
+  const f = fixture();
+  f.declaration.workflows[0].heavyJobs = ['test'];
+  f.declaration.workflows[0].publishes = [];
+  // rig-c/parts f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950 jobs.test,
+  // with only the adoption guard dependency and condition added.
+  const doc = { on: f.doc.on, jobs: {
+    'tree-verdict': f.doc.jobs['tree-verdict'],
+    test: {
+      needs: ['shard', 'tree-verdict'],
+      if: `\${{ ${prefix}needs.tree-verdict.outputs.reused != 'true' }}`,
+      'runs-on': 'ubuntu-latest', 'timeout-minutes': 25,
+      steps: [
+        { uses: 'actions/checkout@v4' },
+        { uses: 'oven-sh/setup-bun@v2' },
+        { run: 'bun install --frozen-lockfile' },
+        { name: 'Check README scope and planted failures', run: 'bun run check:readme' },
+        { run: 'bun run typecheck' },
+        { run: 'bun run lint' },
+        { uses: 'actions/download-artifact@v4', with: {
+          pattern: 'selftest-shard-*', path: 'shards', 'merge-multiple': true,
+        } },
+        { name: 'Merge the shards into one selftest run', run: 'bun selftest.ts --merge shards' },
+      ],
+    },
+  } };
+  return { ...f, doc, read: () => Bun.YAML.stringify(doc) };
+}
+
+test('WFL001 parts merge accepts exactly the three guarded status forms', () => {
+  for (const prefix of ['', 'always() && ', '!cancelled() && ']) {
+    const f = partsMergeFixture(prefix);
+    expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+    // The bare expression is also valid without an Actions wrapper.
+    f.doc.jobs.test.if = f.doc.jobs.test.if.slice(3, -2).trim();
+    expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+  }
+});
+
+test('WFL001 parts merge refuses every extra or alternative boolean clause by name', () => {
+  const guard = "needs.tree-verdict.outputs.reused != 'true'";
+  for (const expression of [
+    `always() || ${guard}`, `!cancelled() || ${guard}`, `success() && ${guard}`,
+    `${guard} && always()`, `always() && ${guard} && true`,
+    `!cancelled() && ${guard} || true`, `${guard} || false`,
+    "always() && needs.other.outputs.reused != 'true'",
+  ]) {
+    const f = partsMergeFixture();
+    f.doc.jobs.test.if = `\${{ ${expression} }}`;
+    expect(lintWorkflows(f.declaration, f.read)).toEqual([
+      'WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED: .github/workflows/ci.yml jobs.test: declared heavy job needs a fail-closed tree-verdict guard',
+    ]);
+  }
+});
+
+test('WFL001 always conjunction dispatches merge for missing or empty runtime reuse output', () => {
+  const f = partsMergeFixture();
+  expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+  const merge = f.doc.jobs.test.steps.at(-1);
+  expect(merge?.run).toBe('bun selftest.ts --merge shards');
+  for (const output of [undefined, '', 'false', 'true']) {
+    // Execute the fixture's actual accepted expression with the Actions missing
+    // string value and status function supplied. This models job selection,
+    // including failed shard needs; it does not run the parts selftest.
+    const expression = f.doc.jobs.test.if.slice(3, -2).replace(
+      'needs.tree-verdict.outputs.reused', JSON.stringify(output ?? ''),
+    );
+    const selected = new Function('always', `return (${expression});`)(() => true);
+    const dispatched = selected ? [merge?.run] : [];
+    expect(dispatched).toEqual(output === 'true' ? [] : ['bun selftest.ts --merge shards']);
+  }
+});
+
+test('WFL001 status conjunction still requires the declared output and direct guard dependency', () => {
+  const missingOutput = partsMergeFixture();
+  missingOutput.doc.jobs['tree-verdict'].outputs.reused = '';
+  expect(lintWorkflows(missingOutput.declaration, missingOutput.read).join('')).toContain('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED');
+  const missingDependency = partsMergeFixture('!cancelled() && ');
+  missingDependency.doc.jobs.test.needs = ['shard'];
+  expect(lintWorkflows(missingDependency.declaration, missingDependency.read).join('')).toContain('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED');
+});
+
 test('WFL002 planted npm publish lifecycle without passed verdict is red', () => {
   const f = fixture(); f.doc.jobs.publish.if = '${{ always() }}';
   expect(lintWorkflows(f.declaration, f.read).join('')).toContain('WFL002_PUBLISH_SUITE_WITHOUT_VERDICT');
@@ -103,9 +186,12 @@ test('real lint CLI positive and named red plants report actual exits', async ()
   const { fileURLToPath } = await import('node:url');
   const { spawnSync } = await import('node:child_process');
   if (!process.env.TMPDIR) throw new Error('dedicated TMPDIR required');
-  for (const plant of ['positive', 'heavy', 'publish', 'omitted']) {
+  for (const plant of ['positive', 'always', 'uncancelled', 'or', 'heavy', 'publish', 'omitted']) {
     const f = fixture(), root = mkdtempSync(join(process.env.TMPDIR, 'workflow-cli-'));
     if (plant === 'heavy') f.doc.jobs.suite.if = '${{ always() }}';
+    if (plant === 'always') f.doc.jobs.suite.if = "${{ always() && needs.tree-verdict.outputs.reused != 'true' }}";
+    if (plant === 'uncancelled') f.doc.jobs.suite.if = "${{ !cancelled() && needs.tree-verdict.outputs.reused != 'true' }}";
+    if (plant === 'or') f.doc.jobs.suite.if = "${{ always() || needs.tree-verdict.outputs.reused != 'true' }}";
     if (plant === 'publish') f.doc.jobs.publish.if = '${{ always() }}';
     if (plant === 'omitted') f.declaration.workflows[0].publishes = [];
     mkdirSync(join(root, '.github/workflows'), { recursive: true });
@@ -114,10 +200,11 @@ test('real lint CLI positive and named red plants report actual exits', async ()
     const config = join(root, 'declarations.json'); writeFileSync(config, JSON.stringify(f.declaration));
     const result = spawnSync(process.execPath, [fileURLToPath(new URL('./lint_workflows.ts', import.meta.url)), config, root], { encoding: 'utf8' });
     writeFileSync(join(root, 'stdout.log'), result.stdout); writeFileSync(join(root, 'stderr.log'), result.stderr);
-    expect(result.status).toBe(plant === 'positive' ? 0 : 1);
-    if (plant === 'heavy') expect(result.stderr).toContain('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED');
+    const accepted = ['positive', 'always', 'uncancelled'].includes(plant);
+    expect(result.status).toBe(accepted ? 0 : 1);
+    if (plant === 'heavy' || plant === 'or') expect(result.stderr).toContain('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED');
     if (plant === 'publish' || plant === 'omitted') expect(result.stderr).toContain('WFL002_PUBLISH_SUITE_WITHOUT_VERDICT');
-    console.log(`PLANT workflow-lint CLI ${plant}: exit=${result.status}; rejected=${plant === 'positive' ? 0 : 1}`);
+    console.log(`PLANT workflow-lint CLI ${plant}: exit=${result.status}; rejected=${accepted ? 0 : 1}`);
   }
 });
 

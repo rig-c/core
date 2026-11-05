@@ -2,20 +2,20 @@
 import { readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { compileCoverage } from '../.github/actions/tree-verdict/planner.mjs';
-
-const PUBLISH_LIFECYCLE_HOOKS: readonly string[] = ['prepublishOnly', 'prepare', 'prepack'];
+import { PUBLISH_LIFECYCLE_HOOKS, selectStep, validatePublications, type StepSelector, type PublicationReader, type PublicationInvocation } from '../.github/actions/tree-verdict/publication.mjs';
 
 export interface WorkflowDeclaration {
   path: string;
   heavyJobs: string[];
   guard?: { job: string; step: string; uses: string; sourceWorkflow: string; declaration?: string; declarationInput?: string };
+  publicationReaders?: PublicationReader[];
   publishes?: ({
     job: string; step: string; gateJob: string; verdictOutput: string; passedValue: string;
     downloadStep: string; artifact: string; evidenceEnv: string; evidenceValue: string;
     lifecycle: string; readerCommand: string; suiteScripts: string[];
   } | {
-    job: string; step: string; verdictStep: string; declaration: string; declarationInput?: string; actionUses: string;
-    lifecycle: string; readerCommand: string; evidenceEnv: string;
+    job: string; step: StepSelector; invocations?: PublicationInvocation[]; verdictStep: string; declaration: string; declarationInput?: string; actionUses: string;
+    lifecycle?: string; readerCommand?: string; evidenceEnv: string;
   })[];
 }
 export interface Declarations {
@@ -74,38 +74,32 @@ export function lintWorkflows(declarations: Declarations, read: (path: string) =
           const declared: unknown = JSON.parse(read(g.declaration));
           sourceMatches = map(declared) && declared.workflow === g.sourceWorkflow;
         }
+        const reuseGuard = `needs.${g?.job}.outputs.reused != 'true'`;
         if (!g || !guard || guard.if !== undefined || guard['continue-on-error'] !== undefined || !active(lookup) ||
           lookup?.uses !== g.uses || !sourceMatches ||
           output !== expr(`steps.${g.step}.outputs.reused`) || !needs(job, g.job) ||
-          condition(job.if) !== `needs.${g.job}.outputs.reused != 'true'`) {
+          ![reuseGuard, `always() && ${reuseGuard}`, `!cancelled() && ${reuseGuard}`].includes(condition(job.if))) {
           error('WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED', `${d.path} jobs.${heavy}`, 'declared heavy job needs a fail-closed tree-verdict guard');
         }
       }
-      // Inventory is explicit, but adding a direct npm publish step cannot silently opt out.
-      const declaredPublishes = d.publishes ?? [];
-      const publishKeys = declaredPublishes.map(p => `${p.job}/${p.step}`);
+      const publishKeys = (d.publishes ?? []).map(p => `${p.job}/${JSON.stringify(p.step)}`);
       if (new Set(publishKeys).size !== publishKeys.length) throw new Error('duplicate publish declaration');
-      for (const [jobId, job] of Object.entries(jobs)) {
-        if (!map(job)) throw new Error(`${d.path}: malformed job ${jobId}`);
-        for (const step of steps(job)) {
-          if (typeof step.run === 'string' && /\bnpm\s+(?:--\S+\s+)*publish\b/.test(step.run) &&
-            (typeof step.id !== 'string' || !declaredPublishes.some(p => p.job === jobId && p.step === step.id))) {
-            error('WFL002_PUBLISH_SUITE_WITHOUT_VERDICT', `${d.path} jobs.${jobId}`, 'npm publish step missing explicit publishes declaration');
-          }
-        }
-      }
+      const packageData: unknown = d.publishes?.length ? JSON.parse(read('package.json')) : {};
+      const packageScripts = map(packageData) && map(packageData.scripts) ? packageData.scripts : {};
+      for (const [jobId, job] of Object.entries(jobs)) if (!map(job)) throw new Error(`${d.path}: malformed job ${jobId}`);
+      errors.push(...validatePublications(d, jobs, packageScripts, read, compileCoverage, doc));
       for (const p of d.publishes ?? []) {
+        if ('verdictStep' in p && (p.invocations !== undefined || d.publicationReaders?.some(reader => reader.job === p.job))) continue;
         const job = map(jobs[p.job]) ? jobs[p.job] as Mapping : undefined;
         const gate = !('verdictStep' in p) && map(jobs[p.gateJob]) ? jobs[p.gateJob] as Mapping : undefined;
-        const all = job ? steps(job) : [], publish = all.find(s => s.id === p.step);
-        const pkg: unknown = JSON.parse(read('package.json'));
-        const scripts = map(pkg) && map(pkg.scripts) ? pkg.scripts : {};
+        const all = job ? steps(job) : [], publish = selectStep(all, p.step) as Mapping | undefined;
+        const scripts = packageScripts;
         if ('verdictStep' in p) {
           const proof = all.find(s => s.id === p.verdictStep);
           const declared: unknown = JSON.parse(read(p.declaration));
           let covering = true;
           try { compileCoverage(declared, read, p.declaration); } catch (error) { covering = false; errors.push(error instanceof Error ? error.message : 'COVER_SCHEMA'); }
-          if (!PUBLISH_LIFECYCLE_HOOKS.includes(p.lifecycle) || !covering || scripts[p.lifecycle] !== p.readerCommand || !active(publish) ||
+          if (!p.lifecycle || !PUBLISH_LIFECYCLE_HOOKS.includes(p.lifecycle) || !covering || !p.readerCommand || scripts[p.lifecycle] !== p.readerCommand || !active(publish) ||
             typeof publish?.run !== 'string' || !/^npm publish(?:\s+--[a-z-]+(?:\s+[\w-]+)?)*$/.test(publish.run.trim()) ||
             publish.run.includes('--ignore-scripts') || !map(publish.env) ||
             publish.env[p.evidenceEnv] !== expr(`steps.${p.verdictStep}.outputs.verdict-path`) ||

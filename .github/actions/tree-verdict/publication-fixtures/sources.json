@@ -1,0 +1,44 @@
+[
+  {
+    "repo": "parts",
+    "sha": "f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950",
+    "path": ".github/workflows/release.yml",
+    "sha256": "7ceb999f78cdd674d55f0d782ef48b7821214f23c547a806fde1d3aa74ca1435"
+  },
+  {
+    "repo": "parts",
+    "sha": "f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950",
+    "path": "package.json",
+    "sha256": "bb553daaa2833afc8ca430c8fde2acded9e91f2580e8e299be68e57fb7ce901a"
+  },
+  {
+    "repo": "parts",
+    "sha": "f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950",
+    "path": "scripts/alias_tarball.ts",
+    "sha256": "868b77e69c62119c3221f835361557df966832ba0c8d24c5e06687fa34533e4f"
+  },
+  {
+    "repo": "review",
+    "sha": "112fe8d316dd32748f7bd94e5fc6bc269ab27f8c",
+    "path": ".github/workflows/release.yml",
+    "sha256": "bd7430373124f4fca879191f78c39f2cb7a9a761a90227981530d3cf54d27972"
+  },
+  {
+    "repo": "review",
+    "sha": "112fe8d316dd32748f7bd94e5fc6bc269ab27f8c",
+    "path": "package.json",
+    "sha256": "ca3c02abe11e88283ecfe475810786702123156e24869d8f5c4108ada40ee0bf"
+  },
+  {
+    "repo": "review",
+    "sha": "112fe8d316dd32748f7bd94e5fc6bc269ab27f8c",
+    "path": "scripts/alias_tarball.ts",
+    "sha256": "cf44c8452da1158f885d1c804e18c786f598559d8327e42950964bedb2ce5db4"
+  },
+  {
+    "repo": "parts",
+    "sha": "f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950",
+    "path": ".github/workflows/ci.yml",
+    "sha256": "fa6209d489aab894a55f4dea4f500ce9eebc745a2a5bd52a7c24df1cdf86bdb4"
+  }
+]

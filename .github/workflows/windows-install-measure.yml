@@ -1,39 +1,16 @@
-# Temporary 2x2 root diagnostic for #1702. Remove before PR ready.
-name: windows-install-measure
+# Temporary actual-red install control for #1702. Remove before PR ready.
+name: windows-install-red-control
 on:
   pull_request:
     types: [labeled]
 permissions:
   contents: read
 jobs:
-  pack:
+  broken-allowlist:
     if: >-
-      github.event.label.name == 'core-1702-roots' &&
+      github.event.label.name == 'core-1702-red' &&
       github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Pack one clean tarball without installing project dependencies
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/diagnostic-pack"
-          npm pack "$GITHUB_WORKSPACE" --pack-destination "$RUNNER_TEMP/diagnostic-pack" --silent
-      - uses: actions/upload-artifact@v4
-        with:
-          name: install-diagnostic-package
-          path: ${{ runner.temp }}/diagnostic-pack/*.tgz
-          if-no-files-found: error
-          retention-days: 7
-  measure:
-    needs: pack
     runs-on: windows-latest
     timeout-minutes: 13
     steps:
@@ -45,34 +22,87 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: actions/download-artifact@v4
-        with:
-          name: install-diagnostic-package
-          path: ${{ runner.temp }}/diagnostic-package
-      - name: Compare target/temp and cache roots under the original Bun launcher
+      - name: Plant only the disposable copy and return the unmodified smoke exit
         shell: pwsh
         env:
-          MEASURE_ROOT: ${{ runner.temp }}/install-diagnostic
-          MEASURE_HEAD: ${{ github.event.pull_request.head.sha }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+          npm_config_cache: ${{ runner.temp }}/rigc-smoke-npm-cache
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:MEASURE_ROOT 'artifacts'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $out = Join-Path $env:RUNNER_TEMP 'core-1702-red-artifacts'
+          $copy = Join-Path $env:RUNNER_TEMP 'core-1702-red-copy'
           New-Item -ItemType Directory -Force $out | Out-Null
+          if (Test-Path $copy) { throw 'Disposable copy path already exists; refusing reuse' }
+          $sourceManifest = Join-Path $env:GITHUB_WORKSPACE 'package.json'
+          $sourceScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/install_smoke.ts'
+          $sourceManifestBefore = (Get-FileHash $sourceManifest -Algorithm SHA256).Hash
+          $sourceScriptBefore = (Get-FileHash $sourceScript -Algorithm SHA256).Hash
+          robocopy $env:GITHUB_WORKSPACE $copy /E /XD .git node_modules /NFL /NDL /NJH /NJS *> (Join-Path $out 'copy.log')
+          $copyExit = $LASTEXITCODE
+          if ($copyExit -ge 8) { throw "Copy failed: robocopy exit $copyExit" }
+          $manifest = Join-Path $copy 'package.json'
+          $script = Join-Path $copy 'scripts/install_smoke.ts'
+          $copyScriptBefore = (Get-FileHash $script -Algorithm SHA256).Hash
+          if ($copyScriptBefore -ne $sourceScriptBefore) { throw 'Copied smoke script differs from checkout' }
+          Copy-Item $manifest (Join-Path $out 'package-before.json')
+          $mutate = @'
+          const fs = require('node:fs');
+          const path = process.argv[1];
+          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (!Array.isArray(pkg.files) || pkg.files.filter(x => x === 'tools/plate.ts').length !== 1) {
+            throw new Error('Expected exactly one tools/plate.ts allowlist entry');
+          }
+          pkg.files = pkg.files.filter(x => x !== 'tools/plate.ts');
+          fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+          '@
+          Write-Output 'Planting tools/plate.ts allowlist removal in the disposable runner copy.'
+          node -e $mutate $manifest
+          if ($LASTEXITCODE -ne 0) { throw 'Allowlist mutation refused' }
+          Copy-Item $manifest (Join-Path $out 'package-after.json')
+          $manifestAfterPlant = (Get-FileHash $manifest -Algorithm SHA256).Hash
+          $smokeExit = $null
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          Push-Location $copy
           try {
-            $defender = @{ status = Get-MpComputerStatus -ErrorAction Stop | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, AMRunningMode, AntivirusSignatureVersion; exclusions = @((Get-MpPreference -ErrorAction Stop).ExclusionPath) }
-          } catch { $defender = @{ status = 'SKIP_DEFENDER_STATUS: ' + $_.Exception.Message } }
-          $defender | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'defender.json')
-          $env:MEASURE_NODE = (Get-Command node.exe -ErrorAction Stop).Source
-          $env:MEASURE_NPM_CLI = Join-Path (Split-Path (Get-Command npm.cmd -ErrorAction Stop).Source) 'node_modules/npm/bin/npm-cli.js'
-          $tarballs = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'diagnostic-package/*.tgz'))
-          if ($tarballs.Count -ne 1) { throw 'Expected exactly one shared tarball' }
-          node tools/windows_install_measure.mjs --tarball $tarballs[0].FullName
-          exit $LASTEXITCODE
-      - name: Preserve complete or interrupted diagnostics
+            bun run smoke -- --case clean *> (Join-Path $out 'smoke.log')
+            $smokeExit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+            $watch.Stop()
+            $text = if (Test-Path (Join-Path $out 'smoke.log')) { Get-Content (Join-Path $out 'smoke.log') -Raw } else { '' }
+            $receipt = [ordered]@{
+              head = $env:SOURCE_HEAD
+              command = @('bun', 'run', 'smoke', '--', '--case', 'clean')
+              cwd = $copy
+              rawExitCode = $smokeExit
+              seconds = $watch.Elapsed.TotalSeconds
+              expectedOuterExitCode = 1
+              sourceManifestBefore = $sourceManifestBefore
+              sourceManifestAfter = (Get-FileHash $sourceManifest -Algorithm SHA256).Hash
+              copyManifestBefore = (Get-FileHash (Join-Path $out 'package-before.json') -Algorithm SHA256).Hash
+              copyManifestAfter = $manifestAfterPlant
+              sourceScriptBefore = $sourceScriptBefore
+              sourceScriptAfter = (Get-FileHash $sourceScript -Algorithm SHA256).Hash
+              copyScriptBefore = $copyScriptBefore
+              copyScriptAfter = (Get-FileHash $script -Algorithm SHA256).Hash
+              cleanCaseFailed = $text -match 'FAIL\s+SMOKE_CASE\[clean\]'
+              missingPlateNamed = $text -match 'tools[/\\]plate\.ts'
+              note = 'Raw smoke exit is returned unchanged; this job is expected to be actually red, not expected-failure green.'
+            }
+            $receipt | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'receipt.json')
+            Write-Output "Unmodified smoke raw exit: $smokeExit"
+          }
+          if ($null -eq $smokeExit) { throw 'Smoke produced no exit code; not a valid RED receipt' }
+          exit $smokeExit
+      - name: Preserve the actual red receipt and raw log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-roots-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/install-diagnostic/artifacts/
+          name: windows-install-red-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-1702-red-artifacts/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14

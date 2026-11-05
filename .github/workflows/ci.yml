@@ -256,4 +256,17 @@ jobs:
         with:
           node-version: 22
       - name: The package installs into an empty directory and builds a rig
+        if: runner.os != 'Windows'
+        run: bun run smoke
+
+      # #1702, run 42074463611 (4 matched samples per root combination):
+      # package install mean 9.816362s at default roots, 2.524328s with both on runner.temp.
+      # Keep the existing timeout until the complete smoke/job has been measured.
+      - name: The package installs into an empty directory and builds a rig on Windows
+        if: runner.os == 'Windows'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+          npm_config_cache: ${{ runner.temp }}/rigc-smoke-npm-cache
         run: bun run smoke

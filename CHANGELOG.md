@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.0](https://github.com/rig-c/core/compare/v3.3.0...v3.4.0) (2026-11-05)
+
+
+### Features
+
+* **seam:** expose exact opt-in gap cell lists ([#1696](https://github.com/rig-c/core/issues/1696)) ([9d2ec81](https://github.com/rig-c/core/commit/9d2ec81e1389273389890af0e326e7114f8f3159))
+
 ## [3.3.0](https://github.com/rig-c/core/compare/v3.2.1...v3.3.0) (2026-11-04)
 
 

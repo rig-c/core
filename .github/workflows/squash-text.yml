@@ -46,6 +46,15 @@ on:
 permissions:
   contents: read
 
+# Any later event on the same pull request (a push or an edit) re-reads the
+# current title, body and head, so it supersedes the run before it and
+# cancelling that run releases its runner slots under the organisation's
+# concurrent-job cap. Only pull_request triggers this workflow; the sha
+# fallback keeps the group well-formed regardless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   parses:
     runs-on: ubuntu-latest

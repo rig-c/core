@@ -2,200 +2,123 @@ import { test, expect } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { workflowFixture } from './fixtures.mjs';
+import { compileCoverage } from './planner.mjs';
 import { checkoutProof } from './checkout.mjs';
 import { produce, argumentsForProducer } from './producer.mjs';
-import { publishCli, publishEnvelope } from './publish.mjs';
+import { publishEnvelope } from './publish.mjs';
+import { lifecycle } from './lifecycle.mjs';
 import { lookup } from './lookup.mjs';
-import { githubApi } from './api.mjs';
 import { fixture } from './lookup.test.mjs';
-const scratch = process.env.TMPDIR;
-if (!scratch) throw new Error('dedicated TMPDIR required');
-function repository() {
-  const dir = mkdtempSync(join(scratch, 'producer-')), repo = join(dir, 'checkout'); mkdirSync(repo);
-  const git = (...args) => {
-    const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
-    if (r.status !== 0) throw new Error('fixture git failed'); return r.stdout.trim();
-  };
-  git('init', '-q'); writeFileSync(join(repo, 'probe'), 'a'); git('add', 'probe');
-  git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture');
-  return { dir, repo, git, proof: checkoutProof(repo), close: () => rmSync(dir, { recursive: true }) };
+const scratch=process.env.TMPDIR;
+if(!scratch)throw new Error('dedicated TMPDIR required');
+function repository(style='parts') {
+ const dir=mkdtempSync(join(scratch,'collector-')),repo=join(dir,'checkout');mkdirSync(repo);
+ const f=workflowFixture(style);
+ for(const[path,text]of Object.entries(f.files)){mkdirSync(join(repo,path,'..'),{recursive:true});writeFileSync(join(repo,path),text);}
+ const git=(...args)=>{const r=spawnSync('git',args,{cwd:repo,encoding:'utf8'});if(r.status!==0)throw new Error('fixture Git failed');return r.stdout.trim();};
+ git('init','-q');writeFileSync(join(repo,'probe'),'a');git('add','.');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture');
+ return{dir,repo,git,f,proof:checkoutProof(repo),close:()=>rmSync(dir,{recursive:true})};
 }
-function source(r) {
-  const repo = { id: 1, full_name: 'sample/core', default_branch: 'main' };
-  const event = { number: 7, repository: repo, pull_request: { head: { sha: 'b'.repeat(40) } } };
-  const eventPath = join(r.dir, 'event.json'); writeFileSync(eventPath, JSON.stringify(event));
-  const run = { id: 800, run_attempt: 2, workflow_id: 10, path: '.github/workflows/ci.yml', head_sha: 'b'.repeat(40),
-    event: 'pull_request', status: 'in_progress', conclusion: null, repository: repo, head_repository: repo };
-  const env = { ...process.env, GITHUB_REPOSITORY: repo.full_name, GITHUB_RUN_ID: '800', GITHUB_RUN_ATTEMPT: '2',
-    GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: eventPath };
-  const options = { cwd: r.repo, workflow: run.path, gate: 'full/1', out: join(r.dir, 'receipt.json'),
-    command: ['node', '-e', 'require("node:fs").writeFileSync(process.argv[1],"ran")', join(r.dir, 'gate-ran')] };
-  const state = { run, env, options, event };
-  state.api = async path => {
-    if (path.endsWith('/runs/800')) return run;
-    if (path.endsWith('/ci.yml')) return { id: 10, path: run.path, state: 'active' };
-    if (path.endsWith('/pulls/7')) return { number: 7, head: { sha: run.head_sha, repo }, base: { ref: 'main', repo } };
-    if (path.includes('/git/commits/')) return { sha: r.proof.sha, tree: { sha: r.proof.tree } };
-    throw new Error('unexpected fixture API');
-  };
-  return state;
+function source(r){
+ const plan=compileCoverage(r.f.declaration,r.f.read),repo={id:1,full_name:'sample/core',default_branch:'main'};
+ const event={repository:repo,number:7,pull_request:{head:{sha:'b'.repeat(40)}}};
+ const eventPath=join(r.dir,'event.json');writeFileSync(eventPath,JSON.stringify(event));
+ const run={id:800,run_attempt:2,workflow_id:10,path:plan.coverage.workflow,head_sha:'b'.repeat(40),event:'pull_request',status:'in_progress',conclusion:null,repository:repo,head_repository:repo};
+ const env={...process.env,GITHUB_REPOSITORY:repo.full_name,GITHUB_RUN_ID:'800',GITHUB_RUN_ATTEMPT:'2',GITHUB_EVENT_NAME:'pull_request',GITHUB_EVENT_PATH:eventPath,GITHUB_SHA:r.proof.sha,GITHUB_JOB:plan.coverage.producer.job};
+ const rows=Object.values(plan.coverage.jobs).flatMap(j=>j.legs).map((l,i)=>({id:100+i,name:l.apiName,run_id:800,run_attempt:2,head_sha:run.head_sha,status:'completed',conclusion:'success'}));
+ rows.push({id:200,name:plan.collectorName,run_id:800,run_attempt:2,head_sha:run.head_sha,status:'in_progress',conclusion:null});
+ const options={cwd:r.repo,declaration:join(r.repo,'scripts/tree-verdict.json'),out:join(r.dir,'receipt.json')};
+ const state={plan,run,env,rows,options,event,calls:[]};
+ state.api=async path=>{state.calls.push(path);
+  if(path.endsWith('/runs/800'))return run;
+  if(path.endsWith('/ci.yml'))return{id:10,path:run.path,state:'active'};
+  if(path.endsWith('/pulls/7'))return{number:7,head:{sha:run.head_sha,repo},base:{ref:'main',repo}};
+  if(path.includes('/jobs?'))return{total_count:state.rows.length,jobs:state.rows};
+  if(path.includes('/git/commits/'))return{sha:r.proof.sha,tree:{sha:r.proof.tree}};
+  throw new Error('unexpected fixture API');};return state;
 }
-test('producer executes a fresh full fixture gate, attests actual synthetic checkout, not API head', async () => {
-  const r = repository(), s = source(r);
-  try {
-    expect(await produce(s.options, s.env, s.api)).toBe(0);
-    const receipt = JSON.parse(readFileSync(s.options.out, 'utf8'));
-    expect(receipt).toMatchObject({ schema: 'tree-verdict/1', tested_sha: r.proof.sha, tree: r.proof.tree, head_sha: s.run.head_sha,
-      pr: 7, run_attempt: 2, verdict: 'success', gate: 'full/1' });
-    expect(receipt.tested_sha).not.toBe(receipt.head_sha); expect(existsSync(join(r.dir, 'gate-ran'))).toBe(true);
-    console.log('PLANT producer positive: fresh fixture gate exit=0; receipt written=1');
-  } finally { r.close(); }
+for(const style of ['parts','core'])test(`${style} collector compiles checked source, collects every successful leg, executes no chain`,async()=>{
+ const r=repository(style),s=source(r);try{
+ expect(await produce(s.options,s.env,s.api)).toBe(0);
+ const receipt=JSON.parse(readFileSync(s.options.out,'utf8'));
+ expect(receipt.schema).toBe('tree-verdict/2');expect(receipt.jobs).toHaveLength(style==='core'?7:5);
+ expect(receipt.tested_sha).toBe(r.proof.sha);expect(receipt.tested_sha).not.toBe(receipt.head_sha);
+ expect(receipt.collector.compiler).toBe('static-coverage/2');expect(s.calls.some(p=>p.includes('/attempts/2/jobs?'))).toBe(true);
+ expect(existsSync(join(r.repo,'chain-ran'))).toBe(false);
+ console.log(`PLANT collector ${style}: exit=0; successful legs=${receipt.jobs.length}; executed chain=0`);
+ }finally{r.close();}
 });
-for (const plant of ['gate failure', 'dirty before', 'dirty after', 'untracked', 'wrong attempt', 'wrong workflow', 'API error', 'wrong tree', 'fork', 'completed reused source']) {
-  test(`producer refuses ${plant}`, async () => {
-    const r = repository(), s = source(r);
-    try {
-      if (plant === 'gate failure') s.options.command = ['node', '-e', 'process.exit(9)'];
-      if (plant === 'dirty before') writeFileSync(join(r.repo, 'probe'), 'b');
-      if (plant === 'untracked') writeFileSync(join(r.repo, 'untracked'), 'b');
-      if (plant === 'dirty after') s.options.command = ['node', '-e', 'require("node:fs").writeFileSync("probe","b")'];
-      if (plant === 'wrong attempt') s.run.run_attempt++;
-      if (plant === 'wrong workflow') s.options.workflow = '.github/workflows/other.yml';
-      if (plant === 'API error') s.api = async () => { throw new Error('unavailable'); };
-      if (plant === 'wrong tree') r.proof.tree = 'f'.repeat(40);
-      if (plant === 'fork') s.run.head_repository = { id: 2, full_name: 'fork/core' };
-      if (plant === 'completed reused source') { s.run.status = 'completed'; s.run.conclusion = 'success'; }
-      expect(await produce(s.options, s.env, s.api)).toBe(1);
-      expect(existsSync(s.options.out)).toBe(false);
-      console.log(`PLANT producer ${plant}: exit=1; receipt written=0`);
-    } finally { r.close(); }
-  });
-}
-test('producer command required; record-only and unknown flags rejected', () => {
-  expect(() => argumentsForProducer(['--workflow', '.github/workflows/ci.yml'])).toThrow();
-  expect(() => argumentsForProducer(['--reused', 'true', '--', 'true'])).toThrow();
-  expect(argumentsForProducer(['--workflow', '.github/workflows/ci.yml', '--gate', 'full/1', '--out', 'receipt.json', '--', 'node', 'gate.mjs']).command).toEqual(['node', 'gate.mjs']);
+for(const plant of ['missing leg','cancelled leg','duplicate name','duplicate ID','wrong attempt','dirty checkout','wrong checkout','wrong workflow','API error','invalid source graph','changed attempt'])test(`collector ${plant} refuses receipt`,async()=>{
+ const r=repository(),s=source(r);try{
+ if(plant==='missing leg')s.rows.shift();if(plant==='cancelled leg')s.rows[0].conclusion='cancelled';
+ if(plant==='duplicate name')s.rows.push({...s.rows[0],id:999});if(plant==='duplicate ID')s.rows.push({...s.rows[0],name:'unrelated'});
+ if(plant==='wrong attempt')s.rows[0].run_attempt=1;
+ if(plant==='dirty checkout')writeFileSync(join(r.repo,'probe'),'b');
+ if(plant==='wrong checkout')s.env.GITHUB_SHA='e'.repeat(40);
+ if(plant==='wrong workflow')s.run.path='.github/workflows/other.yml';
+ if(plant==='API error')s.api=async()=>{throw new Error('unavailable');};
+ if(plant==='invalid source graph'){
+  const doc=Bun.YAML.parse(readFileSync(join(r.repo,'.github/workflows/ci.yml'),'utf8'));delete doc.jobs.test.needs;writeFileSync(join(r.repo,'.github/workflows/ci.yml'),Bun.YAML.stringify(doc));
+ }
+ if(plant==='changed attempt'){const api=s.api;s.api=async p=>{if(p.includes('/git/commits/'))s.run.run_attempt++;return api(p);};}
+ expect(await produce(s.options,s.env,s.api)).toBe(1);expect(existsSync(s.options.out)).toBe(false);
+ if(plant==='invalid source graph')expect(s.calls).toHaveLength(0);
+ console.log(`PLANT collector ${plant}: exit=1; receipt=0`);
+ }finally{r.close();}
 });
-test('publish CLI checks live checkout and fresh trusted runner context; nonzero means full gate', async () => {
-  const r = repository(), f = fixture();
-  try {
-    f.c.sha = r.proof.sha; f.associated = [];
-    f.commits.set(r.proof.sha, { sha: r.proof.sha, tree: { sha: r.proof.tree }, parents: [] });
-    Object.assign(f.run, { head_sha: r.proof.sha, event: 'push', head_branch: 'main' }); f.direct = [f.run];
-    Object.assign(f.receipt, { head_sha: r.proof.sha, tested_sha: r.proof.sha, tree: r.proof.tree, event: 'push', pr: 0 });
-    const proof = join(r.dir, 'verified.json'), event = join(r.dir, 'event.json');
-    writeFileSync(proof, JSON.stringify(publishEnvelope(f.c, await lookup(f.c, f.api, f.readReceipt))));
-    writeFileSync(event, JSON.stringify({ repository: { full_name: f.c.repository, default_branch: 'main' } }));
-    const env = { ...process.env, GITHUB_REPOSITORY: f.c.repository, GITHUB_SHA: r.proof.sha, GITHUB_RUN_ID: String(f.c.runId),
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_PATH: event };
-    const args = ['--verdict', proof, '--workflow', f.c.workflow, '--gate', f.c.gate, '--checkout', r.repo];
-    expect(await publishCli(args, env, f)).toBe(0);
-    expect(await publishCli(args, { ...env, GITHUB_SHA: 'e'.repeat(40) }, f)).toBe(2);
-    writeFileSync(join(r.repo, 'probe'), 'b'); expect(await publishCli(args, env, f)).toBe(2);
-    writeFileSync(join(r.repo, 'probe'), 'a');
-    const original = f.readReceipt; f.readReceipt = async () => { writeFileSync(join(r.repo, 'probe'), 'b'); return original(); };
-    expect(await publishCli(args, env, f)).toBe(2);
-    console.log('PLANT lifecycle: true exit=0; wrong checkout/dirty/race exit=2 => full gate fallback');
-  } finally { r.close(); }
+test('fresh dispatch CI collector succeeds but dispatch is never a reusable source',async()=>{
+ const r=repository(),s=source(r);try{
+ s.run.event='workflow_dispatch';s.env.GITHUB_EVENT_NAME='workflow_dispatch';
+ expect(await produce(s.options,s.env,s.api)).toBe(0);expect(JSON.parse(readFileSync(s.options.out,'utf8')).event).toBe('workflow_dispatch');
+ const f=fixture();f.c.event='workflow_dispatch';expect((await lookup(f.c,f.api,f.readReceipt)).reused).toBe(false);
+ console.log('PLANT dispatch: collector exit=0; consumer reused=false; original full chain required');
+ }finally{r.close();}
 });
-
-test('lifecycle CLI covers entire replaced chain; missing/invalid/noncovering verdict runs all commands and preserves failure exit', async () => {
-  const { lifecycle } = await import('./lifecycle.mjs'), { readDeclaration } = await import('./declaration.mjs');
-  const r = repository(), f = fixture();
-  try {
-    const commands = ['typecheck', 'lint', 'selftest'].map(stage => `node -e 'require("node:fs").appendFileSync(process.env.CHAIN_TRACE,"${stage}\\n");if(process.env.CHAIN_FAIL_STAGE==="${stage}")process.exit(7)'`);
-    const declaration = { schema: 'tree-verdict-lifecycle/1', workflow: f.c.workflow, gate: 'fixture-full/1', commands, chain: commands.join(' && ') };
-    const path = join(r.dir, 'declaration.json'), proof = join(r.dir, 'verified.json'), trace = join(r.dir, 'chain.log'), event = join(r.dir, 'event.json');
-    writeFileSync(path, JSON.stringify(declaration));
-    f.c.gate = readDeclaration(path).gate; f.c.sha = r.proof.sha; f.associated = [];
-    f.commits.set(r.proof.sha, { sha: r.proof.sha, tree: { sha: r.proof.tree }, parents: [] });
-    Object.assign(f.run, { head_sha: r.proof.sha, event: 'push', head_branch: 'main' }); f.direct = [f.run];
-    Object.assign(f.receipt, { gate: f.c.gate, head_sha: r.proof.sha, tested_sha: r.proof.sha, tree: r.proof.tree, event: 'push', pr: 0 });
-    const envelope = publishEnvelope(f.c, await lookup(f.c, f.api, f.readReceipt)); writeFileSync(proof, JSON.stringify(envelope));
-    writeFileSync(event, JSON.stringify({ repository: { full_name: f.c.repository, default_branch: 'main' } }));
-    const env = { ...process.env, CHAIN_TRACE: trace, GITHUB_REPOSITORY: f.c.repository, GITHUB_SHA: r.proof.sha, GITHUB_RUN_ID: String(f.c.runId),
-      GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_PATH: event };
-    const args = ['--declaration', path, '--verdict-path', proof, '--checkout', r.repo];
-    expect(await lifecycle(args, env, f)).toBe(0); expect(existsSync(trace)).toBe(false);
-    console.log('PLANT entire-chain positive: exit=0; commands executed=0/3');
-    for (const plant of ['missing', 'invalid', 'noncovering', 'wrong gate']) {
-      writeFileSync(path, JSON.stringify(plant === 'noncovering' ? { ...declaration, commands: commands.slice(1) } : declaration));
-      writeFileSync(proof, plant === 'invalid' ? '{' : JSON.stringify(plant === 'wrong gate' ? { ...envelope, gate: 'wrong/1' } : envelope));
-      if (plant === 'missing') rmSync(proof);
-      rmSync(trace, { force: true });
-      expect(await lifecycle(args, env, f)).toBe(0);
-      expect(readFileSync(trace, 'utf8')).toBe('typecheck\nlint\nselftest\n');
-      console.log(`PLANT entire-chain ${plant}: exit=0; commands executed=3/3`);
-    }
-    writeFileSync(path, JSON.stringify(declaration)); rmSync(proof, { force: true }); rmSync(trace);
-    expect(await lifecycle(args, { ...env, CHAIN_FAIL_STAGE: 'lint' }, f)).toBe(7);
-    expect(readFileSync(trace, 'utf8')).toBe('typecheck\nlint\n');
-    console.log('PLANT entire-chain failure: exit=7 preserved; commands executed=2/3; publish blocked');
-    // Producer declaration mode runs exactly the same original chain and records its effective identity.
-    const s = source(r); s.env = { ...s.env, CHAIN_TRACE: trace };
-    rmSync(trace);
-    const options = argumentsForProducer(['--declaration', path, '--out', join(r.dir, 'fresh.json'), '--checkout', r.repo]);
-    // spawn inherits the test process env, so provide the trace to this fixture-only explicit runner.
-    expect(await produce(options, s.env, s.api, (cmd, cwd) => spawnSync(cmd[0], cmd.slice(1), { cwd, env: s.env }).status)).toBe(0);
-    expect(JSON.parse(readFileSync(options.out, 'utf8')).gate).toBe(f.c.gate);
-    expect(readFileSync(trace, 'utf8')).toBe('typecheck\nlint\nselftest\n');
-  } finally { r.close(); }
+test('collector CLI refuses old chain-execution grammar and requires declaration',()=>{
+ expect(()=>argumentsForProducer(['--gate','old/1','--','true'])).toThrow();
+ expect(()=>argumentsForProducer(['--out','receipt.json'])).toThrow();
+ expect(argumentsForProducer(['--declaration','scripts/tree-verdict.json','--out','receipt.json']).declaration).toContain('scripts/tree-verdict.json');
 });
-
-test('exact README npm wrapper preserves local full chain without installed helper or envelope', () => {
-  const r = repository();
-  try {
-    const readme = readFileSync(new URL('./README.md', import.meta.url), 'utf8');
-    const wrapper = readme.match(/```js\n([\s\S]*?)\n```/)[1];
-    const scripts = join(r.repo, 'scripts'); mkdirSync(scripts);
-    const file = join(scripts, 'prepublish.cjs'), trace = join(r.dir, 'local-chain');
-    writeFileSync(file, wrapper);
-    const chain = 'node -e \'require("node:fs").appendFileSync(process.env.CHAIN_TRACE,"all commands ran")\'';
-    writeFileSync(join(scripts, 'tree-verdict.json'), JSON.stringify({ chain }));
-    const good = spawnSync('node', [file], { cwd: r.repo, env: { ...process.env, CHAIN_TRACE: trace }, encoding: 'utf8' });
-    expect(good.status).toBe(0); expect(readFileSync(trace, 'utf8')).toBe('all commands ran');
-    writeFileSync(join(scripts, 'tree-verdict.json'), JSON.stringify({ chain: 'node -e "process.exit(7)"' }));
-    expect(spawnSync('node', [file], { cwd: r.repo }).status).toBe(7);
-    console.log('PLANT README local helper absent: fullchain exit=0; failure exit=7 preserved');
-  } finally { r.close(); }
+// Exercise the entire-chain fallback, not only the low-level false verdict.
+test('lifecycle covers every command; tested-tree difference with equal PR head, no fresh main receipt, and broken evidence execute entire original chain',async()=>{
+ const r=repository(),f=fixture();try{
+ const commands=['typecheck','lint','selftest'].map(stage=>`node -e 'require("node:fs").appendFileSync(process.env.CHAIN_TRACE,"${stage}\\n");if(process.env.CHAIN_FAIL_STAGE==="${stage}")process.exit(7)'`);
+ const d=structuredClone(r.f.declaration);d.chain=commands.join(' && ');d.commands=commands;d.covers=Object.fromEntries(commands.map(c=>[c,['merge']]));d.jobs={merge:{...d.jobs.merge,role:'plain'}};
+ // Node canonical consumer validation binds the complete command inventory; producer cannot compile this fabricated workflow map.
+ const declaration=join(r.dir,'lifecycle.json');writeFileSync(declaration,JSON.stringify(d));
+ const {readDeclaration}=await import('./declaration.mjs');const normalized=readDeclaration(declaration);
+ f.c.coverage=normalized.coverage;f.c.gate=normalized.gate;f.c.sha=r.proof.sha;
+ f.commits.set(r.proof.sha,{sha:r.proof.sha,tree:{sha:r.proof.tree},parents:[]});
+ for(const c of f.commits.values())c.tree.sha=r.proof.tree;
+ f.pr.merge_commit_sha=r.proof.sha;
+ const plan={schema:'tree-verdict-collector/2',compiler:'static-coverage/2',coverage:normalized.coverage,digest:(await import('./coverage.mjs')).digest(normalized.coverage),sources:f.receipt.collector.sources,collectorName:'tree-verdict-receipt',jobId:200};
+ const leg=f.jobRows.find(j=>j.name==='test');f.jobRows=[leg,f.jobRows.at(-1)];
+ f.receipt.jobs=[{group:'merge',matrix:{},...leg}];
+ Object.assign(f.receipt,{gate:f.c.gate,tree:r.proof.tree,collector:plan});
+ const proof=join(r.dir,'verified.json'),event=join(r.dir,'consumer-event.json'),trace=join(r.dir,'chain.log');
+ writeFileSync(event,JSON.stringify({repository:{full_name:f.c.repository,default_branch:'main'}}));
+ const env={...process.env,CHAIN_TRACE:trace,GITHUB_REPOSITORY:f.c.repository,GITHUB_SHA:r.proof.sha,GITHUB_RUN_ID:String(f.c.runId),GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_PATH:event};
+ const args=['--declaration',declaration,'--verdict-path',proof,'--checkout',r.repo];
+ const result=await lookup(f.c,f.api,f.readReceipt);expect(result.reused).toBe(true);
+ const envelope=publishEnvelope(f.c,result);writeFileSync(proof,JSON.stringify(envelope));
+ expect(await lifecycle(args,env,f)).toBe(0);expect(existsSync(trace)).toBe(false);
+ const originalReceipt=structuredClone(f.receipt),originalRows=structuredClone(f.jobRows);
+ // Independent actual Git tree B from a one-byte tracked edit, then restore clean tree A.
+ writeFileSync(join(r.repo,'probe'),'b');r.git('add','probe');const otherTree=r.git('write-tree');r.git('reset','-q','HEAD','--','probe');writeFileSync(join(r.repo,'probe'),'a');expect(otherTree).not.toBe(r.proof.tree);
+ for(const plant of ['missing','invalid','noncovering','tested tree differs','main reused without receipt']){
+  writeFileSync(proof,plant==='invalid'?'{':JSON.stringify(envelope));if(plant==='missing')rmSync(proof);
+  writeFileSync(declaration,JSON.stringify(plant==='noncovering'?{...d,commands:commands.slice(1)}:d));
+  f.receipt=structuredClone(originalReceipt);f.jobRows=structuredClone(originalRows);f.associated=[{number:7}];
+  if(plant==='tested tree differs'){f.receipt.tree=otherTree;f.commits.get(f.receipt.tested_sha).tree.sha=otherTree;expect(f.commits.get(f.pr.head.sha).tree.sha).toBe(r.proof.tree);}
+  else f.commits.get(originalReceipt.tested_sha).tree.sha=r.proof.tree;
+  if(plant==='main reused without receipt'){
+   f.associated=[];Object.assign(f.run,{event:'push',head_sha:f.c.sha,head_branch:'main'});f.direct=[f.run];f.receipt=undefined;
+  }
+  rmSync(trace,{force:true});expect(await lifecycle(args,env,f)).toBe(0);expect(readFileSync(trace,'utf8')).toBe('typecheck\nlint\nselftest\n');
+  console.log(`PLANT full lifecycle ${plant}: commands=3/3; chain exit=0`);
+ }
+ rmSync(proof,{force:true});rmSync(trace);writeFileSync(declaration,JSON.stringify(d));
+ expect(await lifecycle(args,{...env,CHAIN_FAIL_STAGE:'lint'},f)).toBe(7);expect(readFileSync(trace,'utf8')).toBe('typecheck\nlint\n');
+ }finally{r.close();}
 });
-
-
-for (const scenario of ['success', 'gate failure', 'post API failure', 'post budget exhaustion']) {
-  test(`producer default transport after simulated >60s gate: ${scenario}`, async () => {
-    const r = repository(), s = source(r), realNow = Date.now, realFetch = globalThis.fetch;
-    let now = realNow(), gateFinished = false, postCalls = 0;
-    const expiredPreGateTransport = githubApi({ token: 'fixture', temp: r.dir, fetcher: async () => Response.json({}) });
-    try {
-      Date.now = () => now;
-      globalThis.fetch = async url => {
-        if (gateFinished) {
-          postCalls++;
-          if (scenario === 'post API failure') return new Response('unavailable', { status: 503 });
-          // The new post-gate transport still has its OWN unchanged 60s bound.
-          if (scenario === 'post budget exhaustion' && postCalls === 1) now += 61000;
-        }
-        return Response.json(await s.api(new URL(url).pathname));
-      };
-      if (scenario === 'gate failure') s.options.command = ['node', '-e', 'process.exit(9)'];
-      const logs = [];
-      const result = await produce(s.options, s.env, undefined, (command, cwd) => {
-        const exit = spawnSync(command[0], command.slice(1), { cwd }).status;
-        now += 61000; gateFinished = true;
-        return exit;
-      }, line => logs.push(line));
-      expect(result).toBe(scenario === 'success' ? 0 : 1);
-      expect(existsSync(s.options.out)).toBe(scenario === 'success');
-      await expect(expiredPreGateTransport.api('/repos/sample/core/actions/runs/800')).rejects.toThrow('API budget/path');
-      if (scenario === 'success') {
-        expect(JSON.parse(readFileSync(s.options.out, 'utf8'))).toMatchObject({ tested_sha: r.proof.sha, tree: r.proof.tree });
-        expect(postCalls).toBe(4);
-      } else if (scenario === 'gate failure') expect(postCalls).toBe(0);
-      else if (scenario === 'post API failure') expect(postCalls).toBe(1);
-      else if (scenario === 'post budget exhaustion') {
-        expect(postCalls).toBe(1); expect(logs.join('\n')).toContain('API budget/path');
-      }
-      console.log(`PLANT default transport ${scenario}: simulated gate=61000ms; exit=${result}; receipt=${existsSync(s.options.out) ? 1 : 0}; post requests=${postCalls}`);
-    } finally { Date.now = realNow; globalThis.fetch = realFetch; r.close(); }
-  });
-}

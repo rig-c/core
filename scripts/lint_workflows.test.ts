@@ -1,5 +1,6 @@
 import { test, expect } from 'bun:test';
 import { lintWorkflows, type Declarations } from './lint_workflows.ts';
+import { workflowFixture } from '../.github/actions/tree-verdict/fixtures.mjs';
 function fixture(suite = 'selftest') {
   const declaration: Declarations = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{
     path: '.github/workflows/ci.yml', heavyJobs: ['suite'],
@@ -77,22 +78,22 @@ test('new npm publish step cannot omit publishes inventory', () => {
   console.log('PLANT omitted publish declaration: exit=1; rejected=1');
 });
 
-test('covering lifecycle consumer with live action proof is green; dropped proof or commands is red', () => {
-  const f = fixture();
+test('covering lifecycle consumer with compiled source and live action proof is green; dropped proof or commands is red', () => {
+  const f = fixture(), source = workflowFixture('parts');
+  source.declaration.workflow = '.github/workflows/source.yml';
   f.declaration.workflows[0].publishes = [{ job: 'publish', step: 'publish', verdictStep: 'download',
     declaration: 'scripts/tree-verdict.json', actionUses: './pinned/.github/actions/tree-verdict', lifecycle: 'prepublishOnly',
     readerCommand: 'node scripts/prepublish.cjs', evidenceEnv: 'TREE_VERDICT_PATH' }];
-  f.pkg.scripts.prepublishOnly = 'node scripts/prepublish.cjs';
+  Object.assign(f.pkg.scripts, JSON.parse(source.files['package.json']).scripts, { prepublishOnly: 'node scripts/prepublish.cjs' });
   const doc = structuredClone(f.doc) as unknown as Record<string, unknown>;
   const jobs = doc.jobs as Record<string, { steps: Record<string, unknown>[] }>;
   jobs.publish.steps[0] = { id: 'download', uses: './pinned/.github/actions/tree-verdict', with: { declaration: 'scripts/tree-verdict.json', purpose: 'publish' } };
   jobs.publish.steps[1].env = { TREE_VERDICT_PATH: '${{ steps.download.outputs.verdict-path }}' };
-  const declaration = { schema: 'tree-verdict-lifecycle/1', workflow: '.github/workflows/ci.yml', gate: 'parts-full/1',
-    chain: 'bun run typecheck && bun run lint && bun run selftest', commands: ['bun run typecheck', 'bun run lint', 'bun run selftest'] };
-  const read = (p: string) => p === 'scripts/tree-verdict.json' ? JSON.stringify(declaration) : p === 'package.json' ? JSON.stringify(f.pkg) : Bun.YAML.stringify(doc);
+  const read = (p: string) => p === 'scripts/tree-verdict.json' ? JSON.stringify(source.declaration) : p === 'package.json' ? JSON.stringify(f.pkg) : p === '.github/workflows/source.yml' ? source.files['.github/workflows/ci.yml'] : Bun.YAML.stringify(doc);
   expect(lintWorkflows(f.declaration, read)).toEqual([]);
-  declaration.commands.pop(); expect(lintWorkflows(f.declaration, read).join('')).toContain('WFL002');
-  declaration.commands.push('bun run selftest'); jobs.publish.steps[0].if = '${{ false }}';
+  const commands = source.declaration.commands as string[];
+  commands.pop(); expect(lintWorkflows(f.declaration, read).join('')).toContain('COVER_COMMAND');
+  commands.push('bun run selftest'); jobs.publish.steps[0].if = '${{ false }}';
   expect(lintWorkflows(f.declaration, read).join('')).toContain('WFL002');
 });
 

@@ -1,3 +1,4 @@
+import { canonicalCoverage, gateFor, stable, validateCollectorProof, attemptJobs, collectorRow } from './coverage.mjs';
 // Network-free decision engine. Every exception is a miss, including malformed API data.
 const sha = x => typeof x === 'string' && /^[0-9a-f]{40}$/.test(x);
 const id = x => Number.isSafeInteger(x) && x > 0;
@@ -94,8 +95,11 @@ export async function lookup(c, api, readReceipt, log = () => {}) {
       }
       candidates.push({ head: pr.head.sha, pr: pr.number });
     }
+    const eligiblePRs = candidates.filter(candidate => candidate.pr !== 0);
+    need(eligiblePRs.length <= 1, 'ambiguous eligible merged PR source');
+    const sources = eligiblePRs.length ? eligiblePRs : candidates.slice(0, 1);
     const runs = new Map();
-    for (const candidate of candidates) {
+    for (const candidate of sources) {
       const rows = await pages(api, `${root}/actions/workflows/${workflow.id}/runs?head_sha=${candidate.head}`, 'workflow_runs');
       for (const row of rows) {
         const run = runShape(row, c, workflow);
@@ -111,7 +115,7 @@ export async function lookup(c, api, readReceipt, log = () => {}) {
         runs.set(run.id, { run, candidate });
       }
     }
-    // A later failure/queued run invalidates an older green, even across candidates.
+    // The latest run within the chosen source head must succeed; never substitute an older green.
     const selected = [...runs.values()].sort((a, b) => b.run.run_number - a.run.run_number || b.run.id - a.run.id)[0];
     need(selected, 'no associated source run');
     const { candidate } = selected;
@@ -124,16 +128,23 @@ export async function lookup(c, api, readReceipt, log = () => {}) {
     };
     const run = await fresh();
     const receipt = await readReceipt(root, run, c.receiptName);
-    need(object(receipt) && receipt.schema === 'tree-verdict/1' && receipt.gate === c.gate && receipt.verdict === 'success' &&
+    need(object(receipt) && receipt.schema === 'tree-verdict/2' && receipt.gate === c.gate && receipt.verdict === 'success' &&
       receipt.repository === c.repository && receipt.workflow_path === workflow.path && receipt.workflow_id === workflow.id &&
       receipt.run_id === run.id && receipt.run_attempt === run.run_attempt && receipt.head_sha === run.head_sha &&
       receipt.event === run.event && receipt.pr === candidate.pr && sha(receipt.tested_sha) && sha(receipt.tree), 'missing or malformed tested-tree receipt');
+    const coverage = canonicalCoverage({ ...receipt.collector?.coverage, gate: receipt.collector?.coverage?.label });
+    need(gateFor(coverage) === c.gate && (!c.coverage || stable(coverage) === stable(c.coverage)), 'coverage gate mismatch');
+    validateCollectorProof(receipt.collector, coverage);
+    const liveJobs = await attemptJobs(root, run, coverage, api);
+    need(stable(liveJobs.jobs) === stable(receipt.jobs), 'covering job evidence changed');
+    const collectedBy = collectorRow(liveJobs.rows, receipt.collector.collectorName, false);
+    need(collectedBy.id === receipt.collector.jobId, 'collector job identity changed');
     const tested = await commit(api, root, receipt.tested_sha);
     need(tested.tree.sha === receipt.tree && receipt.tree === current.tree.sha, 'tested checkout tree mismatch');
     await fresh();
     // Re-list before granting reuse, so a new run appearing during the lookup invalidates it.
     let stillListed = false;
-    for (const entry of candidates) {
+    for (const entry of sources) {
       const latest = await pages(api, `${root}/actions/workflows/${workflow.id}/runs?head_sha=${entry.head}`, 'workflow_runs');
       for (const row of latest) {
         const r = runShape(row, c, workflow);

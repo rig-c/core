@@ -22,6 +22,7 @@ globalThis.fetch = async function(url) {
   if(p.endsWith('/pulls')) return Response.json(f.associated);
   if(p.endsWith('/pulls/7')) return Response.json(f.pr);
   if(p.endsWith('/runs')) {const rows=u.searchParams.get('head_sha')===f.c.sha?[]:[f.run];return Response.json({total_count:rows.length,workflow_runs:rows});}
+  if(p.endsWith('/jobs')) return Response.json({total_count:f.jobRows.length,jobs:f.jobRows});
   if(p.endsWith('/runs/800')) return Response.json(f.run);
   if(p.endsWith('/artifacts')) return Response.json({total_count:1,artifacts:[f.artifact]});
   if(p.endsWith('/zip')) return new Response(Buffer.from(f.zip,'base64'));
@@ -30,25 +31,23 @@ globalThis.fetch = async function(url) {
 for (const scenario of ['positive', 'one-byte mismatch', 'API error']) test(`fixture workflow real composite process: ${scenario}`, () => {
   const dir = mkdtempSync(join(scratch, 'consumer-'));
   try {
-    const f = fixture();
+    const f = fixture(), repo = join(dir, 'consumer-git'); mkdirSync(repo);
+    const git = (...args) => { const r=spawnSync('git',args,{cwd:repo,encoding:'utf8'}); expect(r.status).toBe(0); return r.stdout.trim(); };
+    git('init','-q'); const probe=join(repo,'probe'); writeFileSync(probe,'a');git('add','probe');
+    git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture');
+    const currentSha=git('rev-parse','HEAD'),sourceTree=git('rev-parse','HEAD^{tree}');
+    const oldCurrent=f.commits.get(f.c.sha);f.commits.delete(f.c.sha);f.c.sha=currentSha;f.pr.merge_commit_sha=currentSha;
+    f.commits.set(currentSha,{...oldCurrent,sha:currentSha});
+    for(const c of f.commits.values())c.tree.sha=sourceTree;f.receipt.tree=sourceTree;
     if (scenario === 'one-byte mismatch') {
-      const repo = join(dir, 'one-byte-git'); mkdirSync(repo);
-      const git = (...args) => {
-        const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
-        expect(result.status).toBe(0); return result.stdout.trim();
-      };
-      git('init', '-q');
-      const probe = join(repo, 'probe'); writeFileSync(probe, 'a'); git('add', 'probe');
-      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture');
-      const sourceTree = git('rev-parse', 'HEAD^{tree}'), before = readFileSync(probe);
-      writeFileSync(probe, 'b'); const after = readFileSync(probe);
-      git('add', 'probe'); const currentTree = git('write-tree');
-      expect(before.length).toBe(1); expect(after.length).toBe(1);
-      const changedBytes = [...before].filter((byte, i) => byte !== after[i]).length;
-      expect(changedBytes).toBe(1); expect(currentTree).not.toBe(sourceTree);
-      for (const commit of f.commits.values()) commit.tree.sha = sourceTree;
-      f.commits.get(f.c.sha).tree.sha = currentTree; f.receipt.tree = sourceTree;
-      console.log(`PLANT one-byte Git evidence: file bytes=${before.length}->${after.length}; changed bytes=${changedBytes}; source tree=${sourceTree}; current tree=${currentTree}; unequal=${sourceTree !== currentTree}`);
+      const before=readFileSync(probe);writeFileSync(probe,'b');const after=readFileSync(probe);git('add','probe');const changedTree=git('write-tree');
+      git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','one byte changed');
+      const changedSha=git('rev-parse','HEAD');expect(git('rev-parse','HEAD^{tree}')).toBe(changedTree);
+      f.c.sha=changedSha;f.pr.merge_commit_sha=changedSha;f.commits.set(changedSha,{...oldCurrent,sha:changedSha,tree:{sha:changedTree}});
+      expect(before.length).toBe(1);expect(after.length).toBe(1);const changedBytes=[...before].filter((v,i)=>v!==after[i]).length;
+      expect(changedBytes).toBe(1);expect(changedTree).not.toBe(sourceTree);
+      f.commits.get(f.c.sha).tree.sha=changedTree;
+      console.log(`PLANT one-byte Git evidence: file bytes=1->1; changed bytes=${changedBytes}; source tree=${sourceTree}; current tree=${changedTree}; unequal=true`);
     }
     const zip = archive(JSON.stringify(f.receipt));
     const config = { ...f, commits: Object.fromEntries(f.commits), zip: zip.toString('base64'), apiError: scenario === 'API error',
@@ -62,7 +61,7 @@ for (const scenario of ['positive', 'one-byte mismatch', 'API error']) test(`fix
       TV_DEFAULT_BRANCH: f.c.defaultBranch, TV_PURPOSE: 'publish', TV_VERDICT_PATH: join(dir, 'verified.json'),
       FIXTURE_GATE_SENTINEL: join(dir, 'gate'), FIXTURE_PUBLISH_SENTINEL: join(dir, 'published'), FIXTURE_GATE_EXIT: '19' };
     const action = Bun.YAML.parse(readFileSync(join(actionPath, 'action.yml'), 'utf8'));
-    const run = spawnSync('bash', ['-c', action.runs.steps[0].run], { env, encoding: 'utf8', timeout: 10000 });
+    const run = spawnSync('bash', ['-c', action.runs.steps[0].run], { env, cwd: repo, encoding: 'utf8', timeout: 10000 });
     expect(run.status).toBe(0);
     const outputs = Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map(l => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; }));
     const positive = scenario === 'positive'; expect(outputs.reused).toBe(String(positive));

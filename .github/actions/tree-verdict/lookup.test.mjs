@@ -1,6 +1,8 @@
 import { test, expect } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { lookup, pages } from './lookup.mjs';
+import { workflowFixture } from './fixtures.mjs';
+import { compileCoverage } from './planner.mjs';
 const h = c => c.repeat(40);
 // Real Git object identity calculation, without a git command or mutable fixture repository.
 function tree(byte) {
@@ -9,15 +11,21 @@ function tree(byte) {
   return object('tree', entry).toString('hex');
 }
 function fixture() {
-  const c = { repository: 'sample/core', sha: h('a'), runId: 900, event: 'push', ref: 'refs/heads/main', defaultBranch: 'main', workflow: '.github/workflows/ci.yml', gate: 'full/1' };
+  const fixtureSource = workflowFixture('parts');
+  const plan = compileCoverage(fixtureSource.declaration, fixtureSource.read);
+  const c = { repository: 'sample/core', sha: h('a'), runId: 900, event: 'push', ref: 'refs/heads/main', defaultBranch: 'main', workflow: '.github/workflows/ci.yml', gate: plan.gate, coverage: plan.coverage };
   const repo = { id: 1, full_name: c.repository }, currentTree = tree('a');
   const workflow = { id: 10, path: c.workflow, state: 'active' };
   const run = { id: 800, run_number: 8, run_attempt: 1, workflow_id: 10, path: c.workflow, head_sha: h('b'), status: 'completed', conclusion: 'success', event: 'pull_request', head_branch: 'feature', repository: repo, head_repository: repo,
     pull_requests: [{ number: 7, head: { sha: h('b'), repo }, base: { repo } }] };
   const pr = { number: 7, state: 'closed', merged: true, merge_commit_sha: c.sha, head: { sha: h('b'), repo }, base: { ref: 'main', repo } };
-  const receipt = { schema: 'tree-verdict/1', gate: 'full/1', verdict: 'success', repository: c.repository, workflow_path: c.workflow, workflow_id: 10, run_id: 800, run_attempt: 1, head_sha: h('b'), tested_sha: h('c'), tree: currentTree, event: 'pull_request', pr: 7 };
+  const receipt = { schema: 'tree-verdict/2', gate: plan.gate, verdict: 'success', repository: c.repository, workflow_path: c.workflow, workflow_id: 10, run_id: 800, run_attempt: 1, head_sha: h('b'), tested_sha: h('c'), tree: currentTree, event: 'pull_request', pr: 7 };
+  const jobRows = Object.entries(plan.coverage.jobs).flatMap(([group, job]) => job.legs.map(leg => ({ name: leg.apiName, matrix: leg.matrix, group, run_id: 800, run_attempt: 1, head_sha: h('b'), status: 'completed', conclusion: 'success' }))).map((r,i)=>({...r,id:100+i}));
+  receipt.jobs = jobRows.map(({matrix,group,...r}) => ({...r,group,matrix}));
+  receipt.collector = { ...plan, jobId: 200 };
+  jobRows.push({id:200,name:plan.collectorName,run_id:800,run_attempt:1,head_sha:h('b'),status:'completed',conclusion:'success'});
   const commits = new Map([c.sha, h('b'), h('c')].map(hash => [hash, { sha: hash, tree: { sha: currentTree }, parents: [{ sha: h('d') }] }]));
-  const state = { c, run, pr, receipt, commits, workflow, listings: [run], direct: [], associated: [{ number: 7 }], calls: [], logs: [], receiptCalls: 0 };
+  const state = { c, run, pr, receipt, commits, workflow, listings: [run], direct: [], associated: [{ number: 7 }], calls: [], logs: [], receiptCalls: 0, jobRows };
   state.api = async path => {
     state.calls.push(path);
     if (state.override) { const v = await state.override(path); if (v !== undefined) return structuredClone(v); }
@@ -29,6 +37,7 @@ function fixture() {
       const rows = path.includes(`head_sha=${c.sha}`) ? state.direct : state.listings;
       return structuredClone({ total_count: rows.length, workflow_runs: rows });
     }
+    if (path.includes('/attempts/') && path.includes('/jobs?')) return structuredClone({total_count:state.jobRows.length,jobs:state.jobRows});
     if (path.endsWith('/actions/runs/800')) return structuredClone(run);
     if (path.includes('/git/trees/')) return { sha: path.split('/').at(-1).split('?')[0], truncated: false, tree: [] };
     throw new Error('unexpected route');
@@ -55,6 +64,7 @@ test('equal tree, distinct current/head/synthetic commits with mandatory receipt
 test('direct commit successful default-branch push reuses with PR 0', async () => {
   const s = fixture(); s.associated = []; s.run.event = 'push'; s.run.head_sha = s.c.sha; s.run.head_branch = 'main'; s.direct = [s.run];
   Object.assign(s.receipt, { event: 'push', head_sha: s.c.sha, pr: 0 });
+  for (const r of [...s.jobRows,...s.receipt.jobs]) r.head_sha=s.c.sha;
   expect(await drive(s)).toMatchObject({ reused: true, pr: 0 });
 });
 test('one-byte file mutation changes real tree identity and executes fallback', async () => {
@@ -139,3 +149,22 @@ test('incomplete, oversized and shifting pagination refuse', async () => {
 });
 
 export { fixture, drive, tree };
+
+
+test('eligible PR source is not shadowed by newer current-main CI without fresh receipt', async () => {
+  const s = fixture(); s.direct = [{...s.run,id:899,run_number:99,event:'push',head_sha:s.c.sha,head_branch:'main'}];
+  expect((await drive(s)).reused).toBe(true);
+  expect(s.calls.some(p=>p.includes(`/runs?head_sha=${s.c.sha}`))).toBe(false);
+});
+for (const plant of ['missing leg','cancelled leg','duplicate name','duplicate ID','wrong attempt','old receipt','missing collector','changed collected IDs']) test(`coverage ${plant} => full fallback`,async()=>{
+  const s=fixture();
+  if(plant==='missing leg')s.jobRows.shift();
+  if(plant==='cancelled leg')s.jobRows[0].conclusion='cancelled';
+  if(plant==='duplicate name')s.jobRows.push({...s.jobRows[0],id:999});
+  if(plant==='duplicate ID')s.jobRows.push({...s.jobRows[0],name:'unrelated'});
+  if(plant==='wrong attempt')s.jobRows[0].run_attempt=2;
+  if(plant==='old receipt')s.receipt.schema='tree-verdict/1';
+  if(plant==='missing collector')s.jobRows.pop();
+  if(plant==='changed collected IDs')s.receipt.jobs[0].id=999;
+  expect((await drive(s)).reused).toBe(false);
+});

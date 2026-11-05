@@ -10,7 +10,7 @@ export async function readPublishVerdict(path, context, api, readReceipt) {
     const text = readFileSync(path, 'utf8');
     if (text.length > 65536) return false;
     const doc = JSON.parse(text);
-    if (doc.schema !== 'tree-verdict-verified/1' || doc.target_sha !== context.sha ||
+    if (doc.schema !== 'tree-verdict-verified/2' || doc.target_sha !== context.sha ||
       doc.consumer_run_id !== context.runId || doc.repository !== context.repository || doc.gate !== context.gate) return false;
     const fresh = await lookup(context, api, readReceipt);
     return fresh.reused === true && fresh.runId === doc.run_id && fresh.headSha === doc.head_sha &&
@@ -20,7 +20,7 @@ export async function readPublishVerdict(path, context, api, readReceipt) {
 }
 export function publishEnvelope(context, result) {
   if (result.reused !== true) throw new Error('no passed verdict');
-  return { schema: 'tree-verdict-verified/1', repository: context.repository, target_sha: context.sha,
+  return { schema: 'tree-verdict-verified/2', repository: context.repository, target_sha: context.sha,
     consumer_run_id: context.runId, gate: context.gate, tree: result.tree,
     run_id: result.runId, run_attempt: result.receipt.run_attempt, head_sha: result.headSha,
     tested_sha: result.testedSha, pr: result.pr };

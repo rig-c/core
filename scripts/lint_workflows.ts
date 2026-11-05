@@ -1,6 +1,7 @@
 /** Explicit declarations are the inventory. This checks YAML structure, not arbitrary shell semantics. */
 import { readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
+import { compileCoverage } from '../.github/actions/tree-verdict/planner.mjs';
 
 export interface WorkflowDeclaration {
   path: string;
@@ -18,6 +19,7 @@ export interface WorkflowDeclaration {
 export interface Declarations {
   schema: 'workflow-verdict-lint/1';
   defaultBranch: string;
+  coverageDeclarations?: string[];
   workflows: WorkflowDeclaration[];
 }
 type Mapping = Record<string, unknown>;
@@ -47,6 +49,7 @@ export function lintWorkflows(declarations: Declarations, read: (path: string) =
   try {
     if (declarations.schema !== 'workflow-verdict-lint/1' || !declarations.defaultBranch ||
       !Array.isArray(declarations.workflows) || !declarations.workflows.length) throw new Error('missing inventory');
+    for (const path of declarations.coverageDeclarations ?? []) compileCoverage(JSON.parse(read(path)), read, path);
     const paths = new Set<string>();
     for (const d of declarations.workflows) {
       if (!/^\.github\/workflows\/[\w-]+\.ya?ml$/.test(d.path) || paths.has(d.path) || !Array.isArray(d.heavyJobs) ||
@@ -98,9 +101,8 @@ export function lintWorkflows(declarations: Declarations, read: (path: string) =
         if ('verdictStep' in p) {
           const proof = all.find(s => s.id === p.verdictStep);
           const declared: unknown = JSON.parse(read(p.declaration));
-          const covering = map(declared) && declared.schema === 'tree-verdict-lifecycle/1' &&
-            typeof declared.chain === 'string' && Array.isArray(declared.commands) && declared.commands.length > 0 &&
-            declared.commands.every(c => typeof c === 'string' && !!c.trim()) && declared.commands.join(' && ') === declared.chain;
+          let covering = true;
+          try { compileCoverage(declared, read, p.declaration); } catch (error) { covering = false; errors.push(error instanceof Error ? error.message : 'COVER_SCHEMA'); }
           if (!covering || scripts[p.lifecycle] !== p.readerCommand || !active(publish) ||
             typeof publish?.run !== 'string' || !/^npm publish(?:\s+--[a-z-]+(?:\s+[\w-]+)?)*$/.test(publish.run.trim()) ||
             publish.run.includes('--ignore-scripts') || !map(publish.env) ||

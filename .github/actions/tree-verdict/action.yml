@@ -10,6 +10,10 @@ inputs:
   gate:
     description: Full gate identity; required unless declaration is supplied
     required: false
+  checkout:
+    description: Actual consumer checkout directory, relative to workspace; defaults to current directory
+    required: false
+    default: .
   purpose:
     description: ci or publish; publish also writes a receipt for the lifecycle reader
     required: false
@@ -23,10 +27,13 @@ inputs:
     required: false
     default: ${{ github.token }}
   receipt-name:
-    description: Artifact containing exactly receipt.json (tree-verdict/1)
+    description: Artifact containing exactly receipt.json (tree-verdict/2)
     required: false
     default: tree-verdict-receipt
 outputs:
+  tooling-path:
+    description: Immutable pinned action source directory, outside the consumer checkout; available on misses too
+    value: ${{ steps.lookup.outputs.tooling-path }}
   reused:
     description: Exactly true or false; only true permits skipping the declared full gate
     value: ${{ steps.lookup.outputs.reused }}
@@ -51,6 +58,7 @@ runs:
     - id: lookup
       shell: bash
       env:
+        TV_CHECKOUT: ${{ inputs.checkout }}
         TV_DECLARATION: ${{ inputs.declaration }}
         TV_WORKFLOW: ${{ inputs.workflow }}
         TV_GATE: ${{ inputs.gate }}
@@ -66,4 +74,5 @@ runs:
         TV_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         printf 'reused=false\nrun-id=\nhead-sha=\npr=\ntested-sha=\nverdict-path=\n' >> "$GITHUB_OUTPUT"
+        printf 'tooling-path=%s\n' "$GITHUB_ACTION_PATH" >> "$GITHUB_OUTPUT"
         node "$GITHUB_ACTION_PATH/run.mjs" || echo 'TREE_VERDICT_MISS: lookup process failed; run the full gate'

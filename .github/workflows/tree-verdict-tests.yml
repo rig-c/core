@@ -20,4 +20,4 @@ jobs:
       - name: Focused action and declaration-lint controls
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bun test ./.github/actions/tree-verdict/lookup.test.mjs ./.github/actions/tree-verdict/api.test.mjs ./.github/actions/tree-verdict/consumer.test.mjs ./.github/actions/tree-verdict/producer.test.mjs ./scripts/lint_workflows.test.ts
+        run: bun test ./.github/actions/tree-verdict/lookup.test.mjs ./.github/actions/tree-verdict/api.test.mjs ./.github/actions/tree-verdict/consumer.test.mjs ./.github/actions/tree-verdict/producer.test.mjs ./.github/actions/tree-verdict/planner.test.mjs ./scripts/lint_workflows.test.ts

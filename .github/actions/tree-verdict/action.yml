@@ -1,0 +1,69 @@
+name: Reuse a proved tree verdict
+description: Find a successful same-workflow run with an explicit tested-tree receipt; otherwise run the full gate.
+inputs:
+  declaration:
+    description: Consumer lifecycle JSON; derives workflow and full-chain gate identity when supplied
+    required: false
+  workflow:
+    description: Exact source workflow path; required unless declaration is supplied
+    required: false
+  gate:
+    description: Full gate identity; required unless declaration is supplied
+    required: false
+  purpose:
+    description: ci or publish; publish also writes a receipt for the lifecycle reader
+    required: false
+    default: ci
+  verdict-path:
+    description: Absolute verified-receipt path inside runner.temp; required for publish
+    required: false
+    default: ${{ runner.temp }}/tree-verdict-verified.json
+  token:
+    description: Read-only token for this repository
+    required: false
+    default: ${{ github.token }}
+  receipt-name:
+    description: Artifact containing exactly receipt.json (tree-verdict/1)
+    required: false
+    default: tree-verdict-receipt
+outputs:
+  reused:
+    description: Exactly true or false; only true permits skipping the declared full gate
+    value: ${{ steps.lookup.outputs.reused }}
+  run-id:
+    description: Successful source run ID, empty on a miss
+    value: ${{ steps.lookup.outputs.run-id }}
+  head-sha:
+    description: Full source run API head SHA, empty on a miss (NOT necessarily the tested checkout)
+    value: ${{ steps.lookup.outputs.head-sha }}
+  pr:
+    description: Associated PR number, or 0 for a direct-commit push, empty on a miss
+    value: ${{ steps.lookup.outputs.pr }}
+  verdict-path:
+    description: Verified receipt for the publish lifecycle reader; empty on a miss
+    value: ${{ steps.lookup.outputs.verdict-path }}
+  tested-sha:
+    description: Full actual tested checkout SHA from the verified receipt
+    value: ${{ steps.lookup.outputs.tested-sha }}
+runs:
+  using: composite
+  steps:
+    - id: lookup
+      shell: bash
+      env:
+        TV_DECLARATION: ${{ inputs.declaration }}
+        TV_WORKFLOW: ${{ inputs.workflow }}
+        TV_GATE: ${{ inputs.gate }}
+        TV_PURPOSE: ${{ inputs.purpose }}
+        TV_VERDICT_PATH: ${{ inputs.verdict-path }}
+        TV_TOKEN: ${{ inputs.token }}
+        TV_RECEIPT: ${{ inputs.receipt-name }}
+        TV_REPOSITORY: ${{ github.repository }}
+        TV_SHA: ${{ github.sha }}
+        TV_RUN_ID: ${{ github.run_id }}
+        TV_EVENT: ${{ github.event_name }}
+        TV_REF: ${{ github.ref }}
+        TV_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        printf 'reused=false\nrun-id=\nhead-sha=\npr=\ntested-sha=\nverdict-path=\n' >> "$GITHUB_OUTPUT"
+        node "$GITHUB_ACTION_PATH/run.mjs" || echo 'TREE_VERDICT_MISS: lookup process failed; run the full gate'

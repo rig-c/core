@@ -1,0 +1,19 @@
+# Deliberately cheap full FIXTURE gate, not the repository's full selftest.
+name: tree-verdict consumer fixture
+on: {push: {branches: [main]}}
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - id: reuse
+        uses: ./.github/actions/tree-verdict
+        with:
+          workflow: .github/workflows/ci.yml
+          gate: full/1
+      - id: full-fixture-gate
+        if: ${{ steps.reuse.outputs.reused != 'true' }}
+        run: |
+          printf 'full fixture gate executed\n' > "$FIXTURE_GATE_SENTINEL"
+          exit "${FIXTURE_GATE_EXIT:-0}"
+      - id: publish-sentinel
+        run: printf 'publish reached\n' > "$FIXTURE_PUBLISH_SENTINEL"

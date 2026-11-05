@@ -1,0 +1,12 @@
+{
+  "schema": "workflow-verdict-lint/1",
+  "defaultBranch": "main",
+  "scopeExclusion": "Phase A only: existing ci.yml, release.yml and selftest-shards.yml adoption belongs to core#1705; no verdict is claimed for them.",
+  "workflows": [
+    {
+      "path": ".github/workflows/tree-verdict-tests.yml",
+      "heavyJobs": [],
+      "publishes": []
+    }
+  ]
+}

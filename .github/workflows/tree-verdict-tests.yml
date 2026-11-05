@@ -1,0 +1,23 @@
+name: tree-verdict-tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # Phase A only: no existing core CI/release adoption or heavy jobs.
+      - name: Lint the declared landed workflow scope
+        run: bun scripts/lint_workflows.ts scripts/lint_workflows.declarations.json .
+      - name: Focused action and declaration-lint controls
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun test ./.github/actions/tree-verdict/lookup.test.mjs ./.github/actions/tree-verdict/api.test.mjs ./.github/actions/tree-verdict/consumer.test.mjs ./.github/actions/tree-verdict/producer.test.mjs ./scripts/lint_workflows.test.ts

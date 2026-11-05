@@ -1687,7 +1687,7 @@ export default {
  * install, through the importer's own directory.
  */
 let bundler: { js: string; version: string; faults: string[] } | null = null;
-function bundlerOnce(): { js: string; version: string; faults: string[] } {
+function bundlerOnce(timePhase: TimePhase): { js: string; version: string; faults: string[] } {
   if (bundler !== null) return bundler;
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
   const lock = existsSync(join(ROOT, 'bun.lock')) ? readFileSync(join(ROOT, 'bun.lock'), 'utf8') : '';
@@ -1699,7 +1699,7 @@ function bundlerOnce(): { js: string; version: string; faults: string[] } {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'rigc-smoke-bundler-')));
   LEFT_BEHIND.push(dir);
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name: 'rigc-install-smoke-bundler', private: true, version: '0.0.0' }, null, 2)}\n`);
-  const installed = run('npm', ['install', `vite@${wanted}`, '--no-audit', '--no-fund', '--no-package-lock'], dir);
+  const installed = timePhase('install', 'vite', () => run('npm', ['install', `vite@${wanted}`, '--no-audit', '--no-fund', '--no-package-lock'], dir));
   const js = join(dir, 'node_modules', 'vite', 'bin', 'vite.js');
   const pkg = join(dir, 'node_modules', 'vite', 'package.json');
   if (!existsSync(js) || !existsSync(pkg)) {
@@ -1716,7 +1716,7 @@ function bundlerOnce(): { js: string; version: string; faults: string[] } {
  * the install stays the runtime-free install a user receives (issue #1679).
  */
 let typechecker: { js: string; typeRoots: string[]; version: string; faults: string[] } | null = null;
-function typecheckerOnce(): { js: string; typeRoots: string[]; version: string; faults: string[] } {
+function typecheckerOnce(timePhase: TimePhase): { js: string; typeRoots: string[]; version: string; faults: string[] } {
   if (typechecker !== null) return typechecker;
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
   const lock = existsSync(join(ROOT, 'bun.lock')) ? readFileSync(join(ROOT, 'bun.lock'), 'utf8') : '';
@@ -1734,7 +1734,7 @@ function typecheckerOnce(): { js: string; typeRoots: string[]; version: string; 
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'rigc-smoke-tsc-')));
   LEFT_BEHIND.push(dir);
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name: 'rigc-install-smoke-tsc', private: true, version: '0.0.0' }, null, 2)}\n`);
-  const installed = run('npm', ['install', `typescript@${tsWanted}`, `@types/bun@${bunTypesWanted}`, '--no-audit', '--no-fund', '--no-package-lock'], dir);
+  const installed = timePhase('install', 'typescript', () => run('npm', ['install', `typescript@${tsWanted}`, `@types/bun@${bunTypesWanted}`, '--no-audit', '--no-fund', '--no-package-lock'], dir));
   const js = join(dir, 'node_modules', 'typescript', 'bin', 'tsc');
   const pkg = join(dir, 'node_modules', 'typescript', 'package.json');
   const bunTypesPkg = join(dir, 'node_modules', '@types', 'bun', 'package.json');
@@ -1759,6 +1759,44 @@ function typecheckerOnce(): { js: string; typeRoots: string[]; version: string; 
 // ---------------------------------------------------------------------------
 // Running things
 // ---------------------------------------------------------------------------
+
+type SmokePhase = 'pack' | 'install' | 'build';
+type TimePhase = <T>(phase: SmokePhase, step: string, body: () => T) => T;
+
+/**
+ * Diagnostics only: monotonic wall seconds, never added to notes, faults or artifacts.
+ * Pack covers tarballFor (including plant/repack/proof, or copying registry bytes);
+ * install/build cover only their labelled synchronous run calls, through output capture.
+ * The intervals never nest. Shared tool installs belong to the case that first needs
+ * them; cache hits add no install interval. Everything else in runCase is overhead,
+ * including assertions, probes, type-checks, fixture work, rendering and case cleanup.
+ * The case excludes temp-root creation, verdict printing, outer cleanup and registry wait.
+ */
+function caseTiming(name: string): { phase: TimePhase; finish: () => void } {
+  const started = performance.now();
+  const seconds = { pack: 0, install: 0, build: 0 };
+  console.log(`  START SMOKE_PHASE[${name}] overhead/case`);
+  return {
+    phase<T>(phase: SmokePhase, step: string, body: () => T): T {
+      console.log(`  START SMOKE_PHASE[${name}] ${phase}/${step}`);
+      const before = performance.now();
+      try {
+        return body();
+      } finally {
+        const elapsed = (performance.now() - before) / 1000;
+        seconds[phase] += elapsed;
+        // END means the call returned or threw, not that its assertions passed.
+        console.log(`  END   SMOKE_PHASE[${name}] ${phase}/${step} ${elapsed.toFixed(6)}s; current=overhead`);
+      }
+    },
+    finish(): void {
+      const total = (performance.now() - started) / 1000;
+      const overhead = total - seconds.pack - seconds.install - seconds.build;
+      // Raw seconds retain precision for aggregation; only the live display is rounded.
+      console.log(`  SMOKE_TIMING[${name}] ${JSON.stringify({ unit: 'seconds', ...seconds, overhead, total })}`);
+    },
+  };
+}
 
 interface Ran {
   status: number;
@@ -2521,7 +2559,7 @@ function sameBuild(core: string, full: string): { differences: string[]; files: 
   return { differences, files };
 }
 
-function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: readonly string[]): CaseResult {
+function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: readonly string[], timePhase: TimePhase): CaseResult {
   const faults: string[] = [];
   const steps: string[] = [];
   const notes: string[] = [];
@@ -2531,7 +2569,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     steps.push(step);
   };
 
-  const built = tarballFor(work, spec.source, spec.plant);
+  const built = timePhase('pack', `tarball-${spec.source.kind}`, () => tarballFor(work, spec.source, spec.plant));
   for (const f of built.faults) fault('pack', f);
   if (built.tgz === '') return { name: spec.name, faults, steps, notes, output };
   notes.push(`the tarball carries ${built.paths.length} path(s)`);
@@ -2549,10 +2587,10 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   const home = realpathSync.native(mkdirIn(work, spec.dirName));
   writeFileSync(join(home, 'package.json'), `${JSON.stringify({ name: 'rigc-install-smoke', private: true, version: '0.0.0' }, null, 2)}\n`);
 
-  const install =
+  const install = timePhase('install', 'package', () =>
     spec.installer === 'npm'
       ? run('npm', ['install', built.tgz, '--no-audit', '--no-fund'], home)
-      : run('bun', ['add', built.tgz], home);
+      : run('bun', ['add', built.tgz], home));
   output += install.out;
   const pkgRoot = join(home, 'node_modules', NAME);
   if (!existsSync(join(pkgRoot, 'package.json'))) {
@@ -2645,7 +2683,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   // record a non-zero exit as a HOLE, and a HOLE does not move the exit code,
   // so a package whose installed `build` was broken printed green).
   // `--report` beside `--out` (issue #1213): the installed build writes the document a dependant reads in place of the sentences.
-  const coreBuild = run(bin, ['build', '--rig', 'rig.json', '--motion', 'motion.json', '--out', CORE_OUT, '--profile', 'rig-play', '--pack', '--report', CORE_REPORT], home);
+  const coreBuild = timePhase('build', 'core-entry', () => run(bin, ['build', '--rig', 'rig.json', '--motion', 'motion.json', '--out', CORE_OUT, '--profile', 'rig-play', '--pack', '--report', CORE_REPORT], home));
   output += coreBuild.out;
   const coreDir = join(home, CORE_OUT);
   const coreWants = ['skeleton.json', 'skeleton.atlas', 'skeleton.model.json', 'skeleton.png'];
@@ -2705,10 +2743,10 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   if (runtimeWanted === null) {
     fault('runtime', `SMOKE_RUNTIME_INSTALLS_BESIDE: the installed package.json declares no ${RUNTIME} devDependency, so there is no version to install beside it`);
   } else {
-    const beside =
+    const beside = timePhase('install', 'runtime', () =>
       spec.installer === 'npm'
         ? run('npm', ['install', `${RUNTIME}@${runtimeWanted}`, '--no-save', '--no-audit', '--no-fund'], home)
-        : run('bun', ['add', `${RUNTIME}@${runtimeWanted}`], home);
+        : run('bun', ['add', `${RUNTIME}@${runtimeWanted}`], home));
     output += beside.out;
     if (!existsSync(corePkg)) {
       fault('runtime', `SMOKE_RUNTIME_INSTALLS_BESIDE: ${spec.installer} install of ${RUNTIME}@${runtimeWanted} exited ${beside.status} and left no ${corePkg}. ${beside.out.trim().slice(0, 2000)}`);
@@ -2724,7 +2762,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   // `--profile rig-play` runs every rule the package has rather than the
   // twenty-seven the default profile keeps.
   const outDir = join(home, FULL_OUT);
-  const build = run(bin, ['build', '--rig', 'rig.json', '--motion', 'motion.json', '--out', FULL_OUT, '--profile', 'rig-play', '--pack'], home);
+  const build = timePhase('build', 'runtime-entry', () => run(bin, ['build', '--rig', 'rig.json', '--motion', 'motion.json', '--out', FULL_OUT, '--profile', 'rig-play', '--pack'], home));
   output += build.out;
   if (build.status !== 0) {
     fault('build', `SMOKE_BUILD_EXIT_0: \`node_modules/.bin/rigc build\` exited ${build.status}. ${build.out.trim().slice(0, 6000)}`);
@@ -2876,7 +2914,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       );
     }
     if (runsRuntimeFreeTypecheck(spec.plant)) {
-      const tsc = typecheckerOnce();
+      const tsc = typecheckerOnce(timePhase);
       const nodeForTsc = onPath('node');
       for (const f of tsc.faults) fault('exports-without-runtime', f);
       if (nodeForTsc === null) fault('exports-without-runtime', 'SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: `node` is not on PATH, and `tsc` runs on it');
@@ -2987,14 +3025,14 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       }
 
       // The browser bundle.
-      const tool = bundlerOnce();
+      const tool = bundlerOnce(timePhase);
       const node = onPath('node');
       for (const f of tool.faults) fault(CORE_BROWSER_STEP, f);
       if (node === null) fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: \`node\` is not on PATH, and vite runs on it`);
       if (tool.faults.length === 0 && node !== null) {
         writeFileSync(join(home, 'browser_entry.mjs'), BROWSER_ENTRY_SOURCE);
         writeFileSync(join(home, 'vite.browser.config.mjs'), browserConfigSource());
-        const built = run('node', [tool.js, 'build', '--config', 'vite.browser.config.mjs'], home);
+        const built = timePhase('build', 'vite-browser', () => run('node', [tool.js, 'build', '--config', 'vite.browser.config.mjs'], home));
         output += built.out;
         const bundle = join(home, CORE_BUNDLE_DIR, CORE_BUNDLE_FILE);
         const refused = built.out.split('\n').find((line) => line.includes(NODE_REFUSAL));
@@ -3062,7 +3100,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package exited ${refusal.status} printing ${JSON.stringify(refusal.stdout.slice(0, 300))} on stdout and ${JSON.stringify(refusal.stderr.slice(0, 600))} on stderr${touched ? ', and changed package.json' : ''}; exit 2, nothing on stdout, package.json unchanged and the lines "rigc review: REVIEW_NOT_INSTALLED: <package> is not installed …", "bun add -d <package>" and "bunx <package> check ${FULL_OUT}" on stderr were required`);
     } else {
       const reviewPackage = named[1];
-      const added = spec.installer === 'npm' ? run('npm', ['install', '-D', reviewPackage, '--no-audit', '--no-fund'], home) : run('bun', ['add', '-d', reviewPackage], home);
+      const added = timePhase('install', 'review', () => spec.installer === 'npm' ? run('npm', ['install', '-D', reviewPackage, '--no-audit', '--no-fund'], home) : run('bun', ['add', '-d', reviewPackage], home));
       output += added.out;
       const reviewManifest = join(home, 'node_modules', ...reviewPackage.split('/'), 'package.json');
       if (!existsSync(reviewManifest)) {
@@ -3386,7 +3424,13 @@ function main(): number {
     // fault prints is the one a child process would print back.
     const work = realpathSync.native(mkdtempSync(join(tmpdir(), 'rigc-smoke-')));
     try {
-      const result = runCase(spec, work, keep, typecheckedCases);
+      const timing = caseTiming(spec.name);
+      let result: CaseResult;
+      try {
+        result = runCase(spec, work, keep, typecheckedCases, timing.phase);
+      } finally {
+        timing.finish();
+      }
       ran += 1;
       const planted = spec.plant === 'none' ? null : PLANTED[spec.plant];
       if (planted === null) {

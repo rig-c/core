@@ -1541,6 +1541,17 @@ bun run smoke -- --source registry --version 0.21.0 --wait 15   # …and wait fo
 bun run smoke -- --keep                        # leave the install directories to look at
 ```
 
+Each case prints `START`/`END SMOKE_PHASE` around pack, install and build calls
+as they happen, with elapsed seconds on `END`; `END` records completion, not a
+passing assertion. `SMOKE_TIMING[case]` reports their summed seconds plus
+`overhead` and `total`. Pack includes plant/repack/proof work; install includes
+runtime, review and shared-tool installs (charged to the first case needing
+them); build includes both CLI entries and the browser bundle. Probes,
+type-checking, rendering and other case work are overhead. Total excludes
+registry wait, temp-root creation, verdict printing and outer cleanup. Historical
+case-end notes cannot recover these phase times; a timeout's last phase marker
+now identifies its active interval (#1698).
+
 It needs `npm`, `bun` and `tar` on PATH and the network for exactly one package,
 `@esotericsoftware/spine-core`, which phase 2 installs beside the package — the
 package's own install fetches nothing. It deliberately does **not** need this repository's dev

@@ -227,7 +227,13 @@ jobs:
   # something a file in the tree can assert. `installs` stays the gate.
   installs-matrix:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Windows: ceil(max green job seconds / 60 * 1.25) = ceil(874 / 60 * 1.25) = 19.
+    # 25% headroom over the slowest of main runs 41584303961, 41636580017,
+    # 41638406213, 41697683049, 41706423778, 41889821907, 42039611869,
+    # 42044591347 (624–874 s). Historical logs batch phase notes at case end;
+    # they cannot identify a slow pack/install/build phase (#1698).
+    # macOS keeps its existing ceiling; the same runs took 260–370 s there.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 19 || 15 }}
     strategy:
       # A red on one platform is no reason not to read the others.
       fail-fast: false

@@ -268,11 +268,12 @@ jobs:
     needs: [plan, admit]
     if: ${{ needs.admit.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
-    # The ceiling includes a full reader fallback plus registry propagation.
-    # Historical fallback evidence: v2.20.0 run 37724479086 spent 18m37s on
-    # the one-process gate, followed by up to 15 min of registry wait. Accepted
-    # whole-chain evidence skips that work; the fallback still needs this cap.
-    timeout-minutes: 40
+    # Run 42069082954: six selftest step durations sum to 2203 s, plus
+    # typecheck 22 s + lint 21 s = 2246 s of observed chain work. This is a
+    # shard-work budget, not a measured one-process fallback duration.
+    # 2246 s + registry wait 900 s + setup/pack/publish/variation margin 454 s
+    # = 3600 s. Accepted whole-chain evidence skips the reader's chain work.
+    timeout-minutes: 60
     permissions:
       contents: read # check out the tag
       actions: read # revalidate the source run, attempt and coverage

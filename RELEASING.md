@@ -455,6 +455,16 @@ only for a fresh gate. The unconditional named reader precedes all three packs
 and publications. A missing download reaches the reader's full fallback. A
 confirmation-only dispatch reaches `confirm` alone.
 
+The publish job allows 60 minutes for a full reader fallback and confirmation.
+Release run 42069082954 recorded selftest shard steps of 461, 201, 357, 652,
+199 and 333 seconds, totalling 2,203 seconds. Its typecheck took 22 seconds and
+lint 21 seconds. The budget is 2,246 seconds of observed chain work plus the
+900-second registry wait and 454 seconds for setup, packing, publication and
+variation, totalling 3,600 seconds. The selftest figure sums shard work and does
+not measure a single-process fallback. CUR31 executes the admission producer
+with closed cut and no-cut inputs and plants a publish timeout below its own
+registry wait. [Release run 42069082954](https://github.com/rig-c/core/actions/runs/42069082954)
+
 The first actual cut after adoption is a separate report gate. It requires its
 own HQ-signed current-base release PR and must report both hosted reuse log
 lines, cut duration, and the real provenance attestations of all three names.

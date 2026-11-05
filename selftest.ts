@@ -80647,12 +80647,17 @@ function runCurrencySuite(): number {
   {
     interface WfStep {
       name?: string;
+      id?: string;
       uses?: string;
       run?: string;
       if?: string;
+      env?: Record<string, string>;
+      'continue-on-error'?: boolean;
     }
     interface WfJob {
       if?: string;
+      needs?: string | string[];
+      outputs?: Record<string, string>;
       'timeout-minutes'?: number;
       steps?: WfStep[];
     }
@@ -81229,14 +81234,59 @@ function runCurrencySuite(): number {
         };
         const push = /^github\.event_name\s*==\s*'push'$/;
         const resolvedTag = /^needs\.[A-Za-z_][\w-]*\.outputs\.publish\s*==\s*'true'$/;
+        const needsOf = (job: WfJob): string[] => Array.isArray(job.needs) ? job.needs : job.needs === undefined ? [] : [job.needs];
+        const admittedCut = (publisher: WfJob): boolean => {
+          const relayName = /^\$\{\{ needs\.([A-Za-z_][\w-]*)\.outputs\.ready == 'true' \}\}$/.exec(publisher.if ?? '')?.[1];
+          if (relayName === undefined) return false;
+          const relay = parsed.jobs?.[relayName];
+          const producerId = /^\$\{\{ steps\.([A-Za-z_][\w-]*)\.outputs\.ready \}\}$/.exec(relay?.outputs?.ready ?? '')?.[1];
+          const producer = relay?.steps?.find((step) => step.id === producerId);
+          const plan = jobs.filter(([, job]) => (job.steps ?? []).some((step) => /release-please/.test(step.uses ?? '')));
+          if (relay === undefined || !needsOf(publisher).includes(relayName) || producerId === undefined ||
+            producer?.run === undefined || producer.if !== undefined || producer['continue-on-error'] === true ||
+            relay.steps?.length !== 1 || plan.length !== 1 || !needsOf(relay).includes(plan[0][0]) ||
+            producer.env?.CUT !== `\${{ needs.${plan[0][0]}.outputs.publish }}`) {
+            faults.push(`admission "${relayName}" does not bind its ready output to one unconditional producer needing the actual plan and reading that plan's publish output as CUT`);
+            return false;
+          }
+          const directory = mkdtempSync(join(harnessTemp(), 'rigc-admission-'));
+          const output = join(directory, 'outputs');
+          const cases = [
+            { what: 'cut false', cut: 'false', reused: 'true', lookup: 'success', gate: 'success', verdict: 'green', ready: 'false' },
+            { what: 'cut unset', cut: undefined, reused: 'true', lookup: 'success', gate: 'success', verdict: 'green', ready: 'false' },
+            { what: 'reused cut', cut: 'true', reused: 'true', lookup: 'success', gate: 'skipped', verdict: '', ready: 'true' },
+            { what: 'fresh green cut', cut: 'true', reused: 'false', lookup: 'success', gate: 'success', verdict: 'green', ready: 'true' },
+            { what: 'failed gate', cut: 'true', reused: 'false', lookup: 'success', gate: 'failure', verdict: '', ready: 'false' },
+            { what: 'failed lookup', cut: 'true', reused: 'true', lookup: 'failure', gate: 'success', verdict: 'green', ready: 'false' },
+          ];
+          const before = faults.length;
+          try {
+            for (const one of cases) {
+              writeFileSync(output, '');
+              const env: NodeJS.ProcessEnv = {
+                PATH: process.env.PATH, GITHUB_OUTPUT: output, CUT: one.cut ?? '',
+                REUSED: one.reused, LOOKUP_RESULT: one.lookup, GATE_RESULT: one.gate, VERDICT: one.verdict,
+              };
+              // Actions maps an unset needs output to an empty env value.
+              const ran = spawnSync('bash', ['-c', producer.run], { cwd: root, env, encoding: 'utf8', timeout: 5_000 });
+              const ready = readFileSync(output, 'utf8').split('\n').filter((line) => line.startsWith('ready='));
+              if (ran.status !== 0 || ready.length !== 1 || ready[0] !== `ready=${one.ready}`) {
+                faults.push(`admission "${relayName}" ${one.what}: exit ${String(ran.status)}, outputs ${JSON.stringify(ready)}, required ready=${one.ready}`);
+              }
+            }
+          } finally {
+            rmSync(directory, { recursive: true, force: true });
+          }
+          return faults.length === before;
+        };
         const publishers = jobs.filter(([, job]) => /npm publish/.test(bodyOf(job)));
         if (publishers.length !== 1) {
           faults.push(`${publishers.length} job(s) run \`npm publish\` where exactly one does today — this clause is reading something other than the publish`);
         }
         for (const [name, job] of jobs) {
-          if (/npm publish/.test(bodyOf(job)) && !heldBy(job.if, push) && !heldBy(job.if, resolvedTag)) {
+          if (/npm publish/.test(bodyOf(job)) && !heldBy(job.if, push) && !heldBy(job.if, resolvedTag) && !admittedCut(job)) {
             faults.push(
-              `job "${name}" publishes and its \`if\` is ${JSON.stringify(job.if ?? null)}, which holds it neither to a push nor to the tag a plan job resolved — a workflow_dispatch would reach it`,
+              `job "${name}" publishes and its \`if\` is ${JSON.stringify(job.if ?? null)}, which binds neither a push nor a resolved cut directly or through its verified admission producer`,
             );
           }
           for (const step of job.steps ?? []) {
@@ -81319,13 +81369,15 @@ function runCurrencySuite(): number {
       const plantInto = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
       const plants: Array<{ what: string; yml: [string, string] | null; doc: [string, string] | null; quiet?: boolean }> = [
         { what: 'release-please stops being held to a push', yml: ["        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'], doc: null },
-        { what: 'the publishing job stops being held to the resolved tag', yml: ["    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' }}\n", '    needs: [plan, gate]\n'], doc: null },
+        { what: 'the publishing job stops being held to the admission', yml: ["    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n", '    needs: [plan, admit]\n'], doc: null },
+        { what: 'the admission starts ready before checking the cut', yml: ['          ready=false\n', '          ready=true\n'], doc: null },
+        { what: 'the admission reads a different cut output', yml: ['          CUT: ${{ needs.plan.outputs.publish }}\n', '          CUT: ${{ needs.plan.outputs.unrelated }}\n'], doc: null },
         { what: 'the confirmation stops refusing an empty version', yml: [" && inputs.version != '' && inputs.tag == '' }}", " && inputs.tag == '' }}"], doc: null },
         { what: 'the workflow stops taking a dispatch', yml: ['  workflow_dispatch:\n', '  workflow_call:\n'], doc: null },
         { what: 'the re-run path waits three times as long as the cut did', yml: ['--version "$VERSION" --wait 15', '--version "$VERSION" --wait 45'], doc: null },
         { what: 'the cut stops passing a wait at all', yml: ['--version "$version" --wait 15 --case clean', '--version "$version" --case clean'], doc: null },
         { what: 'the re-run stops naming the case', yml: ['--version "$VERSION" --wait 15 --case clean', '--version "$VERSION" --wait 15'], doc: null },
-        { what: 'the publishing job is given a timeout under its own wait', yml: ['    timeout-minutes: 40\n', '    timeout-minutes: 10\n'], doc: null },
+        { what: 'the publishing job is given a timeout under its own wait', yml: ['    timeout-minutes: 60\n', '    timeout-minutes: 10\n'], doc: null },
         { what: 'the document states a wait the workflow does not pass', yml: null, doc: ['--wait 15', '--wait 5'] },
         { what: 'the document drops the row for the not-served exit code', yml: null, doc: ['| `3` |', '| `9` |'] },
         { what: 'the confirmation job is renamed', yml: ['\n  confirm:\n', '\n  reconfirm:\n'], doc: null, quiet: true },
@@ -81583,11 +81635,13 @@ function runCurrencySuite(): number {
 
   // --- CUR119/CUR120: the release run's graph, and the one gate both workflows call (issue #1249)
   //
-  // ⏱️ The publish ran the whole selftest in one process on one runner —
-  // `Publish to npm` 18m37s of a ~21-minute run (v2.20.0) — where CI runs it as
-  // six shards and a merge. So release.yml now calls the same shards and merge
-  // over the tag (`gate`) and `prepublishOnly` reads the merged tally they wrote
-  // instead of running them again. That trade is only sound in one order, and
+  // The release calls the same shards and merge as CI over the resolved tag.
+  // The named reader accepts complete tree proof or exact tally coverage before
+  // its original chain. Run 42069082954's six selftest steps total 2203 s;
+  // typecheck 22 s + lint 21 s give a 2246 s fallback work budget. The publish
+  // cap adds 900 s registry wait + 454 s margin = 3600 s. This sums observed
+  // shard work rather than measuring a one-process fallback. That trade is
+  // only sound in one order, and
   // CUR119 holds it: release-please first, the gate on the tag `plan` resolved
   // under the one condition `plan` resolved, the publish after the gate with
   // the corpus fetched and the tally downloaded first, `RIGC_PREPUBLISH_TALLY`
@@ -81912,7 +81966,7 @@ function runCurrencySuite(): number {
           { what: 'the confirmation runs on a tag dispatch too', edit: uniq(releaseText, " && inputs.version != '' && inputs.tag == '' }}", ' }}') },
           { what: 'the tally is downloaded after the publish', edit: moved },
           { what: 'the reader stops naming the tally', edit: once(releaseText, '          RIGC_PREPUBLISH_TALLY:', '          RIGC_UNREAD_TALLY:') },
-          { what: 'the variable is set on the whole publish job', edit: once(releaseText, '    timeout-minutes: 40\n', '    timeout-minutes: 40\n    env:\n      RIGC_PREPUBLISH_TALLY: /dev/null\n') },
+          { what: 'the variable is set on the whole publish job', edit: once(releaseText, '    timeout-minutes: 60\n', '    timeout-minutes: 60\n    env:\n      RIGC_PREPUBLISH_TALLY: /dev/null\n') },
           { what: 'the plan job is handed the OIDC token', edit: once(releaseText, '      issues: write # release-please labels\n', '      issues: write # release-please labels\n      id-token: write\n') },
           { what: 'the download step is renamed', edit: once(releaseText, 'name: Download the merged tally the gate wrote', 'name: Tally'), quiet: true },
         ],

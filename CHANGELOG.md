@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.1](https://github.com/rig-c/core/compare/v3.4.0...v3.4.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **ci:** add measured Windows smoke timeout margin ([#1699](https://github.com/rig-c/core/issues/1699)) ([5599d1b](https://github.com/rig-c/core/commit/5599d1b583c6285d66b5e16b91ab159436ff782d)), closes [#1698](https://github.com/rig-c/core/issues/1698)
+
 ## [3.4.0](https://github.com/rig-c/core/compare/v3.3.0...v3.4.0) (2026-11-05)
 
 

@@ -58,5 +58,7 @@ for (const recipe of galleryRecipes(TREE_ROOT, console.log)) {
 }
 const heaviest = rows.reduce((a, b) => b.offMs > a.offMs ? b : a);
 console.log(`HEAVIEST ${JSON.stringify(heaviest)}`);
-if (heaviest.ratio > 2) throw new Error(`STOP: ${heaviest.name} flag-on/off ${heaviest.ratio} exceeds 2`);
+const measured = rows.filter(row => row.cells > 0);
+if (measured.length === 0) throw new Error('STOP: no gallery recipe listed any cells; setup-attribution cost was not measured');
+for (const row of measured) if (row.ratio > 2) throw new Error(`STOP: ${row.name} flag-on/off ${row.ratio} exceeds 2 with ${row.cells} listed cells`);
 console.log(`IDENTICAL ${rows.length} gallery recipes; ${rows.reduce((n, r) => n + r.sidecars, 0)} sidecars; ${rows.reduce((n, r) => n + r.hits, 0)} hits; ${rows.reduce((n, r) => n + r.cells, 0)} listed cells`);

@@ -45,7 +45,7 @@ import { PASS_THROUGH_FILE, passFrameLine, type PassPair, passSummaryLine, passT
 import type { Plate } from '../../tools/plate.ts';
 import { OVERLAPS_FILE, OverlapError, overlapLine, overlapPlate, overlapsFileOf, overlapsOf, overlapsPlateFile, overlapsText, plateParticipants, staticLine } from '../overlaps.ts';
 import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError, sheetRigNameOf, sheetSidecarRecord, sheetSourceOf } from '../sheet.ts';
-import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText } from '../seam.ts';
+import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText, setupCellReader } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
 import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, prerollStart, prerollWarmPoints, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
@@ -737,7 +737,7 @@ export function cmdRender(flags: Record<string, string>): void {
   const given = readGivenViewport(flags);
   const extremesOnly = flags['extremes-only'] !== undefined;
   if (extremesOnly) {
-    for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'overlaps', 'angle-range', 'boundary-from']) {
+    for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'boundary-from']) {
       if (flags[flag] !== undefined) {
         throw new UsageError(`--extremes-only takes no --${flag}: it writes only extremes.json and, when readable, extremes.png. Drop --${flag}, or use --extremes for ordinary frames and additional outputs`);
       }
@@ -827,6 +827,8 @@ export function cmdRender(flags: Record<string, string>): void {
   // The seam reading (issue #1456) is its own flag for --folds' reason, and refused beside a subset for --pass-through's:
   // it reads the two slots as the whole rig draws them.
   const seam = flags.seam;
+  const seamCells = flags['seam-cells'] !== undefined;
+  if (seamCells && seam === undefined) throw new UsageError('--seam-cells needs --seam <slot>:<slot>[,…]; no pair was supplied');
   if (seam !== undefined) {
     for (const flag of ['slot', 'hide'] as const) {
       if (flags[flag] !== undefined) {
@@ -854,7 +856,7 @@ export function cmdRender(flags: Record<string, string>): void {
     posersAsked(flags),
   );
   if (flags.parallax !== undefined) {
-    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'physics', 'boundary-from', 'viewport', 'viewport-from']) {
+    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'physics', 'boundary-from', 'viewport', 'viewport-from']) {
       if (flags[flag] !== undefined) throw new UsageError(`--parallax takes no --${flag}: it samples one named dial on its own 9-value grid; drop --${flag} or run ordinary render separately`);
     }
     if (flags.poser !== undefined && flags.poser !== 'core') throw new UsageError('--parallax requires --poser core: it reads only a rigc compiled model');
@@ -1070,6 +1072,7 @@ export function cmdRender(flags: Record<string, string>): void {
     // whose slot draws on no frame of any set drawn is refused, as --pass-through refuses it, rather than read as a SKIP.
     const seamReadings = new Map<string, ReturnType<typeof seamFileOf>>();
     if (seamPairs !== undefined) {
+      const cells = seamCells ? setupCellReader(() => sampleSetupPose(poser, { skin })[0].pieces, pages) : undefined;
       const draws = new Set<string>();
       for (const frames of sampled.values()) for (const frame of frames) for (const piece of frame.pieces) draws.add(piece.slot);
       for (const pair of seamPairs) {
@@ -1087,7 +1090,7 @@ export function cmdRender(flags: Record<string, string>): void {
         const shown = frames.map((frame) => frame.attachments ?? []);
         const read = frames.map((frame) => ({ index: frame.index, time: frame.time, pieces: frame.pieces, attachments: frame.attachments ?? [] }));
         try {
-          seamReadings.set(name, seamFileOf(animation, fps, skin, seamsOf(seamPairs, poser.rest(skin, shown), read, pages)));
+          seamReadings.set(name, seamFileOf(animation, fps, skin, seamsOf(seamPairs, poser.rest(skin, shown), read, pages, {}, { cells })));
         } catch (err) {
           if (err instanceof SeamError) throw new UsageError(`--seam, ${JSON.stringify(name)}: ${err.message}`);
           throw err;

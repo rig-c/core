@@ -133,6 +133,69 @@ export interface SeamFrame {
 /** A world box `[minX, minY, maxX, maxY]`, world units, y up. */
 export type SeamBox = [number, number, number, number];
 
+/** One counted gap cell: centre in world units, y up. */
+export interface SeamCell {
+  x: number;
+  y: number;
+  setupTop: string | null;
+  setupUnder: string | null;
+}
+
+/** Optional detail; absent preserves the existing sidecar bytes. */
+export interface SeamOptions {
+  cells?: SeamCellReader;
+}
+
+/** Fills setup attribution for counted cells; reusable across pairs and frame sets. */
+export type SeamCellReader = (cells: SeamCell[], side: number) => void;
+
+/**
+ * Lazy setup raster, once per distinct cell side. Slot occupancy uses the same
+ * positive rendered-alpha traversal as gap coverage, without source-over hiding
+ * the layer below. Repeated fragments of one slot are one layer.
+ */
+export function setupCellReader(setup: () => readonly Piece[], pages: ReadonlyMap<string, Plate>): SeamCellReader {
+  const cache = new Map<number, { viewport: Viewport; names: string[]; top: Int32Array; under: Int32Array } | null>();
+  let pieces: readonly Piece[] | undefined;
+  return (cells, side) => {
+    if (cells.length === 0) return;
+    if (!cache.has(side)) {
+      pieces ??= setup();
+      if (pieces.length === 0) cache.set(side, null);
+      else {
+        const { viewport } = gridOf([], side, pieces);
+        const top = new Int32Array(viewport.width * viewport.height).fill(-1);
+        const under = new Int32Array(top.length).fill(-1);
+        const names = [...new Set(pieces.map(p => p.slot))];
+        const ids = new Map(names.map((name, i) => [name, i]));
+        const project = projector(viewport);
+        for (const piece of pieces) {
+          const page = pages.get(piece.page);
+          if (page === undefined) throw new SeamError(`setup slot "${piece.slot}" samples missing atlas page "${piece.page}"; available [${[...pages.keys()].join(', ')}]`);
+          const id = ids.get(piece.slot)!;
+          rasterisePiece(page, piece, project, viewport, (x, y, _r, _g, _b, alpha) => {
+            const k = y * viewport.width + x;
+            if (alpha > 0 && top[k] !== id) { under[k] = top[k]; top[k] = id; }
+          });
+        }
+        cache.set(side, { viewport, names, top, under });
+      }
+    }
+    const read = cache.get(side);
+    for (const cell of cells) {
+      cell.setupTop = null; cell.setupUnder = null;
+      if (read == null) continue;
+      const { viewport, names, top, under } = read;
+      const x = Math.round((cell.x - viewport.minX) / side - 0.5);
+      const y = Math.round((viewport.maxY - cell.y) / side - 0.5);
+      if (x < 0 || y < 0 || x >= viewport.width || y >= viewport.height) continue;
+      const k = y * viewport.width + x;
+      cell.setupTop = names[top[k]] ?? null;
+      cell.setupUnder = names[under[k]] ?? null;
+    }
+  };
+}
+
 /** What one frame reads of one kind. */
 export interface SeamHit {
   index: number;
@@ -146,6 +209,8 @@ export interface SeamHit {
   area: number;
   /** The counted cells' whole squares, world units, y up. */
   box: SeamBox;
+  /** Opt-in on gapOpen/gapCovered only; descending y, then ascending x. */
+  cells?: SeamCell[];
 }
 
 /** A run of consecutive frames of one kind — first and last frame, their times, the most cells on any of them. */
@@ -385,6 +450,7 @@ interface Side {
 interface Cells {
   px: number;
   box: SeamBox | null;
+  cells?: SeamCell[];
 }
 
 const restPiece = (side: Side): Piece => ({ ...side.piece, world: Array.from(side.rest) });
@@ -530,7 +596,7 @@ function contactOf(restA: Uint8Array, restB: Uint8Array, drawnA: Uint8Array, dra
 }
 
 /** One frame's counts, or `null` when the two drawings share no cell at the setup pose. See the module comment. */
-function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, visibility: readonly Uint8Array[]): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells; contact: Contact } | null {
+function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, visibility: readonly Uint8Array[], options: SeamOptions): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells; contact: Contact } | null {
   const { width, height } = grid.viewport;
   const restA = restPiece(A);
   const restB = restPiece(B);
@@ -589,8 +655,8 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   const ghost: Cells = { px: 0, box: null };
   const ghostA: Cells = { px: 0, box: null };
   const ghostB: Cells = { px: 0, box: null };
-  const gapOpen: Cells = { px: 0, box: null };
-  const gapCovered: Cells = { px: 0, box: null };
+  const gapOpen: Cells = { px: 0, box: null, ...(options.cells ? { cells: [] } : {}) };
+  const gapCovered: Cells = { px: 0, box: null, ...(options.cells ? { cells: [] } : {}) };
   let alphaCells: Uint8Array | null = null;
   const take = (into: Cells, qx: number, qy: number): void => takeCell(into, qx, qy, cell);
   if (plant.never) return { gap, ghost, ghostA, ghostB, gapOpen, gapCovered, contact };
@@ -610,7 +676,9 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
           take(gap, qx, qy);
           const covered = plant.gapCoverage === 'covered' || (plant.gapCoverage !== 'open' &&
             (alphaCells ??= frameAlphaCells(plant.gapCoverage === 'pair' ? [A.piece, B.piece] : frame.pieces, pages, grid.viewport, plant.gapCoverage === 'half'))[k] !== 0);
-          take(covered ? gapCovered : gapOpen, qx, qy);
+          const into = covered ? gapCovered : gapOpen;
+          take(into, qx, qy);
+          into.cells?.push({ x: qx, y: qy, setupTop: null, setupUnder: null });
         }
         continue;
       }
@@ -665,6 +733,7 @@ export function seamsOf(
   frames: readonly SeamFrame[],
   pages: ReadonlyMap<string, Plate>,
   plant: SeamPlant = {},
+  options: SeamOptions = {},
 ): SeamPairReading[] {
   const restOf = new Map(rest.map((r) => [restKey(r.slot, r.attachment), r]));
   const sideOf = (frame: SeamFrame, slot: string): Side | null => {
@@ -711,13 +780,17 @@ export function seamsOf(
       if (A === null || B === null) continue;
       drawn++;
       const cell = exposureCell;
-      const read = readFrame(A, B, cell, plant, frame, pages, exposureGrid, exposure.map((m) => m.visible));
+      const read = readFrame(A, B, cell, plant, frame, pages, exposureGrid, exposure.map((m) => m.visible), options);
       if (read === null) { contact(unavailableContact('no shared half-opacity cell at the setup pose; no band to identify a joint')); continue; }
       const fragmented = [a, b].some(slot => frame.pieces.filter(p => p.slot === slot).length !== 1);
       contact(fragmented ? unavailableContact('each named slot must draw exactly one fragment for material contact') : read.contact);
       banded++;
+      if (options.cells) {
+        options.cells(read.gapOpen.cells!, cell);
+        options.cells(read.gapCovered.cells!, cell);
+      }
       for (const [cells, into] of [[read.gap, gaps], [read.ghost, ghosts], [read.ghostA, ghostsA], [read.ghostB, ghostsB], [read.gapOpen, openGaps], [read.gapCovered, coveredGaps]] as const) {
-        if (cells.px > 0 && cells.box !== null) into.push({ index: frame.index, time: frame.time, px: cells.px, cell, area: cells.px * cell * cell, box: cells.box });
+        if (cells.px > 0 && cells.box !== null) into.push({ index: frame.index, time: frame.time, px: cells.px, cell, area: cells.px * cell * cell, box: cells.box, ...(cells.cells === undefined ? {} : { cells: cells.cells }) });
       }
     }
     const gap = kindOf(gaps);

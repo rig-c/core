@@ -28,7 +28,7 @@ globalThis.fetch = async function(url) {
   if(p.endsWith('/zip')) return new Response(Buffer.from(f.zip,'base64'));
   throw new Error('unexpected fixture route');
 };`;
-for (const scenario of ['positive', 'one-byte mismatch', 'API error']) test(`fixture workflow real composite process: ${scenario}`, () => {
+for (const scenario of ['positive', 'one-byte mismatch', 'API error', 'fork PR', 'fork run']) test(`fixture workflow real composite process: ${scenario}`, () => {
   const dir = mkdtempSync(join(scratch, 'consumer-'));
   try {
     const f = fixture(), repo = join(dir, 'consumer-git'); mkdirSync(repo);
@@ -39,6 +39,14 @@ for (const scenario of ['positive', 'one-byte mismatch', 'API error']) test(`fix
     const oldCurrent=f.commits.get(f.c.sha);f.commits.delete(f.c.sha);f.c.sha=currentSha;f.pr.merge_commit_sha=currentSha;
     f.commits.set(currentSha,{...oldCurrent,sha:currentSha});
     for(const c of f.commits.values())c.tree.sha=sourceTree;f.receipt.tree=sourceTree;
+    if (scenario === 'fork PR' || scenario === 'fork run') {
+      const fork = { id: 2, full_name: 'contributor/core' };
+      f.run.head_repository = fork;
+      if (scenario === 'fork PR') {
+        f.pr.head.repo = fork;
+        f.run.pull_requests[0].head.repo = fork;
+      }
+    }
     if (scenario === 'one-byte mismatch') {
       const before=readFileSync(probe);writeFileSync(probe,'b');const after=readFileSync(probe);git('add','probe');const changedTree=git('write-tree');
       git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','one byte changed');
@@ -61,6 +69,7 @@ for (const scenario of ['positive', 'one-byte mismatch', 'API error']) test(`fix
       TV_DEFAULT_BRANCH: f.c.defaultBranch, TV_PURPOSE: 'publish', TV_VERDICT_PATH: join(dir, 'verified.json'),
       FIXTURE_GATE_SENTINEL: join(dir, 'gate'), FIXTURE_PUBLISH_SENTINEL: join(dir, 'published'), FIXTURE_GATE_EXIT: '19' };
     const action = Bun.YAML.parse(readFileSync(join(actionPath, 'action.yml'), 'utf8'));
+    writeFileSync(env.TV_VERDICT_PATH, JSON.stringify({ schema: 'previous-proof' }));
     const run = spawnSync('bash', ['-c', action.runs.steps[0].run], { env, cwd: repo, encoding: 'utf8', timeout: 10000 });
     expect(run.status).toBe(0);
     const outputs = Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map(l => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; }));
@@ -75,6 +84,11 @@ for (const scenario of ['positive', 'one-byte mismatch', 'API error']) test(`fix
     expect(existsSync(env.FIXTURE_PUBLISH_SENTINEL)).toBe(positive);
     expect(gateExit).toBe(positive ? 0 : 19);
     expect(outputs['verdict-path']).toBe(positive ? env.TV_VERDICT_PATH : '');
+    if (scenario === 'fork PR' || scenario === 'fork run') {
+      const reason = scenario === 'fork PR' ? 'untrusted PR repository/base' : 'untrusted run repository';
+      expect(run.stdout).toContain(`TREE_VERDICT_MISS: ${reason}; run the full gate`);
+      expect(JSON.parse(readFileSync(env.TV_VERDICT_PATH, 'utf8')).schema).toBe('tree-verdict-unavailable/1');
+    }
     console.log(`PLANT composite ${scenario}: lookup exit=${run.status}; full-fixture-gate executed=${positive ? 0 : 1}; gate exit=${gateExit}; publish reached=${positive ? 1 : 0}`);
   } finally { rmSync(dir, { recursive: true }); }
 });

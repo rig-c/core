@@ -212,8 +212,25 @@ export function compileCoverage(declaration, read, declarationPath = 'scripts/tr
   need(map(collector) && collector.uses === undefined && condition(collector.if) === 'success()' && collector['continue-on-error'] === undefined && roots.every(id => list(collector.needs).includes(id)), 'COVER_PRODUCER', 'collector needs every covering root under if: success()');
   const collectorPath = checkout(collector, {});
   need(Object.values(resolved).every(j => j.sourcePath === collectorPath), 'COVER_CHECKOUT', 'all covering jobs and collector must use same source checkout path');
-  const step = (collector.steps ?? []).find(s => s.id === coverage.producer.step);
-  need(step && step.if === undefined && step['continue-on-error'] === undefined && typeof step.run === 'string', 'COVER_PRODUCER', 'collector step must invoke the shared producer unconditionally');
+  const producerSteps = (collector.steps ?? []).filter(s => s.id === coverage.producer.step);
+  const step = producerSteps[0];
+  need(producerSteps.length === 1 && step.if === undefined && step['continue-on-error'] === undefined && typeof step.run === 'string', 'COVER_PRODUCER', 'collector step must invoke the shared producer unconditionally with one unique ID');
+  const uploadCondition = `steps.${coverage.producer.step}.outputs.receipt-created == 'true'`;
+  const workflowJobs = [...documents.values()].flatMap(doc => Object.values(doc.jobs));
+  for (const job of workflowJobs) {
+    for (const entry of job.steps ?? []) {
+      const upload = job === collector && typeof entry.uses === 'string' && /^actions\/upload-artifact@/.test(entry.uses);
+      need(upload || !String(entry.if ?? '').includes('receipt-created'), 'COVER_PRODUCER', 'receipt-created condition belongs only on the collector upload');
+      if (upload) {
+        need(entry.with?.['if-no-files-found'] === 'error' &&
+          (entry['continue-on-error'] === undefined || entry['continue-on-error'] === false) &&
+          (entry.if === undefined || (typeof entry.if === 'string' &&
+            [uploadCondition, `\${{ ${uploadCondition} }}`].includes(entry.if.trim()) &&
+            collector.steps.indexOf(entry) > collector.steps.indexOf(step))),
+          'COVER_PRODUCER', 'collector upload requires if-no-files-found: error and only its producer receipt-created condition');
+      }
+    }
+  }
   const collectorArgv = singleInvocation(step.run);
   need((collectorArgv.length === 6 || collectorArgv.length === 8) &&
     !collectorArgv[0].dynamic && collectorArgv[0].value === 'bun' &&

@@ -4,6 +4,8 @@ export interface PublicationReader {
   step: StepSelector;
   verdictStep: string;
   declaration: string;
+  /** Core's exact tally-aware reader; omission retains the generic lifecycle. */
+  kind?: 'core-prepublish';
 }
 export type PublicationInvocation = { ordinal: number; kind: 'folder' } | {
   ordinal: number; kind: 'tarball';

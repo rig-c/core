@@ -294,7 +294,7 @@ export function validatePublicationBody(body, analysis) {
         const flag = flags[index].value, value = flags[index + 1];
         if (!['--name', '--out', '--pack-timeout-ms'].includes(flag) || names.has(flag) || !value || value.children.length) fail('unsupported helper arguments');
         names.add(flag);
-        if (flag === '--name' && (value.dynamic || !/^[\w-]+$/.test(value.value))) fail('helper name must be literal');
+        if (flag === '--name' && (value.dynamic || !/^(?:@[\w-]+\/)?[\w-]+$/.test(value.value))) fail('helper name must be literal');
         if (flag === '--out' && !/^"\$RUNNER_TEMP\/[\w/-]+"$/.test(value.raw)) fail('helper out must be a quoted runner-temp path');
         if (flag === '--pack-timeout-ms' && (value.dynamic || !/^[1-9]\d*$/.test(value.value))) fail('helper timeout must be literal');
       }
@@ -424,8 +424,22 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
       (entry.declarationInput ?? entry.declaration) === (readerEntry?.declarationInput ?? readerEntry?.declaration));
     if (!oneContract) report('PUBLICATION_READER_WIRING', location, 'every tarball entry must match the job reader declaration and proof step/source');
     const proof = selectStep(all, reader.verdictStep);
-    const expected = `node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration ${reader.declaration} --verdict-path "$TREE_VERDICT_PATH"`;
-    if (!/^[\w-]+(?:\/[\w.-]+)*\.json$/.test(reader.declaration) || !readerEntry || !unconditional(step) || !rootShell(job, step, context) || step.run?.trim() !== expected || !proofWired(job, proof, readerEntry) ||
+    const coreReader = reader.kind === 'core-prepublish';
+    if (coreReader) {
+      const commands = ['bun run typecheck', 'bun run lint', 'bun run selftest'];
+      const declaration = JSON.parse(read(reader.declaration));
+      if (reader.declaration !== 'scripts/tree-verdict.json' || declaration.chain !== commands.join(' && ') ||
+        JSON.stringify(declaration.commands) !== JSON.stringify(commands) ||
+        jobEntries.some(entry => (entry.declarationInput ?? entry.declaration) !== 'scripts/tree-verdict.json')) {
+        report('CORE_READER_CONTRACT', location, 'core-prepublish requires scripts/tree-verdict.json and the exact typecheck/lint/selftest chain');
+      }
+    }
+    const expected = coreReader ? 'bun scripts/prepublish_gate.ts' :
+      `node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration ${reader.declaration} --verdict-path "$TREE_VERDICT_PATH"`;
+    const readerKindValid = reader.kind === undefined || coreReader &&
+      scripts.prepublishOnly === expected && jobEntries.every(entry =>
+        entry.lifecycle === 'prepublishOnly' && entry.readerCommand === expected);
+    if (!readerKindValid || !/^[\w-]+(?:\/[\w.-]+)*\.json$/.test(reader.declaration) || !readerEntry || !unconditional(step) || !rootShell(job, step, context) || step.run?.trim() !== expected || !proofWired(job, proof, readerEntry) ||
       all.indexOf(proof) >= all.indexOf(step) || activity.some(([candidate]) => all.indexOf(step) >= all.indexOf(candidate)) ||
       !mapping(step.env) || step.env.TREE_VERDICT_TOOLS !== expression(`steps.${reader.verdictStep}.outputs.tooling-path`) ||
       step.env.TREE_VERDICT_PATH !== expression(`steps.${reader.verdictStep}.outputs.verdict-path`)) report('PUBLICATION_READER_WIRING', location, 'unconditional exact lifecycle CLI, live action/env and order before every pack/publish required');

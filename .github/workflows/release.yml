@@ -13,12 +13,14 @@
 # #1347). `ALIASES` in scripts/alias_tarball.ts is the list; CUR122 holds the
 # publish steps and both confirmation calls below to it.
 #
-# Since issue #1249 that run is three jobs and a call: `plan` (release-please)
-# → `gate` (the selftest as n shards and their merge, selftest-shards.yml, the
-# same file ci.yml calls, over the tag) → `publish` (`npm publish`, whose
-# `prepublishOnly` reads the merged tally the gate wrote instead of running the
-# whole selftest again in one process) and the confirmation. `CUR119` in
-# selftest.ts holds that order.
+# The cut resolves its target in plan, then reuse looks for successful CI
+# coverage of the identical Git tree. A miss runs the common sharded gate.
+# admit handles the skipped-gate result and publishes one ready output.
+# The publish job verifies the source proof again, or the exact-commit tally
+# together with successful typecheck/lint/merge coverage, before packing all
+# three tarballs. A refused proof/tally executes the original full chain once.
+# The folder prepublishOnly hook remains available for manual publication.
+# CUR119/120/131 hold this graph and its dispatch boundaries.
 #
 # A push re-run can cut a tag at a commit newer than its GITHUB_SHA. Before
 # emitting publish=true, plan resolves the tag through the commits API and
@@ -187,25 +189,43 @@ jobs:
           case "$INPUT_TAG" in *-*) echo "::error::RELEASE_TAG_PRERELEASE: $INPUT_TAG is a prerelease; this workflow publishes under latest only — its publish steps pass no --tag and release-please here cuts no prerelease — so a prerelease dispatch would move latest onto it (RELEASING.md)"; exit 1;; esac
           if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
           version="${INPUT_TAG#v}"
-          if served="$(npm view "rig-c@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves rig-c@$version; the aliases publish after it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
+          if served="$(npm view "rig-c@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves rig-c@$version; the aliases follow it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
           if latest="$(npm view "rig-c" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
             const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
             const ids = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i] === undefined) return -1; if (b[i] === undefined) return 1; const na = /^[0-9]+$/.test(a[i]), nb = /^[0-9]+$/.test(b[i]); if (na && nb && Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]); if (na !== nb) return na ? -1 : 1; if (!na && a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; };
             const cmp = (x, y) => { const a = parse(x), b = parse(y); for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1; return ids(a.pre, b.pre); };
             process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
-          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest rig-c@$latest; npm will not put latest on it implicitly and these publish steps pass no --tag, so it is not published by this dispatch (RELEASING.md)"; exit 1; fi
+          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest rig-c@$latest; the registry will not move latest implicitly and these publication steps pass no --tag, so it is not published by this dispatch (RELEASING.md)"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
-  # The whole selftest over the tag, as CI runs it on every change: six shards
-  # on six runners and the merge that is the verdict, from the one file both
-  # workflows call. Only on a tag `plan` resolved: the push that merged the
-  # release PR, or a dispatched tag that passed the refusals — a `tag`
-  # dispatch runs this whole gate over the tag as well. The merge uploads
-  # `selftest-merged-tally`, which names the commit it ran at; a red merge
-  # fails this job and `publish` never starts.
-  gate:
+  # A no-cut push starts none of the lookup/gate/publish work. Dispatch cannot
+  # reuse a source verdict and follows the same fresh gate as a push miss.
+  reuse:
     needs: plan
     if: ${{ needs.plan.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      reused: ${{ steps.lookup.outputs.reused }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}
+      - id: lookup
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        with:
+          declaration: scripts/tree-verdict.json
+          purpose: ci
+
+  # The common sharded gate remains the fallback. Its successful merge writes
+  # the exact-commit tally; the collector in ci.yml executes no chain.
+  gate:
+    needs: [plan, reuse]
+    if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}
     permissions:
       contents: read # check out the tag
     uses: ./.github/workflows/selftest-shards.yml
@@ -213,33 +233,51 @@ jobs:
       # Push uses the verified SHA; dispatch retains its tag and HEAD guard.
       ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}
 
-  # Everything below runs only on a tag `plan` resolved — the push that merged
-  # the release PR, or a dispatched tag — and only once `gate` is green.
-  publish:
-    needs: [plan, gate]
-    if: ${{ needs.plan.outputs.publish == 'true' }}
+  # A skipped reused gate is handled here, before the publishing job's simple
+  # needs-output condition. A failed/cancelled gate grants no admission.
+  admit:
+    needs: [plan, reuse, gate]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # ⏱️ The ceiling covers this job alone now; the selftest runs in `gate`,
-    # which has its own ceilings (30 min a shard, 15 the merge). What is left
-    # here: ~1 min of setup, ~1 min of corpus fetch, typecheck and lint under
-    # `prepublishOnly` (well under a minute in ci.yml's merge job), the pack and
-    # the upload, then up to 15 min of registry wait (see the confirmation
-    # below) and the confirmation's install and build: ~4 min plus the wait on
-    # the path where the tally is accepted. The ceiling is sized for the other
-    # path, because that is the one a ceiling can cut short: a refused tally
-    # runs the one-process selftest here, which made `Publish to npm` 18m37s on
-    # its own (v2.20.0, run 37724479086) — ~21 min to the publish, + 15 of
-    # wait + the confirmation's ~2 = 38, so 40. The alias (issue #1258) adds
-    # its pack and publish — about a second to pack, measured on this tree —
-    # and no second wait: its confirmation asks within what is left of the 15. Measured on the first cut
-    # after #1249 (v2.20.3, run on 2026-10-08): `plan` 14 s, `gate` 5m59s
-    # (shards 2m06s–3m59s, the merge 1m19s), this job 4m27s of which the
-    # tally was accepted 62 s in and the registry served the package on
-    # attempt 9 (3m09s) — 10m43s end to end against the ~21 min before, and
-    # the accepted path's publish is under 1.5 min before the wait.
-    timeout-minutes: 40
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ready: ${{ steps.decision.outputs.ready }}
+      fresh: ${{ steps.decision.outputs.fresh }}
+    steps:
+      - id: decision
+        env:
+          CUT: ${{ needs.plan.outputs.publish }}
+          REUSED: ${{ needs.reuse.outputs.reused }}
+          LOOKUP_RESULT: ${{ needs.reuse.result }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          VERDICT: ${{ needs.gate.outputs.verdict }}
+        run: |
+          set -eu
+          ready=false
+          fresh=false
+          if [ "$GATE_RESULT" = success ] && [ "$VERDICT" = green ]; then fresh=true; fi
+          if [ "$CUT" = true ] && [ "$LOOKUP_RESULT" = success ]; then
+            if [ "$REUSED" = true ] || [ "$fresh" = true ]; then ready=true; fi
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "fresh=$fresh" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [plan, admit]
+    if: ${{ needs.admit.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    # Run 42069082954: six selftest step durations sum to 2203 s, plus
+    # typecheck 22 s + lint 21 s = 2246 s of observed chain work. This is a
+    # shard-work budget, not a measured one-process fallback duration.
+    # 2246 s + registry wait 900 s + setup/pack/publish/variation margin 454 s
+    # = 3600 s. Accepted whole-chain evidence skips the reader's chain work.
+    timeout-minutes: 60
     permissions:
       contents: read # check out the tag
+      actions: read # revalidate the source run, attempt and coverage
+      pull-requests: read
       id-token: write # OIDC token for npm trusted publishing
     steps:
       - uses: actions/checkout@v4
@@ -281,15 +319,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # There is nothing to build — the package ships TypeScript sources and
-      # bun runs them. What guards the publish instead is prepublishOnly,
-      # `scripts/prepublish_gate.ts`: `typecheck` and `lint` against the tagged
-      # tree, then either the merged tally `gate` wrote — accepted only when it
-      # names this checkout's commit, every shard green and present, the merge
-      # exited 0 and every registered suite accounted for — or, on anything
-      # else, the full selftest in this job. So the corpus is still fetched
-      # here, before the publish, exactly as the shards fetch it — same script,
-      # same token — because the fallback has to read the tree the gate read.
+      - id: reuse
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        with:
+          declaration: scripts/tree-verdict.json
+          purpose: publish
+
+      # The named core reader may execute the full chain when evidence is
+      # absent or refused, so its corpus is fetched before the reader. It
+      # verifies a clean current tree proof or authentic exact tally coverage
+      # before any pack. All publications below consume tarballs.
       #
       # 🚨 This used to say the selftest needs no corpus, and that stopped being
       # true when the core suite landed: with no examples/ its corpus controls
@@ -305,19 +344,36 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download the merged tally the gate wrote
+        if: ${{ needs.admit.outputs.fresh == 'true' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: selftest-merged-tally
           path: ${{ runner.temp }}/merged-tally
 
-      # `RIGC_PREPUBLISH_TALLY` is set on this step and nowhere else (`CUR119`):
-      # it names evidence `prepublishOnly` checks, never a switch, and the
-      # line that step prints — "accepted tally <path> for <sha>: …" or the
-      # reasons it was not — is the record of which gate this publish read.
+      # The only chain reader, before every pack and publish. A refused proof
+      # and tally runs the original chain once; its nonzero exit stops the job.
+      # All three publications consume tarballs and invoke no folder hook.
+      - name: Verify the complete prepublish chain
+        id: publication-reader
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+          RIGC_PREPUBLISH_TALLY: ${{ runner.temp }}/merged-tally/selftest_merged.json
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/prepublish_gate.ts
+
+      # The canonical tarball's basename is npm pack's stdout. The root output
+      # is already ignored by /rig-c-*.tgz; all tracked source bytes stay put.
+      # npm pack has no prepublishOnly hook, and this package has no prepare or
+      # prepack hook. The unchanged folder hook still gates manual publication.
       - name: Publish to npm
         env:
-          RIGC_PREPUBLISH_TALLY: ${{ runner.temp }}/merged-tally/selftest_merged.json
-        run: npm publish --provenance --access public
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+        run: |
+          set -euo pipefail
+          canonical_tgz="$(npm pack . --pack-destination .)"
+          npm publish "$canonical_tgz" --provenance --access public
 
       # 🪞 The aliases: the same files under the name the package first shipped
       # as (issue #1258), so a dependant that still names `spine-rigc` keeps
@@ -331,21 +387,20 @@ jobs:
       # the result to the package tarball file by file. The checkout is never
       # modified, so the confirmation below reads the tree the gate read.
       #
-      # 🔒 No lifecycle script runs here, and that is the design rather than a
-      # gap: `npm publish <tarball>` runs none, so `prepublishOnly` gates the
-      # step above and only that one. Running it again could not mean anything —
-      # renaming the package in this tree leaves it modified, which the tally
-      # reader refuses (TALLY_DIRTY), and the fallback would run the whole
-      # selftest over a tree that is no longer the commit the gate ran at. The
-      # gate's verdict is about this commit, and the alias is this commit's
-      # files.
+      # Every publication consumes a tarball after the one named reader.
+      # The alias helper retains its byte comparison and rewrites the name
+      # only in its extraction. The checkout's tracked inputs stay fixed.
       - name: Publish the alias spine-rigc
+        env:
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
         run: |
           set -euo pipefail
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name spine-rigc --out "$RUNNER_TEMP/alias-spine-rigc")"
           npm publish "$alias_tgz" --provenance --access public
 
       - name: Publish the alias @rig-c/core
+        env:
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
         run: |
           set -euo pipefail
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name @rig-c/core --out "$RUNNER_TEMP/alias-rig-c-core")"

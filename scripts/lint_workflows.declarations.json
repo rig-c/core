@@ -1,8 +1,124 @@
 {
   "schema": "workflow-verdict-lint/1",
   "defaultBranch": "main",
-  "scopeExclusion": "Phase A only: existing ci.yml, release.yml and selftest-shards.yml adoption belongs to core#1705; no verdict is claimed for them.",
+  "coverageDeclarations": [
+    "scripts/tree-verdict.json"
+  ],
   "workflows": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "heavyJobs": [
+        "selftest"
+      ],
+      "guard": {
+        "job": "reuse",
+        "step": "lookup",
+        "uses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+        "sourceWorkflow": ".github/workflows/ci.yml",
+        "declaration": "scripts/tree-verdict.json"
+      },
+      "publishes": []
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "heavyJobs": [
+        "gate"
+      ],
+      "activation": "release-cut",
+      "guard": {
+        "job": "reuse",
+        "step": "lookup",
+        "uses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+        "sourceWorkflow": ".github/workflows/ci.yml",
+        "declaration": "scripts/tree-verdict.json"
+      },
+      "publicationReaders": [
+        {
+          "job": "publish",
+          "step": "publication-reader",
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "kind": "core-prepublish"
+        }
+      ],
+      "publishes": [
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish to npm"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "lifecycle": "prepublishOnly",
+          "readerCommand": "bun scripts/prepublish_gate.ts",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish to npm"
+                },
+                "variable": "canonical_tgz",
+                "command": "npm pack . --pack-destination ."
+              }
+            }
+          ]
+        },
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish the alias spine-rigc"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "lifecycle": "prepublishOnly",
+          "readerCommand": "bun scripts/prepublish_gate.ts",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish the alias spine-rigc"
+                },
+                "variable": "alias_tgz",
+                "command": "bun scripts/alias_tarball.ts pack --name spine-rigc --out \"$RUNNER_TEMP/alias-spine-rigc\""
+              }
+            }
+          ]
+        },
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish the alias @rig-c/core"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "lifecycle": "prepublishOnly",
+          "readerCommand": "bun scripts/prepublish_gate.ts",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish the alias @rig-c/core"
+                },
+                "variable": "alias_tgz",
+                "command": "bun scripts/alias_tarball.ts pack --name @rig-c/core --out \"$RUNNER_TEMP/alias-rig-c-core\""
+              }
+            }
+          ]
+        }
+      ]
+    },
     {
       "path": ".github/workflows/tree-verdict-tests.yml",
       "heavyJobs": [],

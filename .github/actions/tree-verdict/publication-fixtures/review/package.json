@@ -1,0 +1,61 @@
+{
+  "name": "@rig-c/review",
+  "version": "1.10.0",
+  "type": "module",
+  "description": "Local human rig inspection and structured feedback export",
+  "license": "MIT",
+  "scripts": {
+    "review": "bun src/cli.ts",
+    "check": "bun src/cli.ts check",
+    "demo": "bun src/cli.ts examples/demo/review.json --view-only",
+    "check:readme": "bun scripts/check-readme.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun src/build.ts",
+    "feedback": "bun src/cli.ts feedback",
+    "open": "bun src/cli.ts open",
+    "smoke": "bun scripts/install-smoke.ts",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build && bun run check -- examples/demo/review.json && bun run smoke"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "1.0.11",
+    "@rig-c/play": "1.23.0",
+    "pngjs": "7.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "@types/pngjs": "6.0.5",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "bin": {
+    "rig-review": "src/cli.ts"
+  },
+  "files": [
+    "src",
+    "web",
+    "examples/demo",
+    "docs/REVIEW_PACKAGE.md",
+    "docs/WORKFLOWS.md",
+    "docs/PANELS.md",
+    "docs/DESIGN.md",
+    "docs/ANIMATION_INSPECTION.md",
+    "docs/LIVE_FIXTURE.md",
+    "docs/PARTS_VIEW.md",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rig-c/review.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

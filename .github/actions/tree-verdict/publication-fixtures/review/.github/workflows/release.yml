@@ -1,0 +1,204 @@
+# Release: the cut is one click, and no secret leaves this repository.
+#
+# Every push to main hands the commits to release-please, which keeps a
+# "release: vX.Y.Z" pull request open: the next version derived from the
+# conventional-commit subjects since the last release, CHANGELOG.md generated,
+# package.json bumped. Merging that PR is the release: the resulting push runs
+# this workflow again, release-please tags vX.Y.Z and cuts the GitHub release,
+# and the same run publishes @rig-c/review to npm over OIDC (trusted
+# publishing) with provenance. No npm token, no OTP.
+#
+# Nothing below the release-please step runs until a release PR is merged, so
+# this file can land before the trusted publisher is registered on npm; the
+# release PR must not be merged until it is.
+#
+# Two constraints are load-bearing, do not "simplify" them away:
+#   - The publish must stay in THIS file. npm's trusted publisher for
+#     @rig-c/review names the repository rig-c/review and the workflow
+#     filename `release.yml`.
+#   - It must stay on a GitHub-hosted runner. npm does not support OIDC from
+#     self-hosted runners.
+name: release
+
+on:
+  push:
+    branches: [main]
+  # Publishes a tag release-please already cut when that run's publish did not
+  # land (a registry or signing outage after the tag was made). It re-runs the
+  # same gate on the tagged tree and publishes from this same file, so the
+  # trusted publisher and provenance are unchanged. It refuses a tag with no
+  # GitHub release, a release release-please did not create, a tag whose commit
+  # is not on main, a version the registry already serves, and a run whose
+  # GITHUB_SHA is not the tag's commit (npm provenance names GITHUB_SHA, #198):
+  # dispatch it on the tag, `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing release tag to publish, e.g. v0.7.1
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # release commit, tag, GitHub release
+      pull-requests: write # open and update the release PR
+      issues: write # release-please labels
+      id-token: write # OIDC token for npm trusted publishing
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        if: ${{ github.event_name == 'push' }}
+        with:
+          # A PR opened with GITHUB_TOKEN starts no other workflows, so the
+          # release PR carries no checks of its own; its only change is the
+          # version, changelog and manifest, and the publish below re-runs the
+          # install smoke on the tagged tree before anything is published.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # A dispatch must prove its tag is on main, so it needs main's history
+      # and the tags before anything is resolved. The push path skips this.
+      - uses: actions/checkout@v4
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      # What to publish: the tag release-please just cut, or a dispatched tag
+      # whose GitHub release release-please created, whose commit is on main,
+      # and which is not on the registry yet. Write access alone can create a
+      # tag and a release at an unreviewed commit; the merge to protected main
+      # and the release-please author are what that access cannot fake.
+      - name: Resolve the tag to publish
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          CREATED: ${{ steps.release.outputs.release_created }}
+          CUT_TAG: ${{ steps.release.outputs.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # release-please runs on GITHUB_TOKEN here, so its releases are
+          # authored by this login (every release through v0.10.1 is). If
+          # RELEASE_PLEASE_TOKEN is ever set, this must name that token's owner.
+          RELEASE_AUTHOR: github-actions[bot]
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            if [ "$CREATED" != true ]; then echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+            if [[ ! "$CUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::RELEASE_TAG_FORM: \"$CUT_TAG\" is not vX.Y.Z"; exit 1; fi
+            # Push has no checkout yet. The commit API resolves both lightweight and annotated tags to a commit,
+            # rather than returning an annotated tag object's SHA. Use an explicit tag ref to avoid branch ambiguity.
+            if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $CUT_TAG to a commit"; exit 1; fi
+            if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $CUT_TAG did not resolve to a full commit SHA"; exit 1; fi
+            # A re-run may cut a tag at a newer main commit while npm provenance still names the original run SHA.
+            if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $CUT_TAG's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $CUT_TAG -f tag=$CUT_TAG"; exit 1; fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z"; exit 1; fi
+          if ! author="$(gh release view "$INPUT_TAG" --repo "$REPO" --json author --jq .author.login 2>/dev/null)"; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release; only a tag release-please cut is published"; exit 1; fi
+          if [ "$author" != "$RELEASE_AUTHOR" ]; then echo "::error::RELEASE_NOT_RELEASE_PLEASE: the $INPUT_TAG release was created by \"$author\", not $RELEASE_AUTHOR"; exit 1; fi
+          if ! tag_sha="$(git rev-parse --verify --quiet "refs/tags/$INPUT_TAG^{commit}")"; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: tag $INPUT_TAG does not resolve to a commit"; exit 1; fi
+          if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: origin/main was not fetched"; exit 1; fi
+          if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: $INPUT_TAG ($tag_sha) is not reachable from origin/main"; exit 1; fi
+          # npm provenance records GITHUB_SHA, not the checked-out HEAD (#198). A dispatch whose run SHA is not the tag's
+          # commit would publish provenance naming a commit it did not build, so it is refused: dispatch on the tag itself
+          # (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`), which only a tag cut after this check can carry.
+          if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $INPUT_TAG's commit $tag_sha, and npm provenance would name the former; dispatch with --ref $INPUT_TAG"; exit 1; fi
+          version="${INPUT_TAG#v}"
+          if served="$(npm view "@rig-c/review@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/review@$version"; exit 1; fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+
+      # Everything below runs only when a tag is to be published.
+      - uses: actions/checkout@v4
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        with:
+          # Both paths check out the commit that passed provenance validation, not the (mutable) tag name.
+          ref: ${{ steps.target.outputs.sha }}
+
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
+      - name: Use an npm that speaks OIDC
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install dependencies
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        run: bun install --frozen-lockfile
+
+      # prepublishOnly runs the full check, including reference video export.
+      - name: Install reference video export tools
+        # Same bounded install as Check, inside the existing 20-minute job.
+        timeout-minutes: 3
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        uses: ./.github/actions/reference-video-tools
+
+      # `--access public`: a scoped package is restricted unless told otherwise.
+      - name: Publish @rig-c/review
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        run: npm publish --provenance --access public
+
+      # The scoped publish has gated these files. Internal packs run no scripts;
+      # only the manifest name changes, and equality is required before publish.
+      # Each of the two packs may take five minutes, within this job's 20 minutes.
+      - name: Publish the alias rig-review
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        run: |
+          set -euo pipefail
+          alias_tgz=$(bun scripts/alias_tarball.ts pack --name rig-review --out "$RUNNER_TEMP/alias-rig-review" --pack-timeout-ms 300000)
+          npm publish "$alias_tgz" --provenance --access public
+
+      # Reads what the registry serves, not what this tree packs. The registry
+      # can take minutes to serve a new version, so the fetch retries for up to
+      # 15 minutes; a red here un-publishes nothing, it says the confirmation
+      # was not taken.
+      - name: Confirm the registry serves both names and the alias installs
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        env:
+          TAG_NAME: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          confirmed=false
+          for attempt in $(seq 1 30); do
+            confirmed=true
+            for package in @rig-c/review rig-review; do
+              if served="$(npm view "$package@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then
+                echo "registry serves $package@$version (attempt $attempt)"
+              else
+                echo "waiting for $package@$version (attempt $attempt)"
+                confirmed=false
+              fi
+            done
+            if [ "$confirmed" = true ]; then break; fi
+            sleep 30
+          done
+          if [ "$confirmed" != true ]; then
+            echo "::error::Both names at $version were not served within 15 minutes: confirmation NOT taken"
+            exit 1
+          fi
+          bun scripts/confirm-alias.ts "$version"

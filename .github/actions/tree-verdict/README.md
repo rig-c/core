@@ -343,6 +343,22 @@ is needed. Every detected direct npm publish step in a declared workflow needs a
 explicit publish inventory entry. Structural lint is not an interpreter for shell
 scripts hiding publication.
 
+For a declared heavy job, WFL001 accepts exactly these job conditions, with an
+optional `${{ ... }}` wrapper. Replace `guard` with the declared guard job ID.
+
+```text
+needs.guard.outputs.reused != 'true'
+always() && needs.guard.outputs.reused != 'true'
+!cancelled() && needs.guard.outputs.reused != 'true'
+```
+
+Any other conjunction or disjunction fails with
+`WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED`. Under the `always()` conjunction, a missing
+or empty runtime reuse output selects the merge job so it can report a missing
+shard unit. The `!cancelled()` conjunction also requires the run to be uncancelled.
+The guard must still declare its exact reuse output and be a direct dependency.
+The collector requires every covering job as a dependency under `success()`.
+
 With the default root checkout and the same pinned action's `tooling-path` in
 `TREE_VERDICT_TOOLS`, run lint directly through that source pin:
 
@@ -406,3 +422,150 @@ collector needs, unsupported dynamic name/matrix/ref, and version comparisons.
 Lifecycle plants prove whole-chain fallback, including equal PR head with differing
 actual tested tree and a successful main reused run without fresh receipt. These
 are not hosted production reuse or full core selftest verdicts.
+
+## Publication inventory and the job lifecycle reader
+
+The shared npm hook allowlist is `prepublishOnly`, `prepare`, `prepack`. Folder
+publication retains its declared actual hook reader, including another
+`prepublishOnly` invocation when the job reader has already run. Tarball jobs
+require their own earlier, unconditional lifecycle reader. Its production CLI
+verifies reusable proof or executes the entire declared chain and returns its exit.
+The collector records successful coverage and executes no chain.
+
+Add `publicationReaders` and per-step `invocations` to the workflow inventory.
+Step selectors accept an ID string or `{ "name": "literal unique step name" }`.
+The latter lets existing publish bodies retain their workflow step names.
+
+```json
+{
+  "publicationReaders": [{
+    "job": "publish", "step": "publication-reader",
+    "verdictStep": "reuse", "declaration": "scripts/tree-verdict.json"
+  }],
+  "publishes": [{
+    "job": "publish", "step": {"name": "Publish the alias rig-review"},
+    "verdictStep": "reuse", "declaration": "scripts/tree-verdict.json",
+    "actionUses": "rig-c/core/.github/actions/tree-verdict@FULL_MERGED_CORE_SHA",
+    "evidenceEnv": "TREE_VERDICT_PATH",
+    "invocations": [{
+      "ordinal": 0, "kind": "tarball",
+      "producer": {
+        "step": {"name": "Publish the alias rig-review"},
+        "variable": "alias_tgz",
+        "command": "bun scripts/alias_tarball.ts pack --name rig-review --out \"$RUNNER_TEMP/alias-rig-review\" --pack-timeout-ms 300000"
+      }
+    }]
+  }]
+}
+```
+
+Every direct `npm publish` in a declared step has one zero-based ordinal in source
+order. A folder item is `{ "ordinal": 0, "kind": "folder" }`; its publish entry
+also supplies `lifecycle` and `readerCommand`, exactly matching the package script.
+Existing single bare-publish declarations retain their original interface.
+
+After the source checkout, runtime and dependencies are ready, install the pinned
+action as step `reuse`, with `purpose: publish` and the declared declaration input.
+Then run this exact reader step before **every** pack or publish step in its job:
+
+```yaml
+- id: publication-reader
+  env:
+    TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+    TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+  run: node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"
+```
+
+The reader has no step condition or `continue-on-error`. The pinned action must
+precede it. Publish steps receive the exact action verdict output in their declared
+evidence environment. Pack and publish steps also reject `continue-on-error`.
+The bounded publication contract uses the source-root working directory and its
+default shell. The source coverage compiler, receipt schema, OIDC and consumer
+byte/provenance equality checks retain their existing contracts.
+
+The publishing **job** may use a single literal `==` or `!=` comparison over
+`needs.<job>.outputs.<name>`, with an optional Actions wrapper. That source job must
+exist in the same workflow and be a direct dependency. A pack or publish **step**
+may compare an earlier, unique same-job `steps.<id>.outputs.<name>` to a literal.
+Functions, logical combinations, forward references and other contexts refuse.
+
+Both measured release workflows currently condition their source checkout, Bun and
+dependency setup on the target output. Adoption must make those prerequisites
+unconditional within a conditional publishing job, using target-job outputs and
+same-job output wiring where needed. On no-cut, that job is skipped. An
+unconditional reader in an ungated release job would otherwise run another full
+chain beside CI. Consumer job scaffolding belongs to parts#1112 and review#407;
+publication lint alone supplies no hosted no-cut runtime verdict.
+
+### Bounded shell and producer forms
+
+The direct-invocation lexer tracks quotes, comments, escaped command words and
+nested `$(...)`. A separate conservative guard inspects argument strings and
+inline comments too. Any npm-suffixed token plus literal `publish` or `pack`
+requires an admitted direct invocation; other forms refuse by run-line number
+with `PUBLICATION_SYNTAX`. Only whole-line `#` comments are skipped. This also
+refuses quoted `bash -c`/`eval` commands, `echo "npm publish"`, `npm run publish`
+and `npm view package publish`; diagnostics can rephrase such text. Queries such
+as `npm view package version` contain no publication pair. A substituted
+publication, backtick, heredoc, unmodeled variable write or unsupported executable
+form also refuses. The parser reads all branches of supported `if`/early-exit and
+literal version-tag `case` bodies. Publish flags are bounded to literal
+provenance/dry-run/access/tag arguments.
+Parts' unquoted `$tag` requires exactly its measured literal empty-or-`--tag rc`
+assignment and version case. An arbitrary expansion refuses.
+
+A tarball operand is a quoted simple variable. Its producer is one preceding,
+top-level direct command capture in the same run-step shell. The declaration
+matches the exact captured command. Supported producers are literal `npm pack`
+with `--pack-destination` and optional `--ignore-scripts`, and the measured
+`bun scripts/alias_tarball.ts pack --name ... --out "$RUNNER_TEMP/..."` form with
+an optional literal `--pack-timeout-ms`. The job reader is the gate. Producer
+shape checks connect the local variable to the declared pack, while the consumer's
+equality checks establish its payload relationship. Independent steps may each
+assign `alias_tgz`. Reassignment, output transforms, another job/step's variable,
+and unmodeled variable transport refuse with `PUBLISH_PRODUCER`.
+
+`WFL002_PUBLISH_SUITE_WITHOUT_VERDICT` includes named reasons for syntax,
+invocation inventory, condition, producer, ignored failure and missing
+reader/proof/hook wiring. The job reader permits the existing helper packs to
+suppress their own hooks. Publish-side lifecycle suppression still refuses.
+
+### Source snapshots, prospective wiring and measurement
+
+Portable source fixtures retain these exact main snapshots:
+
+- parts `f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950`
+- review `112fe8d316dd32748f7bd94e5fc6bc269ab27f8c`
+
+`publication-fixtures/sources.json` binds every release YAML, package manifest and
+helper copy by SHA-256. SHAPE fixtures keep release YAML byte-identical and refuse
+only missing wiring. FULLY WIRED fixtures split target/publication jobs and add
+only necessary job wiring, IDs, action/reader steps and environments. Tests compare
+all publish bodies and helper bytes with the snapshots and execute the actual lint
+CLI. Their green scope is **publication lint**.
+
+Package hook wrappers, declarations and generated coverage CI/collector metadata
+are explicit prospective fixture inputs. Review's `fixture-test`, `fixture-check`,
+`fixture-build` and `fixture-smoke` literal script wrappers model adoption work;
+the raw review hook chain still contains command keys outside the current planner
+grammar. Real consumer CI adoption remains with #407. The source coverage grammar
+is exercised unchanged against the generated prospective coverage input.
+
+`publication-measurement.json` records the prior npm 10.9.9 and 12.2.2 loopback
+measurement and hashes its retained raw receipts. Tarball publish invoked no hooks
+and reached actual HTTP PUT. Folder publish ran `prepublishOnly`; a failing hook
+blocked its PUT. npm 10's `pack --ignore-scripts` still ran `prepare`, while 12.2.2
+suppressed it. These measurements use Node 22.23.4 on macOS.
+
+The standalone POSIX/Python >=3.9 tool accepts already-installed local npm CLI
+sources. It creates isolated HOME/config/cache/temp paths, forces its ephemeral
+127.0.0.1 registry with dummy local auth, records versions/argv/exits/markers/PUT
+and artifact hashes, and closes the server. Supply a new absolute output directory
+outside the repository. Repeat `--npm-cli` to measure both local versions:
+
+```sh
+python3 .github/actions/tree-verdict/measure-publication.py --out /absolute/cache/new-measurement --npm-cli /absolute/local/npm-cli.js
+```
+
+`--only pack` is a one-command preflight. Tests use that preflight; the retained
+historical measurement supplies the recorded full matrix.

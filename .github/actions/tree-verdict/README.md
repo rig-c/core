@@ -1,0 +1,408 @@
+# Tree verdict — workflow coverage v2
+
+Reuse means the complete declared publish chain was already covered by successful
+jobs over the **exact same Git tree**. It does not mean API `head_sha` was the
+checkout SHA. PR CI normally checks out a synthetic merge; its actual tested SHA
+and tree are recorded separately. Old `tree-verdict/1` receipts are ineligible.
+
+Phase A supplies the action, Bun coverage compiler/collector, Node lifecycle
+reader, lint and cheap controls. **Existing core ci.yml/release.yml, reusable
+selftest-shards.yml, prepublish_gate.ts and CUR119/120/131 adoption are excluded**
+(core#1705). No old duplicate work is declared green. Core's old tally still binds
+an exact commit, clean source and full census; this receipt does not bypass it.
+
+## Frozen interface and runtime
+
+Lookup/lifecycle use Node >=20, Git and `unzip`. The collector and shared YAML
+planner require **Bun >=1.4.4**, already present in the consumer CI; there is no npm
+runtime dependency. Pin the action/source at a **full merged commit SHA** supplied
+by the tower after landing.
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `declaration` | empty | Consumer lifecycle/2 JSON, relative to workspace; derives workflow and full coverage gate |
+| `workflow` | empty | Exact source path; required when no declaration is supplied |
+| `gate` | empty | Full computed gate; required when no declaration is supplied; conflicts with declaration refuse |
+| `checkout` | `.` | Actual consumer checkout directory; reuse requires clean actual HEAD/tree matching target |
+| `purpose` | `ci` | `ci` or `publish`; publish writes a verified envelope |
+| `verdict-path` | `${{ runner.temp }}/tree-verdict-verified.json` | Envelope inside runner.temp; stale content invalidated |
+| `receipt-name` | `tree-verdict-receipt` | Artifact containing exactly `receipt.json` |
+| `token` | `${{ github.token }}` | Same-repository read token |
+
+| Output | On reuse | On miss |
+| --- | --- | --- |
+| `reused` | `true` | `false` |
+| `run-id` | Successful source run ID | empty |
+| `head-sha` | Full source API head SHA | empty |
+| `tested-sha` | Full actual tested checkout SHA | empty |
+| `pr` | Source PR number, or `0` for direct push | empty |
+| `verdict-path` | Verified envelope in publish mode | empty |
+| `tooling-path` | Pinned action source outside consumer tree | same path, also available on misses |
+
+Caller permissions:
+
+```yaml
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+```
+
+A unique eligible merged PR source is preferred over current-main CI. The latest
+run/attempt **within that PR head** must succeed: no falling back to an older green
+or to main when its receipt is missing. A newer concurrent/reused main CI cannot
+shadow valid fresh PR evidence. With no eligible PR, current-commit push CI is the
+source; a successful reused run without a fresh receipt is a miss. Multiple eligible
+PR sources refuse. Both the PR head tree and the actual tested tree must equal the
+target tree. Ordinary merge differences are diagnosed using exact tree leaf entries
+(up to 20 paths), not GitHub's three-dot compare. Parent/base-tip equality is only
+a diagnostic, never a fresh-head signing requirement.
+
+Dispatch consumers always run the full chain. A fresh dispatch CI collector may
+record completed coverage without breaking the workflow's existing dispatch path;
+lookup will never accept dispatch as a reusable source. Forks and
+`pull_request_target` refuse. Failed/missing/malformed/API/permission/incomplete
+pagination evidence always means full fallback. No ignore-scripts or boolean bypass
+exists.
+
+## One declaration: original chain, covers and exact leg inventory
+
+Example `scripts/tree-verdict.json` for **core's existing local reusable shard
+shape**, with a hypothetical collector added to the caller workflow:
+
+```json
+{
+  "schema": "tree-verdict-lifecycle/2",
+  "workflow": ".github/workflows/ci.yml",
+  "gate": "core-full/2",
+  "chain": "bun run typecheck && bun run lint && bun run selftest",
+  "commands": ["bun run typecheck", "bun run lint", "bun run selftest"],
+  "covers": {
+    "bun run typecheck": ["merge"],
+    "bun run lint": ["merge"],
+    "bun run selftest": ["shards", "merge"]
+  },
+  "jobs": {
+    "shards": {
+      "path": ["selftest", "shard"], "role": "shard",
+      "legs": [
+        {"matrix": {"shard": 1}, "apiName": "selftest / shard 1"},
+        {"matrix": {"shard": 2}, "apiName": "selftest / shard 2"},
+        {"matrix": {"shard": 3}, "apiName": "selftest / shard 3"},
+        {"matrix": {"shard": 4}, "apiName": "selftest / shard 4"},
+        {"matrix": {"shard": 5}, "apiName": "selftest / shard 5"},
+        {"matrix": {"shard": 6}, "apiName": "selftest / shard 6"}
+      ]
+    },
+    "merge": {
+      "path": ["selftest", "test"], "role": "merge",
+      "legs": [{"matrix": {}, "apiName": "selftest / test"}]
+    }
+  },
+  "producer": {"job": "tree-verdict-receipt"},
+  "checkoutPolicy": "event-sha"
+}
+```
+
+`path` names YAML job IDs through local reusable calls. `apiName` is an exact
+runtime **display name**, not a YAML ID; core's outer `test` is distinct from
+`selftest / test`. Parts' top-level variant uses paths `["shard"]`, `["test"]`,
+literal matrix values `["1","2","3","4"]`, and display names
+`selftest shard 1`…`selftest shard 4` plus `test`. It does not rename those jobs.
+
+`commands.join(' && ')` must equal the original `chain` exactly. Every command maps
+to existing job groups, every group is referenced, and every matrix leg is listed
+once. Sharing the merge job between typecheck/lint/selftest is intentional. `plain`
+checks an exact `bun run <script>` or its package-script body. Shards recognize
+literal `selftest.ts --shard` calls or core's `bun run selftest` with `RIGC_SHARD`;
+all partitions must occur exactly once. A sharded command also requires a merge
+invocation and a **direct `needs` edge from merge to its shard** in the same
+workflow. Core's shard-step `continue-on-error: true` is supported because the
+semantic `--merge` is required and must succeed. One green leg never proves the
+matrix. Ordinary/merge steps must use default or explicit `success()` conditions and may
+not tolerate failure; skipped or continue-on-error merge/typecheck/lint steps
+refuse. Job-level ignored failure is refused.
+
+Mapped commands use a bounded single-invocation argv lexer. The script prefix and
+standalone `--merge` or `--shard` flag must belong to the same invocation, with the
+mode flag immediately after the script prefix and followed by its argument.
+Single/double quoted argument segments are supported. Core's quoted
+`"$RUNNER_TEMP"/tally/*.json` arguments retain their boundaries, and a quoted
+`"--merge"` is an actual flag. A single argument `"--merge shards"` is not a flag.
+Unquoted shell operators (`||`, `;`, `|`, `&`), redirections, comments, command
+substitutions, escapes, unsupported variable expansion and multi-command or
+multi-line bodies refuse with `COVER_COMMAND`. Simple environment references are
+supported inside double-quoted argument segments. Static reusable input/ref
+resolution continues through its existing renderer.
+
+The gate format is `<label>/<version>/sha256-<64 lowercase hex>`, hashing canonical
+full covers, roles, paths, leg inventory, producer, checkout policy, exact chain and
+commands. Changing coverage changes the hash. Increase the label's numeric version
+for coverage changes. Optional previous-declaration validation refuses a changed
+contract without a numeric version increase:
+
+```sh
+bun "$TREE_VERDICT_TOOLS/planner.mjs" scripts/tree-verdict.json . previous-declaration.json
+```
+
+Without a previous declaration the compiler does not invent historical state.
+
+## Compiler: bounded static subset, named refusals
+
+Collector and lint call the **same** `compileCoverage` implementation. The
+collector cannot accept a caller's unchecked compiled plan or record-only override.
+The compiler follows local reusable workflow files, static input defaults and
+literal Cartesian matrix axes (maximum 256 legs, five job-path levels, eight source
+workflow files). Names support literals, singleton ID defaults and explicit
+`matrix.*` substitutions. Other name expressions, including `inputs.*` and
+`strategy.job-total`, refuse with `COVER_DYNAMIC`. It validates names/cardinality against the
+independent declared leg inventory. Matrix jobs need an explicit supported name;
+implicit matrix name formatting is refused rather than guessed.
+
+`fromJSON`, dynamic/unknown matrix axes, include/exclude matrices, `github.*` name
+expressions, unresolved inputs, nonlocal reusable calls, matrix reusable callers,
+and containers are **`COVER_DYNAMIC` refusals**, not unfinished support. Checkout
+refs must resolve to default event SHA or `${{ github.sha }}`; static empty
+`inputs.ref` defaults are supported. Override/unknown refs refuse as
+`COVER_CHECKOUT`. All covering jobs and collector must use the same static source
+checkout path, and mapped command working directories must match it. An explicit
+pinned helper repository checkout is distinct from the source checkout; it must
+remain outside the source Git root. Prefer the action's `tooling-path` instead.
+Shell overrides, a second literal repository checkout, and git checkout steps are outside the declared static subset.
+
+| Refusal | What it rejects |
+| --- | --- |
+| `COVER_SCHEMA` / `COVER_RUNTIME` | Old/invalid declaration or unsupported Bun |
+| `COVER_JOB` | Missing/unknown/duplicated coverage job |
+| `COVER_COMMAND` | Missing, conditional, ignored or unsupported single mapped invocation |
+| `COVER_MATRIX` | Omitted/duplicated leg or partition, name/cardinality mismatch |
+| `COVER_MERGE` | Missing semantic merge or actual dependency edge |
+| `COVER_PRODUCER` | Missing success-only collector, incomplete needs, wrong invocation/proof |
+| `COVER_DYNAMIC` / `COVER_CHECKOUT` | Unsupported expressions/ref/path/cwd policy |
+| `COVER_VERSION` | Changed coverage without version increase when previous supplied |
+| `COVER_API_JOBS` | Missing/non-success/ambiguous/wrong-attempt runtime jobs |
+
+## Collector: append after all covering jobs; execute no chain
+
+This is a hypothetical **new fixture/adoption job**, not an edit to existing core
+CI in Phase A. Core's caller needs `selftest` because GitHub cannot name reusable
+leaf IDs in an outer job's `needs`. Parts' collector instead needs `[shard, test]`.
+
+```yaml
+  tree-verdict-receipt:
+    needs: selftest
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - id: tools
+        uses: rig-c/core/.github/actions/tree-verdict@FULL_MERGED_CORE_SHA
+      - id: receipt
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.tools.outputs.tooling-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-verdict-receipt
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          overwrite: true
+```
+
+The collector invocation uses the same bounded single-invocation lexer. It requires
+`bun` followed by a command path ending in `producer.mjs`, exactly one
+`--declaration` matching the checked declaration path, exactly one `--out` path,
+and optionally one `--checkout` path. Option order may vary. Quoted dynamic tooling
+and output path references are supported. Extra positional arguments, duplicate or
+unknown options and glob-expanded collector paths refuse as `COVER_PRODUCER`.
+Shell operators and additional command bodies refuse as `COVER_COMMAND`.
+
+Exact producer command:
+
+```sh
+bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
+```
+
+It compiles the checked-out workflow graph, verifies clean actual HEAD/tree equals
+runner `GITHUB_SHA`, validates repository/run/attempt/event/workflow/PR association,
+and reads **every** covering job from:
+
+```text
+/repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page=N
+```
+
+Every page is consumed to the declared total, at most 1,000 rows. All API job IDs
+and display names must be unique, including ambiguity from unrelated jobs. Each
+expected leg must be `completed/success` in exactly that run/attempt/API head.
+Collector itself must be the declared active job. Its receipt records those
+normalized rows, source YAML hashes, canonical coverage, compiler version/digest,
+collector job ID and actual tested SHA/tree. It recompiles and rechecks clean
+checkout before writing. No chain is executed, no old wrapper grammar is accepted,
+and no successful reused CI may fabricate fresh evidence. Upload remains success
+conditioned. A failed collection exits 1 with no receipt. Fresh dispatch collection
+is allowed; reusing dispatch evidence is not.
+
+Receipt schema is `tree-verdict/2`. Source artifact name remains
+`tree-verdict-receipt`, with exactly `receipt.json`. Digest/size/expiry/run metadata
+and bounded ZIP extraction are checked. Read-only API errors are fallback. The
+Node reader checks canonical gate and compiler proof, rereads exact-attempt jobs
+and collector identity, and rereads overall source success/current attempt after
+verification. It does not reinterpret YAML. API `head_sha` stays separate from
+`tested_sha`; a changed synthetic tested tree fails even when the PR head tree
+still matches main. Each lookup's network budget remains 60 seconds.
+
+[GitHub's attempt-jobs API](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt)
+provides runtime name/run/attempt/status fields; those fields do not by themselves
+prove a checkout. That proof comes from checked source checkout policy plus actual
+collector HEAD/tree and exact target-tree comparison. The source workflow/helper
+pin is trusted reviewed code; artifact strings cannot replace that trust boundary.
+
+## Concrete publish lifecycle replacement
+
+The action source is already installed by `uses: ...@FULL_SHA` outside the consumer
+checkout. No helper directory is added to its Git root. After checking out the
+consumer, use:
+
+```yaml
+- id: reuse
+  uses: rig-c/core/.github/actions/tree-verdict@FULL_MERGED_CORE_SHA
+  with:
+    declaration: scripts/tree-verdict.json
+    purpose: publish
+- id: publish
+  env:
+    TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+    TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+    GITHUB_TOKEN: ${{ github.token }}
+  run: npm publish --provenance --access public
+```
+
+For a source in `consumer/`, set `checkout: consumer`, use
+`declaration: consumer/scripts/tree-verdict.json`, and run npm in that directory.
+The lifecycle CLI uses fresh runner context and clean actual checkout proof again.
+A valid covering envelope skips **the entire chain** and logs run/tested SHA/gate.
+Missing/invalid/noncovering/old/changed-job evidence runs the exact original entire
+chain, preserving its failure exit. Invalid declarations with no readable original
+chain block publishing; the command is never guessed.
+
+Consumer package change (not performed in Phase A):
+
+```json
+{"scripts": {"prepublishOnly": "node scripts/prepublish.cjs"}}
+```
+
+Exact local-safe wrapper; the original chain remains only in its declaration:
+
+```js
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const declaration = path.join(__dirname, 'tree-verdict.json');
+const d = JSON.parse(fs.readFileSync(declaration, 'utf8'));
+if (typeof d.chain !== 'string' || !d.chain.trim()) process.exit(1);
+const helper = process.env.TREE_VERDICT_TOOLS && path.join(process.env.TREE_VERDICT_TOOLS, 'lifecycle.mjs');
+let result;
+if (helper && fs.existsSync(helper)) {
+  result = spawnSync('node', [helper, '--declaration', declaration], { stdio: 'inherit' });
+} else {
+  console.log('tree-verdict helper absent: executing original full chain');
+  const windows = process.platform === 'win32';
+  result = spawnSync(windows ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh',
+    windows ? ['/d', '/s', '/c', d.chain] : ['-c', d.chain], { stdio: 'inherit' });
+}
+process.exit(Number.isInteger(result.status) ? result.status : 1);
+```
+
+Installed-helper CLI:
+
+```sh
+node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"
+```
+
+Without an explicit path, it reads `TREE_VERDICT_PATH`. Missing helper or envelope
+retains ordinary local full validation. Extra consumer lifecycle hooks and core's
+old tally/census integration remain consumer work. The lower-level `publish.mjs`
+CLI is only a 0=true / 2=false diagnostic; every nonzero requires full fallback.
+Never use it alone as a replacement that silently skips the original commands.
+
+## Lint inventory and exact invocation
+
+The workflow-lint inventory keeps heavy jobs explicit; script names do not infer
+heaviness. Add `coverageDeclarations: ["scripts/tree-verdict.json"]` so the same
+compiler checks the whole cover graph. A publish declaration using the action
+also automatically compiles its referenced coverage; no remembered separate check
+is needed. Every detected direct npm publish step in a declared workflow needs an
+explicit publish inventory entry. Structural lint is not an interpreter for shell
+scripts hiding publication.
+
+With the default root checkout and the same pinned action's `tooling-path` in
+`TREE_VERDICT_TOOLS`, run lint directly through that source pin:
+
+```sh
+bun "$TREE_VERDICT_TOOLS/../../../scripts/lint_workflows.ts" scripts/lint_workflows.declarations.json .
+```
+
+The root-checkout sequence uses the same `tools`/`reuse` action output for all
+three entry points:
+
+```sh
+bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
+node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"
+bun "$TREE_VERDICT_TOOLS/../../../scripts/lint_workflows.ts" scripts/lint_workflows.declarations.json .
+```
+
+The producer belongs in the success-conditioned collector after its covering
+jobs. The lifecycle belongs in the publish hook. Each command runs in the
+consumer's existing root directory, preserving artifact-relative paths.
+
+With a pinned core checkout at `tree-verdict-core` beside `consumer`, the optional
+sibling-source lint form from the consumer package root is:
+
+```sh
+bun ../tree-verdict-core/scripts/lint_workflows.ts scripts/lint_workflows.declarations.json .
+```
+
+Alternatively checkout the pinned source solely for lint at a CI workspace sibling;
+all source-checkout path/cwd rules above still apply. A publish entry is:
+
+```json
+{
+  "job": "publish", "step": "publish", "verdictStep": "reuse",
+  "declaration": "scripts/tree-verdict.json",
+  "actionUses": "rig-c/core/.github/actions/tree-verdict@FULL_MERGED_CORE_SHA",
+  "lifecycle": "prepublishOnly", "readerCommand": "node scripts/prepublish.cjs",
+  "evidenceEnv": "TREE_VERDICT_PATH"
+}
+```
+
+Optional `declarationInput` is the workspace-relative action input when it differs
+from the lint-root-relative `declaration`, such as `consumer/scripts/tree-verdict.json`.
+The TypeScript module exports the complete declaration interface. Existing
+`WFL001_DEFAULT_PUSH_HEAVY_UNGUARDED`,
+`WFL002_PUBLISH_SUITE_WITHOUT_VERDICT` and `WFL000_DECLARATION_OR_YAML` remain the
+structural lint failures; coverage refusals retain their explicit codes.
+
+Exact landed-scope lint command in this repository:
+
+```sh
+bun scripts/lint_workflows.ts scripts/lint_workflows.declarations.json .
+```
+
+Its manifest covers the new focused workflow only, `heavyJobs: []`; existing core
+CI/release adoption stays explicitly excluded. Dedicated CI runs that command and
+small controls, not full selftest/build/browser. Fixture process tests execute the
+real composite shell/Node action against mocked API and a cheap **full fixture
+gate**, with real one-byte Git-tree mutation. Planner plants execute the actual
+lint CLI and assert exit 1/code for missing jobs/scripts/legs/merge/dependencies/
+collector needs, unsupported dynamic name/matrix/ref, and version comparisons.
+Lifecycle plants prove whole-chain fallback, including equal PR head with differing
+actual tested tree and a successful main reused run without fresh receipt. These
+are not hosted production reuse or full core selftest verdicts.

@@ -168,6 +168,7 @@ refs must resolve to default event SHA or `${{ github.sha }}`; static empty
 checkout path, and mapped command working directories must match it. An explicit
 pinned helper repository checkout is distinct from the source checkout; it must
 remain outside the source Git root. Prefer the action's `tooling-path` instead.
+Shell overrides, a second literal repository checkout, and git checkout steps are outside the declared static subset.
 
 | Refusal | What it rejects |
 | --- | --- |

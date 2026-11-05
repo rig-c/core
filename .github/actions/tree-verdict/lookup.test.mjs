@@ -168,3 +168,35 @@ for (const plant of ['missing leg','cancelled leg','duplicate name','duplicate I
   if(plant==='changed collected IDs')s.receipt.jobs[0].id=999;
   expect((await drive(s)).reused).toBe(false);
 });
+
+for (const phase of ['initial', 'relist']) test(`newer dispatch beside valid PR in ${phase} listing does not shadow source`, async () => {
+  const state = fixture();
+  const dispatch = { ...state.run, id: 801, run_number: 99, event: 'workflow_dispatch' };
+  if (phase === 'initial') state.listings.push(dispatch);
+  else {
+    const readReceipt = state.readReceipt;
+    state.readReceipt = async () => { state.listings.push(dispatch); return readReceipt(); };
+  }
+  expect((await drive(state)).reused).toBe(true);
+  console.log(`PLANT dispatch ${phase}: reused=true; newer non-source ignored=1`);
+});
+test('only dispatch source rows fall back', async () => {
+  const state = fixture();
+  state.listings = [{ ...state.run, event: 'workflow_dispatch' }];
+  expect((await drive(state)).reused).toBe(false);
+});
+test('candidate PR ignores a push row from the same head', async () => {
+  const state = fixture();
+  state.listings.push({ ...state.run, id: 801, run_number: 99, event: 'push', head_branch: 'feature' });
+  expect((await drive(state)).reused).toBe(true);
+});
+for (const phase of ['initial', 'relist']) test(`malformed event type in ${phase} listing still falls back`, async () => {
+  const state = fixture();
+  const malformed = { ...state.run, id: 801, run_number: 99, event: null };
+  if (phase === 'initial') state.listings.push(malformed);
+  else {
+    const readReceipt = state.readReceipt;
+    state.readReceipt = async () => { state.listings.push(malformed); return readReceipt(); };
+  }
+  expect((await drive(state)).reused).toBe(false);
+});

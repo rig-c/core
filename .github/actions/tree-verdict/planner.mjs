@@ -152,7 +152,7 @@ export function compileCoverage(declaration, read, declarationPath = 'scripts/tr
     }
     need(job.uses === undefined, 'COVER_JOB', 'covering path must terminate at executable job');
     const sourcePath = checkout(job, inputs);
-    job = { ...job, _sourcePath: sourcePath, _workflowCwd: doc.defaults?.run?.['working-directory'] };
+    job = { ...job, _sourcePath: sourcePath, _workflowCwd: doc.defaults?.run?.['working-directory'], _workflowEnv: doc.env };
     const legs = matrixLegs(job), actual = legs.map(matrix => ({ matrix, apiName: [...prefixes, display(job, spec.path.at(-1), matrix, inputs, legs.length)].join(' / ') }));
     need(stable([...actual].sort((a,b) => stable(a) < stable(b) ? -1 : stable(a) > stable(b) ? 1 : 0)) === stable(spec.legs), 'COVER_MATRIX', `leg inventory differs for ${group}`);
     resolved[group] = { job, file, inputs, actual, sourcePath };
@@ -170,7 +170,11 @@ export function compileCoverage(declaration, read, declarationPath = 'scripts/tr
     for (const group of groups) {
       const spec = coverage.jobs[group], { job, inputs } = resolved[group];
       if (spec.role === 'plain' || (spec.role === 'merge' && !groups.some(g => coverage.jobs[g].role === 'shard'))) {
-        sourceStep(job, run => spec.legs.every(leg => invocationArguments(run, command, leg.matrix, inputs, spec.legs.length)?.length === 0 || invocationArguments(run, script, leg.matrix, inputs, spec.legs.length)?.length === 0), 'plain');
+        const step = sourceStep(job, run => spec.legs.every(leg => invocationArguments(run, command, leg.matrix, inputs, spec.legs.length)?.length === 0 || invocationArguments(run, script, leg.matrix, inputs, spec.legs.length)?.length === 0), 'plain');
+        const matrixReference = /\$\{\{[^}]*\bmatrix\./;
+        const environments = [job._workflowEnv, job.env, step.env];
+        need(!matrixReference.test(step.run) && !environments.some(env => matrixReference.test(JSON.stringify(env) ?? '')),
+          'COVER_COMMAND', 'plain mapped argv and environment must not reference matrix.*');
       } else if (spec.role === 'shard') {
         const step = sourceStep(job, (run, s) => spec.legs.every(leg => {
           const direct = invocationArguments(run, command, leg.matrix, inputs, spec.legs.length);

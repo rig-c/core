@@ -110,3 +110,51 @@ test('collector argv accepts known dynamic quoted path and optional checkout in 
  step.run='bun "$TOOLS/producer.mjs" --out "$RUNNER_TEMP/receipt.json" --checkout . --declaration "scripts/tree-verdict.json"';
  refresh(f);expect(compileCoverage(f.declaration,f.read).collectorName).toBe('tree-verdict-receipt');
 });
+
+function plainMatrixFixture(osOnly = false) {
+  const f = workflowFixture('parts');
+  const root = f.documents['.github/workflows/ci.yml'];
+  const axis = osOnly ? 'os' : 'shard';
+  const values = osOnly ? ['ubuntu-latest', 'windows-latest'] : [1, 2, 3, 4, 5, 6];
+  const job = root.jobs.test;
+  delete job.needs;
+  delete job.if;
+  job.name = `full \${{ matrix.${axis} }}`;
+  job.strategy = { matrix: { [axis]: values } };
+  job['runs-on'] = osOnly ? '${{ matrix.os }}' : 'ubuntu-latest';
+  job.steps[3] = { run: 'bun run selftest' };
+  root.jobs = { test: job, 'tree-verdict-receipt': root.jobs['tree-verdict-receipt'] };
+  root.jobs['tree-verdict-receipt'].needs = ['test'];
+  f.declaration.jobs = { full: { path: ['test'], role: 'plain', legs: values.map(value => ({ matrix: { [axis]: value }, apiName: `full ${value}` })) } };
+  f.declaration.covers = Object.fromEntries(f.declaration.commands.map(command => [command, ['full']]));
+  return f;
+}
+for (const scope of ['step', 'job', 'workflow', 'argv', 'OS only']) test(`plain mapped matrix dependency ${scope}: actual CLI result`, () => {
+  const f = plainMatrixFixture(scope === 'OS only');
+  const root = f.documents['.github/workflows/ci.yml'];
+  const job = root.jobs.test;
+  const env = { RIGC_SHARD: '${{ matrix.shard }}/7' };
+  if (scope === 'step') job.steps[3].env = env;
+  if (scope === 'job') job.env = env;
+  if (scope === 'workflow') root.env = env;
+  if (scope === 'argv') {
+    job.strategy.matrix.command = ['selftest'];
+    for (const leg of f.declaration.jobs.full.legs) leg.matrix.command = 'selftest';
+    job.steps[3].run = 'bun run ${{ matrix.command }}';
+  }
+  refresh(f);
+  const dir = mkdtempSync(join(process.env.TMPDIR, 'plain-matrix-cli-'));
+  for (const [path, text] of Object.entries(f.files)) {
+    mkdirSync(join(dir, path, '..'), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+  const inventory = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', coverageDeclarations: ['scripts/tree-verdict.json'], workflows: [{ path: '.github/workflows/ci.yml', heavyJobs: [], publishes: [] }] };
+  const config = join(dir, 'inventory.json');
+  writeFileSync(config, JSON.stringify(inventory));
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../scripts/lint_workflows.ts', import.meta.url)), config, dir], { encoding: 'utf8' });
+  writeFileSync(join(dir, 'stdout.log'), result.stdout);
+  writeFileSync(join(dir, 'stderr.log'), result.stderr);
+  expect(result.status).toBe(scope === 'OS only' ? 0 : 1);
+  if (scope !== 'OS only') expect(result.stderr).toContain('COVER_COMMAND');
+  console.log(`PLANT plain matrix ${scope}: lint CLI exit=${result.status}`);
+});

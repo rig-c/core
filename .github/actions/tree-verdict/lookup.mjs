@@ -26,6 +26,10 @@ async function pages(api, route, key, limit = 10) {
   }
   throw new Error('pagination limit');
 }
+function candidateEvent(run, candidate) {
+  need(object(run) && typeof run.event === 'string' && run.event.length > 0, 'malformed run event');
+  return run.event === (candidate.pr ? 'pull_request' : 'push');
+}
 function runShape(run, c, workflow) {
   need(object(run) && id(run.id) && id(run.run_number) && id(run.run_attempt), 'malformed run identity');
   need(run.workflow_id === workflow.id && run.path === workflow.path, 'wrong workflow identity');
@@ -102,6 +106,7 @@ export async function lookup(c, api, readReceipt, log = () => {}) {
     for (const candidate of sources) {
       const rows = await pages(api, `${root}/actions/workflows/${workflow.id}/runs?head_sha=${candidate.head}`, 'workflow_runs');
       for (const row of rows) {
+        if (!candidateEvent(row, candidate)) continue;
         const run = runShape(row, c, workflow);
         need(run.head_sha === candidate.head, 'head_sha query returned another head');
         if (run.id === c.runId) continue;
@@ -147,6 +152,7 @@ export async function lookup(c, api, readReceipt, log = () => {}) {
     for (const entry of sources) {
       const latest = await pages(api, `${root}/actions/workflows/${workflow.id}/runs?head_sha=${entry.head}`, 'workflow_runs');
       for (const row of latest) {
+        if (!candidateEvent(row, entry)) continue;
         const r = runShape(row, c, workflow);
         need(r.head_sha === entry.head, 'changed run listing');
         need(r.id === c.runId || r.run_number <= run.run_number, 'newer source run appeared');

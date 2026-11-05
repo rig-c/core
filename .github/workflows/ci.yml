@@ -235,13 +235,11 @@ jobs:
   # something a file in the tree can assert. `installs` stays the gate.
   installs-matrix:
     runs-on: ${{ matrix.os }}
-    # Windows: ceil(max green job seconds / 60 * 1.25) = ceil(874 / 60 * 1.25) = 19.
-    # 25% headroom over the slowest of main runs 41584303961, 41636580017,
-    # 41638406213, 41697683049, 41706423778, 41889821907, 42039611869,
-    # 42044591347 (624–874 s). Historical logs batch phase notes at case end;
-    # they cannot identify a slow pack/install/build phase (#1698).
-    # macOS keeps its existing ceiling; the same runs took 260–370 s there.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 19 || 15 }}
+    # Windows: ceil(max green job seconds / 60 * 1.25) = ceil(456 / 60 * 1.25) = 10.
+    # #1702, head 6900d386a3becc65f9473651066dcfbf22d0b538:
+    # run 42076436359/job 127417982158 measured the complete job at 456s (smoke 432s).
+    # macOS keeps its existing 15-minute ceiling.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 10 || 15 }}
     strategy:
       # A red on one platform is no reason not to read the others.
       fail-fast: false
@@ -256,4 +254,16 @@ jobs:
         with:
           node-version: 22
       - name: The package installs into an empty directory and builds a rig
+        if: runner.os != 'Windows'
+        run: bun run smoke
+
+      # #1702, run 42074463611 (4 matched samples per root combination):
+      # package install mean 9.816362s at default roots, 2.524328s with both on runner.temp.
+      - name: The package installs into an empty directory and builds a rig on Windows
+        if: runner.os == 'Windows'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+          npm_config_cache: ${{ runner.temp }}/rigc-smoke-npm-cache
         run: bun run smoke

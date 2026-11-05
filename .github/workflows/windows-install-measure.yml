@@ -1,5 +1,4 @@
-# Temporary sampled diagnostic for #1702. Remove before the PR becomes ready.
-# Add this label only after review: no push/synchronize trigger, no required gate.
+# Temporary paired launcher diagnostic for #1702. Remove before PR ready.
 name: windows-install-measure
 on:
   pull_request:
@@ -9,7 +8,7 @@ permissions:
 jobs:
   pack:
     if: >-
-      github.event.label.name == 'core-1702-measure' &&
+      github.event.label.name == 'core-1702-launcher' &&
       github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -22,9 +21,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # npm pack has no project dependency install. This is the same pack command
-      # as the smoke, with a single shared clean tarball, not the plant battery.
-      - name: Pack once for all three arms
+      - name: Pack one clean tarball without installing project dependencies
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/diagnostic-pack"
@@ -39,11 +36,6 @@ jobs:
     needs: pack
     runs-on: windows-latest
     timeout-minutes: 13
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        mode: [cold, warm, excluded]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,70 +49,30 @@ jobs:
         with:
           name: install-diagnostic-package
           path: ${{ runner.temp }}/diagnostic-package
-      - name: Measure sampled installs and restore Defender preference
+      - name: Pair original and explicit Node launchers under the same Bun parent
         shell: pwsh
         env:
-          MEASURE_MODE: ${{ matrix.mode }}
           MEASURE_ROOT: ${{ runner.temp }}/install-diagnostic
           MEASURE_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:MEASURE_ROOT 'artifacts'
-          $installs = Join-Path $env:MEASURE_ROOT 'installs'
-          New-Item -ItemType Directory -Force $out, $installs | Out-Null
-          $receipt = [ordered]@{ mode = $env:MEASURE_MODE; exclusion = 'NOT_REQUESTED'; cleanup = 'NOT_NEEDED' }
-          $added = $false
-          $result = 0
+          New-Item -ItemType Directory -Force $out | Out-Null
           try {
-            try {
-              $receipt.status = Get-MpComputerStatus -ErrorAction Stop | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, AMRunningMode, AntivirusSignatureVersion
-              $receipt.exclusionsBefore = @((Get-MpPreference -ErrorAction Stop).ExclusionPath)
-            } catch { $receipt.status = 'SKIP_DEFENDER_STATUS: ' + $_.Exception.Message }
-            if ($env:MEASURE_MODE -eq 'excluded') {
-              try {
-                if ($receipt.exclusionsBefore -contains $installs) {
-                  $receipt.exclusion = 'ALREADY_CONFIGURED'
-                } else {
-                  Add-MpPreference -ExclusionPath $installs -ErrorAction Stop
-                  $added = $true
-                  if (@((Get-MpPreference -ErrorAction Stop).ExclusionPath) -notcontains $installs) {
-                    throw 'Exclusion read-back did not contain the requested install path'
-                  }
-                  $receipt.exclusion = 'CONFIGURED_AND_READ_BACK'
-                }
-              } catch { $receipt.exclusion = 'SKIP_DEFENDER_EXCLUSION: ' + $_.Exception.Message }
-            }
-            $receipt | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'defender.json')
-            if ($receipt.exclusion -like 'SKIP_*') {
-              $receipt.exclusion | Add-Content $env:GITHUB_STEP_SUMMARY
-              $receipt.exclusion | Write-Output
-            } else {
-              $npmCmd = (Get-Command npm.cmd -ErrorAction Stop).Source
-              $env:MEASURE_NPM_CLI = Join-Path (Split-Path $npmCmd) 'node_modules/npm/bin/npm-cli.js'
-              $tarballs = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'diagnostic-package/*.tgz'))
-              if ($tarballs.Count -ne 1) { throw 'Expected exactly one shared diagnostic tarball' }
-              node tools/windows_install_measure.mjs --tarball $tarballs[0].FullName
-              $result = $LASTEXITCODE
-            }
-          } finally {
-            if ($added) {
-              try {
-                Remove-MpPreference -ExclusionPath $installs -ErrorAction Stop
-                if (@((Get-MpPreference -ErrorAction Stop).ExclusionPath) -contains $installs) { throw 'Exclusion still present' }
-                $receipt.cleanup = 'REMOVED_AND_READ_BACK'
-              } catch {
-                $receipt.cleanup = 'FAILED: ' + $_.Exception.Message
-                $result = 1
-              }
-            }
-            $receipt | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'defender.json')
-          }
-          exit $result
-      - name: Preserve timings, logs and environment even after failure
+            $defender = @{ status = Get-MpComputerStatus -ErrorAction Stop | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, AMRunningMode, AntivirusSignatureVersion; exclusions = @((Get-MpPreference -ErrorAction Stop).ExclusionPath) }
+          } catch { $defender = @{ status = 'SKIP_DEFENDER_STATUS: ' + $_.Exception.Message } }
+          $defender | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'defender.json')
+          $env:MEASURE_NODE = (Get-Command node.exe -ErrorAction Stop).Source
+          $env:MEASURE_NPM_CLI = Join-Path (Split-Path (Get-Command npm.cmd -ErrorAction Stop).Source) 'node_modules/npm/bin/npm-cli.js'
+          $tarballs = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'diagnostic-package/*.tgz'))
+          if ($tarballs.Count -ne 1) { throw 'Expected exactly one shared tarball' }
+          node tools/windows_install_measure.mjs --tarball $tarballs[0].FullName
+          exit $LASTEXITCODE
+      - name: Preserve complete or interrupted diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-install-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-launcher-pair-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/install-diagnostic/artifacts/
           if-no-files-found: error
           retention-days: 7

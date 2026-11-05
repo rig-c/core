@@ -120,3 +120,45 @@ test('real lint CLI positive and named red plants report actual exits', async ()
     console.log(`PLANT workflow-lint CLI ${plant}: exit=${result.status}; rejected=${plant === 'positive' ? 0 : 1}`);
   }
 });
+
+test('modern publish requires real npm hook: actual CLI positive and ordinary-script negative', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { spawnSync } = await import('node:child_process');
+  if (!process.env.TMPDIR) throw new Error('dedicated TMPDIR required');
+  for (const lifecycle of ['prepublishOnly', 'verify-publish']) {
+    const source = workflowFixture('parts');
+    const readerCommand = 'node scripts/prepublish.cjs';
+    const doc = Bun.YAML.parse(source.files['.github/workflows/ci.yml']) as { jobs: Record<string, unknown> };
+    doc.jobs.publish = { 'runs-on': 'ubuntu-latest', steps: [
+      { id: 'reuse', uses: './pinned/.github/actions/tree-verdict', with: { declaration: 'scripts/tree-verdict.json', purpose: 'publish' } },
+      { id: 'publish', run: 'npm publish --provenance --access public', env: { TREE_VERDICT_PATH: '${{ steps.reuse.outputs.verdict-path }}' } },
+    ] };
+    const pkg = JSON.parse(source.files['package.json']) as { scripts: Record<string, string> };
+    pkg.scripts[lifecycle] = readerCommand;
+    source.files['package.json'] = JSON.stringify(pkg);
+    source.files['.github/workflows/ci.yml'] = Bun.YAML.stringify(doc);
+    const inventory: Declarations = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{
+      path: '.github/workflows/ci.yml', heavyJobs: [], publishes: [{
+        job: 'publish', step: 'publish', verdictStep: 'reuse', declaration: 'scripts/tree-verdict.json',
+        actionUses: './pinned/.github/actions/tree-verdict', lifecycle, readerCommand, evidenceEnv: 'TREE_VERDICT_PATH',
+      }],
+    }] };
+    const dir = mkdtempSync(join(process.env.TMPDIR, 'npm-hook-cli-'));
+    for (const [path, text] of Object.entries(source.files)) {
+      mkdirSync(join(dir, path, '..'), { recursive: true });
+      writeFileSync(join(dir, path), text);
+    }
+    const config = join(dir, 'lint-declarations.json');
+    writeFileSync(config, JSON.stringify(inventory));
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./lint_workflows.ts', import.meta.url)), config, dir], { encoding: 'utf8' });
+    writeFileSync(join(dir, 'stdout.log'), result.stdout);
+    writeFileSync(join(dir, 'stderr.log'), result.stderr);
+    const hooks = ['prepublishOnly', 'prepare', 'prepack'].filter(hook => Object.hasOwn(pkg.scripts, hook));
+    console.log(`PLANT modern hook ${lifecycle}: CLI exit=${result.status}; actual hooks=${JSON.stringify(hooks)}`);
+    expect(hooks).toEqual(lifecycle === 'prepublishOnly' ? ['prepublishOnly'] : []);
+    expect(result.status).toBe(lifecycle === 'prepublishOnly' ? 0 : 1);
+    if (lifecycle === 'verify-publish') expect(result.stderr).toContain('WFL002_PUBLISH_SUITE_WITHOUT_VERDICT');
+  }
+});

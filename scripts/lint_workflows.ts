@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { compileCoverage } from '../.github/actions/tree-verdict/planner.mjs';
 
+const PUBLISH_LIFECYCLE_HOOKS: readonly string[] = ['prepublishOnly', 'prepare', 'prepack'];
+
 export interface WorkflowDeclaration {
   path: string;
   heavyJobs: string[];
@@ -103,7 +105,7 @@ export function lintWorkflows(declarations: Declarations, read: (path: string) =
           const declared: unknown = JSON.parse(read(p.declaration));
           let covering = true;
           try { compileCoverage(declared, read, p.declaration); } catch (error) { covering = false; errors.push(error instanceof Error ? error.message : 'COVER_SCHEMA'); }
-          if (!covering || scripts[p.lifecycle] !== p.readerCommand || !active(publish) ||
+          if (!PUBLISH_LIFECYCLE_HOOKS.includes(p.lifecycle) || !covering || scripts[p.lifecycle] !== p.readerCommand || !active(publish) ||
             typeof publish?.run !== 'string' || !/^npm publish(?:\s+--[a-z-]+(?:\s+[\w-]+)?)*$/.test(publish.run.trim()) ||
             publish.run.includes('--ignore-scripts') || !map(publish.env) ||
             publish.env[p.evidenceEnv] !== expr(`steps.${p.verdictStep}.outputs.verdict-path`) ||
@@ -120,7 +122,7 @@ export function lintWorkflows(declarations: Declarations, read: (path: string) =
         const directSuites = p.suiteScripts.flatMap(s => [scripts[s], `bun run ${s}`, `npm run ${s}`]).filter(x => typeof x === 'string');
         if (!p.suiteScripts.length || p.suiteScripts.some(s => typeof scripts[s] !== 'string') ||
           typeof p.readerCommand !== 'string' || !p.readerCommand.trim() || directSuites.includes(p.readerCommand) ||
-          scripts[p.lifecycle] !== p.readerCommand || !['prepublishOnly', 'prepare', 'prepack'].includes(p.lifecycle) ||
+          scripts[p.lifecycle] !== p.readerCommand || !PUBLISH_LIFECYCLE_HOOKS.includes(p.lifecycle) ||
           !job || !gate || !map(gate.outputs) || typeof gate.outputs[p.verdictOutput] !== 'string' ||
           !condition(gate.outputs[p.verdictOutput]).startsWith('steps.') ||
           !needs(job, p.gateJob) || condition(job.if) !== `needs.${p.gateJob}.outputs.${p.verdictOutput} == '${p.passedValue}'` ||

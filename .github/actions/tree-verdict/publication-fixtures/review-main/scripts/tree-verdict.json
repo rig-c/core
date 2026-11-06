@@ -1,0 +1,38 @@
+{
+  "schema": "tree-verdict-lifecycle/2",
+  "workflow": ".github/workflows/check.yml",
+  "gate": "review-full/1",
+  "chain": "bun run typecheck && bun run test && bun run build && bun run check:demo && bun run smoke",
+  "commands": [
+    "bun run typecheck",
+    "bun run test",
+    "bun run build",
+    "bun run check:demo",
+    "bun run smoke"
+  ],
+  "covers": {
+    "bun run typecheck": ["check"],
+    "bun run test": ["check"],
+    "bun run build": ["check"],
+    "bun run check:demo": ["check"],
+    "bun run smoke": ["install-smoke"]
+  },
+  "jobs": {
+    "check": {
+      "path": ["check"],
+      "role": "plain",
+      "legs": [{ "matrix": {}, "apiName": "check" }]
+    },
+    "install-smoke": {
+      "path": ["install-smoke"],
+      "role": "plain",
+      "legs": [
+        { "matrix": { "profile": "1.3.0, npm bundled" }, "apiName": "install-smoke (bun 1.3.0, npm bundled)" },
+        { "matrix": { "profile": "latest, npm bundled" }, "apiName": "install-smoke (bun latest, npm bundled)" },
+        { "matrix": { "profile": "latest, npm release" }, "apiName": "install-smoke (bun latest, npm release)" }
+      ]
+    }
+  },
+  "producer": { "job": "tree-verdict-receipt" },
+  "checkoutPolicy": "event-sha"
+}

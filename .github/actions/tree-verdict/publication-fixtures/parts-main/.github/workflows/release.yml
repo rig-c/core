@@ -1,0 +1,379 @@
+# Release: the cut is one click, and no credential exists to leak.
+#
+# Every push to main hands the commits to release-please, which keeps a
+# "release: vX.Y.Z" pull request open — next version derived from the
+# conventional-commit subjects, CHANGELOG.md generated, package.json bumped.
+# Merging that pull request is the release: the resulting push runs this
+# workflow again, release-please tags vX.Y.Z and cuts the GitHub release, and
+# the same run publishes to npm over OIDC (trusted publishing) — no npm token,
+# no OTP. The very first version is published by hand, because npm's trusted
+# publisher is configured on a package that already exists (RELEASING.md).
+#
+# Every version goes out under three names from the one gated checkout:
+# @rig-c/parts, the name in package.json, and two aliases carrying the same
+# files — rig-parts, its name from 1.0.0-rc.1 to 1.5.3,
+# and the alias spine-parts, the name the package first shipped as (RELEASING.md).
+#
+# A push re-run can cut a tag newer than its GITHUB_SHA. Before publish=true,
+# resolve the full tag ref to its commit and refuse PROVENANCE_SHA_MISMATCH
+# with both SHAs and a tag-ref dispatch command. The tag remains cut, and the
+# checkout consumes the verified SHA rather than resolving the tag again (#653).
+#
+# A failure after the tag leaves a version unpublished: release-please has cut
+# the tag and the GitHub release, so a re-run no longer reports
+# `release_created` and skips every publish step. Such a tag is published by a
+# dispatch with the `tag` input (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`),
+# which runs the same gate and the same publish steps in this same file, so the
+# trusted publisher and provenance are unchanged (RELEASING.md, "Republishing a
+# cut whose publish failed"). A tag below the registry's latest is refused
+# (RELEASE_TAG_BELOW_LATEST): npm will not move latest back to it implicitly,
+# and a dist-tag variant of the dispatch is a follow-up, never a silent attempt.
+#
+# The dispatch takes exactly one of two inputs, both optional, because GitHub
+# refuses a dispatch that omits a required input and an omitted string input
+# reads as the empty string: `tag` publishes a cut tag (the `publish` job),
+# `version` re-runs a confirmation (the `confirm` job). Both, or neither, is
+# refused by name (RELEASE_DISPATCH_INPUT) and runs nothing else.
+#
+# Two constraints are load-bearing, do not "simplify" them away:
+#   - The publish must stay in THIS file. npm's trusted publisher for each
+#     name — one form per package on npmjs.com — is pinned to the workflow
+#     filename `release.yml`.
+#   - It must stay on a GitHub-hosted runner. npm does not support OIDC from
+#     self-hosted runners.
+name: release
+
+on:
+  push:
+    branches: [main]
+  # Two things on demand, one per dispatch:
+  #   - `version`: re-run a confirmation that ran out of wait, publishing
+  #     nothing. Such a dispatch reaches the `confirm` job and nothing else.
+  #   - `tag`: publish a tag release-please already cut whose publish did not
+  #     land. Release-please never runs on a dispatch, so a dispatch cannot cut
+  #     a tag or a GitHub release; it refuses a tag not of the form vX.Y.Z
+  #     (RELEASE_TAG_FORM), a tag with no GitHub release
+  #     (RELEASE_TAG_UNRELEASED), a version served under all three names
+  #     (RELEASE_ALREADY_PUBLISHED), a failed registry query
+  #     (RELEASE_REGISTRY_QUERY), and a version below
+  #     the registry's latest (RELEASE_TAG_BELOW_LATEST): npm refuses to put
+  #     latest on it implicitly, so it goes out under a dist-tag or not at all.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing release tag to publish, e.g. v1.49.0 (leave version empty)
+        required: false
+        type: string
+      version:
+        description: The published version to confirm, without the leading v, e.g. 0.1.1 (leave tag empty)
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  # The event name is in the group so a dispatched confirmation does not queue
+  # behind a release run for the same ref, and two pushes still serialise.
+  group: release-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  target:
+    # Resolve the release and publish target. This runs
+    # on a push to main, and on a dispatch that is not a confirmation alone: a
+    # `tag` dispatch publishes after the refusals below, and a dispatch with
+    # both inputs or neither reaches the resolve step only to be refused there.
+    # Release-please, which makes tags and releases, runs on a push only.
+    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # release commit, tag, GitHub release
+      pull-requests: write # open and update the release PR
+      issues: write # release-please labels
+    outputs:
+      publish: ${{ steps.target.outputs.publish }}
+      tag: ${{ steps.target.outputs.tag }}
+      sha: ${{ steps.target.outputs.sha }}
+      canonical: ${{ steps.target.outputs.canonical }}
+      rig_parts: ${{ steps.target.outputs.rig_parts }}
+      spine_parts: ${{ steps.target.outputs.spine_parts }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        if: ${{ github.event_name == 'push' }}
+        with:
+          # GITHUB_TOKEN is the intended default. Its one limitation is that the
+          # `pull_request` run its PR starts waits for a human approval — see
+          # RELEASING.md. A RELEASE_PLEASE_TOKEN secret, if ever created, is
+          # picked up with no edit here.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # What to publish: on a push, the tag release-please just cut, if it cut
+      # one; on a dispatch, the `tag` input once it is a cut tag the registry
+      # does not serve under every name yet. Each refusal is one `::error::` line naming its rule.
+      # The inputs reach the script through the environment, never interpolated.
+      - name: Resolve the tag to publish
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          CREATED: ${{ steps.release.outputs.release_created }}
+          CUT_TAG: ${{ steps.release.outputs.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            if [ "$CREATED" != true ]; then echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+            # The commits API peels annotated tags; the refs API returns their tag-object SHA.
+            # An explicit tag ref avoids resolving a branch with the same name.
+            if [[ ! "$CUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: \"$CUT_TAG\" is not a stable cut tag vX.Y.Z"; exit 1; fi
+            if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $CUT_TAG to a commit"; exit 1; fi
+            if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $CUT_TAG did not resolve to a full commit SHA"; exit 1; fi
+            if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $CUT_TAG's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $CUT_TAG -f tag=$CUT_TAG"; exit 1; fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+            echo "canonical=true" >> "$GITHUB_OUTPUT"; echo "rig_parts=true" >> "$GITHUB_OUTPUT"; echo "spine_parts=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+          if [ -z "$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_INPUT: neither tag nor version was given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+          if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z (or vX.Y.Z-<prerelease>)"; exit 1; fi
+          if [ "${GITHUB_REF:-}" != "refs/tags/$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_REF: workflow ref ${GITHUB_REF:-<unset>} is not refs/tags/$INPUT_TAG; dispatch release.yml at that tag, never main or another tag"; exit 1; fi
+          if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
+          # A tag-ref dispatch must use that tag's workflow AND commit. Resolve
+          # the immutable checkout SHA before the registry plan, as on a push.
+          if ! dispatch_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$INPUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $INPUT_TAG to a commit"; exit 1; fi
+          if [[ ! "$dispatch_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $INPUT_TAG did not resolve to a full commit SHA"; exit 1; fi
+          if [ "$GITHUB_SHA" != "$dispatch_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $INPUT_TAG's commit $dispatch_sha; the tag remains cut; recover with gh workflow run release.yml --ref $INPUT_TAG -f tag=$INPUT_TAG"; exit 1; fi
+          version="${INPUT_TAG#v}"
+          # Only a failed query with npm's structured E404 means absent. A
+          # transport/auth error, malformed success or wrong version is not a gap.
+          registry_version() {
+            local spec="$1" reply value
+            if reply="$(npm view "$spec" version --json 2>/dev/null)"; then
+              if value="$(REGISTRY_REPLY="$reply" node -e '
+                try { const v = JSON.parse(process.env.REGISTRY_REPLY); if (typeof v !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$/.test(v)) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }
+              ')"; then printf '%s' "$value"; return 0; fi
+            else
+              if REGISTRY_REPLY="$reply" node -e '
+                try { const v = JSON.parse(process.env.REGISTRY_REPLY); process.exit(v?.error?.code === "E404" ? 0 : 1); } catch { process.exit(1); }
+              '; then return 0; fi
+            fi
+            echo "::error::RELEASE_REGISTRY_QUERY: npm view $spec version did not return a version or a structured E404; registry failure is not absence" >&2
+            return 1
+          }
+          canonical=false; rig_parts=false; spine_parts=false
+          for name in @rig-c/parts rig-parts spine-parts; do
+            if ! served="$(registry_version "$name@$version")"; then exit 1; fi
+            if [ -z "$served" ]; then
+              case "$name" in @rig-c/parts) canonical=true;; rig-parts) rig_parts=true;; spine-parts) spine_parts=true;; esac
+            elif [ "$served" != "$version" ]; then
+              echo "::error::RELEASE_REGISTRY_QUERY: $name@$version returned a different version; refusing an unverified publish plan"; exit 1
+            fi
+          done
+          if [ "$canonical" = false ] && [ "$rig_parts" = false ] && [ "$spine_parts" = false ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves $version under all three names; no name is missing"; exit 1; fi
+          if ! latest="$(registry_version "@rig-c/parts")"; then exit 1; fi
+          # Semver order with a prerelease below its release, in node rather than `sort -V`, which sorts 1.0.0-rc.1 after 1.0.0.
+          if [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
+            const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
+            const ids = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i] === undefined) return -1; if (b[i] === undefined) return 1; const na = /^[0-9]+$/.test(a[i]), nb = /^[0-9]+$/.test(b[i]); if (na && nb && Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]); if (na !== nb) return na ? -1 : 1; if (!na && a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; };
+            const cmp = (x, y) => { const a = parse(x), b = parse(y); for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1; return ids(a.pre, b.pre); };
+            process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
+          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest @rig-c/parts@$latest; republish under a dist-tag with a \`--tag\` variant of this dispatch (a follow-up), not under latest; npm refuses that implicitly"; exit 1; fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$dispatch_sha" >> "$GITHUB_OUTPUT"
+          echo "canonical=$canonical" >> "$GITHUB_OUTPUT"; echo "rig_parts=$rig_parts" >> "$GITHUB_OUTPUT"; echo "spine_parts=$spine_parts" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: target
+    if: ${{ needs.target.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    # Release run 42111504664 measured Publish to npm at 1629 s, smoke at
+    # 30 s, publication setup/post at 9 s and alias publication at 15 s.
+    # One fallback chain plus three 15-minute confirmation waits require
+    # 1629 + 30 + 9 + 15 + 3 * 900 = 4383 s (73 min 3 s).
+    # Round up to the next 30-minute boundary for a 90-minute ceiling.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write # OIDC token for npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Do not resolve a push's mutable tag again after checking its commit.
+          ref: ${{ needs.target.outputs.sha || needs.target.outputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
+      - name: Use an npm that speaks OIDC
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # The lockfile is bun.lock — there is no package-lock.json for `npm ci`.
+      # Dependencies let the lifecycle reader run the declared fallback gates.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Read the tested-tree verdict
+        id: reuse
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        with:
+          declaration: scripts/tree-verdict.json
+          purpose: publish
+
+      - name: Gate every publication through the lifecycle reader
+        id: publication-reader
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"
+
+      # Cross-package release gate (#741): pack this checkout, install it into an
+      # empty directory, build a character with `rig-parts build --all-sets`
+      # (`skeleton.model.json` + `sets.json` with `focus`), and load the result
+      # through a fresh install of `@rig-c/play@latest` before `npm publish` runs.
+      - name: Gate parts output through @rig-c/play
+        run: bun run smoke -- --case clean
+
+      # The publication reader gates this checkout before packing. Canonical
+      # and alias publications use tarballs, preserving that single gate.
+      #
+      # 🏷️ A prerelease never lands on `latest`: a version with a hyphen
+      # (1.0.0-rc.1) goes out under the `rc` dist-tag, so a plain install keeps
+      # receiving the last stable version; any other version passes no tag and
+      # publishes exactly as before. Promotion to `latest` is the owner's, by
+      # `npm dist-tag add`, never this workflow's. Each alias step reads the
+      # same clause.
+      - name: Publish to npm
+        env:
+          PUBLISH_NAME: ${{ needs.target.outputs.canonical }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH_NAME" != true ]; then
+            echo "Skipping @rig-c/parts: the resolver snapshot already serves this version"
+            exit 0
+          fi
+          tag=""
+          case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
+          x="$(npm pack . --pack-destination .)"
+          npm publish "$x" --provenance --access public $tag
+
+      # 🪞 The aliases: the same files under each name the package shipped as
+      # before, so an install or a dependant that still names one keeps
+      # receiving every version. One step per alias, in the order `ALIASES`
+      # in scripts/alias_tarball.ts lists them, each spelling its name out.
+      # `scripts/alias_tarball.ts` packs this checkout — the
+      # tagged commit the step above gated — into the runner's temp
+      # directory, rewrites the one `"name"` line of the extracted
+      # package.json, packs that again, and prints the path only after holding
+      # the result to the package tarball file by file. The checkout is never
+      # modified, so the confirmation below reads the tree the gate read.
+      #
+      # The unconditional publication reader gates the checkout shared by
+      # these tarballs. Publishing a tarball invokes no prepublishOnly hook.
+      # The alias helper compares each payload with the canonical package.
+      #
+      # 🔑 Each alias's own trusted publisher on npmjs.com is pinned to this
+      # workflow filename, like the package's; the steps stay in this file.
+      - name: Publish the alias rig-parts
+        env:
+          PUBLISH_NAME: ${{ needs.target.outputs.rig_parts }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH_NAME" != true ]; then
+            echo "Skipping rig-parts: the resolver snapshot already serves this version"
+            exit 0
+          fi
+          tag=""
+          case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
+          alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-parts --out "$RUNNER_TEMP/alias")"
+          npm publish "$alias_tgz" --provenance --access public $tag
+
+      - name: Publish the alias spine-parts
+        env:
+          PUBLISH_NAME: ${{ needs.target.outputs.spine_parts }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH_NAME" != true ]; then
+            echo "Skipping the alias spine-parts: the resolver snapshot already serves this version"
+            exit 0
+          fi
+          tag=""
+          case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
+          alias_tgz="$(bun scripts/alias_tarball.ts pack --name spine-parts --out "$RUNNER_TEMP/alias")"
+          npm publish "$alias_tgz" --provenance --access public $tag
+
+      # ⚖️ A confirmation beside the gate, not the gate: the `installs` job in
+      # ci.yml runs the same script over a tarball packed from the branch, with
+      # planted packages that have to make it red. This step cannot be the gate,
+      # because its own firing cannot be observed without publishing something
+      # broken. What it adds is the artifact the registry actually serves.
+      #
+      # ⏳ The wait belongs to the script: a publish returns before the registry
+      # serves it, so the script polls both the packument and the tarball and
+      # reports which package it is waiting for and for how long. A main package
+      # version not served yet is exit 3 ("confirmation NOT taken"), never the
+      # same red as a package that does not run (exit 1).
+      #
+      # 🪞 Each `--alias <name>` adds one alias: after the case, the same
+      # version under each alias is asked for within its own 15-minute wait (for
+      # both packument and tarball), and its unpacked files are held to the
+      # package's — every path, every byte, the manifest's name line excepted.
+      # Compared rather than installed again: identical files are the stronger
+      # claim. A difference is exit 1; when the main package passed and an alias
+      # is still arriving after its wait, the script reports a named `WAIT`
+      # naming the alias and exits 4, distinct from exit 3, re-run by the
+      # dispatch below.
+      - name: Confirm the published package installs and runs
+        # Through the environment rather than interpolated into the script.
+        env:
+          TAG_NAME: ${{ needs.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          bun run smoke -- --source registry --version "$version" --wait 15 --case clean --alias rig-parts --alias spine-parts
+
+  # The same confirmation, on demand, for a cut whose wait ran out. It
+  # publishes nothing and can publish nothing: `npm publish` exists only in the
+  # job above, which a `version` dispatch skips. A `tag` dispatch does not run
+  # this job; its own run ends in the confirmation step above.
+  confirm:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' && inputs.tag == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    steps:
+      # The tag, rather than whatever `main` holds now: the question is whether
+      # the artifact THAT cut published runs, so the script asking it is that cut's.
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Confirm the published package installs and runs
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          bun run smoke -- --source registry --version "$VERSION" --wait 15 --case clean --alias rig-parts --alias spine-parts

@@ -1,0 +1,585 @@
+# CI: typecheck, lint, the selftest, and the package itself.
+#
+# The selftest is the gate that matters. Every check in it has a planted input
+# that makes it fire, so a green run means the failures are still reachable —
+# not merely that nothing threw. Nothing here asserts timing, and the selftest
+# reports an absent corpus as a HOLE, never as a pass.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The release pull request gets a `pull_request` run like any other, but a run
+  # started by GITHUB_TOKEN lands in `action_required`, so that pull request's
+  # required check reads as blocked until a human approves it — a standing step
+  # of every cut (RELEASING.md). A run started from the Actions tab cannot stand
+  # in for that approval: a required check is matched by the run that reported
+  # it, not by the SHA. This trigger is a manual lever and nothing more.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+# A newer push to the same pull request cancels its superseded run, so a stale
+# head stops holding runners (issue #1110). Every other event groups by commit
+# and is never cancelled: each merge commit on main keeps its own verdict.
+# release.yml has no such group — a cancelled publish is worse than a slow one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tree-verdict:
+    runs-on: ubuntu-latest
+    outputs:
+      reused: ${{ steps.reuse.outputs.reused }}
+      run-id: ${{ steps.reuse.outputs.run-id }}
+      head-sha: ${{ steps.reuse.outputs.head-sha }}
+      tested-sha: ${{ steps.reuse.outputs.tested-sha }}
+      pr: ${{ steps.reuse.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - id: reuse
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        with:
+          declaration: scripts/tree-verdict.json
+      - name: Check workflow coverage and verdict wiring
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+        run: bun "$TREE_VERDICT_TOOLS/../../../scripts/lint_workflows.ts" scripts/lint_workflows.declarations.json .
+
+  # The selftest runs in four shards (issues #395, #849, #1021). SHARDS in
+  # selftest.ts assigns every unit exactly once; test below merges the records.
+  # Issue #1021 uses PR CI unit clocks and capped case-timing samples to split
+  # check's fixture helpers into separately scheduled units. SHARDS documents
+  # the measured inputs and the estimates the next PR CI run must confirm.
+  # The two-worker default and 25-minute timeout remain unchanged.
+  # A shard judges nothing: its record holds every line its units printed, and
+  # the merge prints and counts them as one whole run would.
+  #
+  # ⚠️ The matrix names the shards SHARDS names. A shard here and not there is
+  # refused when it starts; one there and not here leaves no record, which the
+  # merge refuses by name.
+  shard:
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
+    name: selftest shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1', '2', '3', '4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+
+      # Its units run in worker processes, as many at once as the runner has
+      # cores, capped at two by default for one 6 GiB slot; the step is red
+      # when a unit wrote no result, failed, or exceeded the family RSS budget. The
+      # record is uploaded either way, so the merge can name what went wrong.
+      - name: Run this shard's units
+        run: bun selftest.ts --shard ${{ matrix.shard }} --record shards/shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-shard-${{ matrix.shard }}
+          path: shards/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Fresh runs replay every available shard even after a shard failure, so
+  # the original tally names missing or crashed units. The required test-status
+  # job reports failures; reused runs skip the merge.
+  test:
+    name: selftest merge
+    needs: [tree-verdict, shard]
+    if: ${{ always() && needs.tree-verdict.outputs.reused != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Check README scope and planted failures
+        run: bun run check:readme
+      - run: bun run typecheck
+      - run: bun run lint
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: selftest-shard-*
+          path: shards
+          merge-multiple: true
+      - name: Merge the shards into one selftest run
+        run: bun selftest.ts --merge shards
+
+  # Fresh receipts attest the successful shard matrix and semantic merge.
+  tree-verdict-receipt:
+    needs: [shard, test]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - id: tools
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+      - id: receipt
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.tools.outputs.tooling-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-verdict-receipt
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          overwrite: true
+
+  # Keep the required check successful only for fresh green work or reuse.
+  test-status:
+    name: test
+    needs: [tree-verdict, shard, test, tree-verdict-receipt]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report the full selftest verdict
+        env:
+          LOOKUP_RESULT: ${{ needs.tree-verdict.result }}
+          REUSED: ${{ needs.tree-verdict.outputs.reused }}
+          SOURCE_PR: ${{ needs.tree-verdict.outputs.pr }}
+          SOURCE_HEAD: ${{ needs.tree-verdict.outputs.head-sha }}
+          SOURCE_TESTED: ${{ needs.tree-verdict.outputs.tested-sha }}
+          SOURCE_RUN: ${{ needs.tree-verdict.outputs.run-id }}
+          SHARD_RESULT: ${{ needs.shard.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RECEIPT_RESULT: ${{ needs.tree-verdict-receipt.result }}
+        run: |
+          test "$LOOKUP_RESULT" = success
+          if [ "$REUSED" = true ]; then
+            echo "Reused PR $SOURCE_PR head $SOURCE_HEAD tested $SOURCE_TESTED run $SOURCE_RUN"
+          else
+            test "$SHARD_RESULT" = success
+            test "$TEST_RESULT" = success
+            test "$RECEIPT_RESULT" = success
+          fi
+
+  # Whether the PACKAGE runs, which nothing else here asks. `prepublishOnly`
+  # gates the source tree and the `ships` job below reads packed path lists;
+  # neither starts the program from an install.
+  #
+  # ⭐ A separate job on purpose, with no `bun install` in it: the question is
+  # whether a stranger's machine can run the package, and a job that had first
+  # installed this repository's dev dependencies would be answering it with the
+  # repository's own tooling on hand. `scripts/install_smoke.ts` imports nothing
+  # but node builtins for the same reason.
+  #
+  # 🌱 The plants run here too, and that is the point of running them: three
+  # packages broken on purpose — `src/layers.ts` out of the pack, `@rig-c/core`
+  # out of `dependencies`, `ag-psd` out of `dependencies` — each of which has to
+  # make the smoke RED naming what went missing. Without them this job is a gate
+  # nobody has seen fail.
+  #
+  # 🕳️ What it cannot see: it runs the tarball this tree packs, which is not the
+  # tarball npm serves until a publish makes it one. That half is
+  # `release.yml`'s confirmation step.
+  install-platforms:
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
+    name: packed install ${{ matrix.os }} Bun ${{ matrix.bun }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        bun: [latest]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
+      # npm packs and installs, and the bin shim runs on Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The package installs into an empty directory and runs from there
+        run: bun run smoke
+
+  build-platforms:
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
+    name: build controls ${{ matrix.os }} Bun ${{ matrix.bun }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        bun: [latest]
+    # Green matrix run 39963251495: maximum Windows native-build job
+    # 120446378030 took 746 seconds (minimum Bun); latest Bun took 474.
+    # 746 * 1.5 = 1119 seconds; round UP to 5-minute units = 20 minutes.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 20 || 10 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - name: Build stage controls on this host and Bun
+        shell: bash
+        env:
+          RIG_PARTS_SELFTEST_JOBS: '1'
+        run: |
+          set +e
+          bun selftest.ts --only build
+          status=$?
+          test "$status" -eq 2
+
+  # Preserve the required check name; BOTH matrices must finish green.
+  installs:
+    needs: [tree-verdict, install-platforms, build-platforms]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every installation and stage control passed
+        env:
+          LOOKUP_RESULT: ${{ needs.tree-verdict.result }}
+          REUSED: ${{ needs.tree-verdict.outputs.reused }}
+          SOURCE_PR: ${{ needs.tree-verdict.outputs.pr }}
+          SOURCE_HEAD: ${{ needs.tree-verdict.outputs.head-sha }}
+          SOURCE_TESTED: ${{ needs.tree-verdict.outputs.tested-sha }}
+          SOURCE_RUN: ${{ needs.tree-verdict.outputs.run-id }}
+          INSTALLS_RESULT: ${{ needs.install-platforms.result }}
+          BUILD_CONTROLS_RESULT: ${{ needs.build-platforms.result }}
+        run: |
+          test "$LOOKUP_RESULT" = success
+          if [ "$REUSED" = true ]; then
+            echo "Reused PR $SOURCE_PR head $SOURCE_HEAD tested $SOURCE_TESTED run $SOURCE_RUN"
+          else
+            test "$INSTALLS_RESULT" = success
+            test "$BUILD_CONTROLS_RESULT" = success
+          fi
+
+  # What a landing that moves the published package looks like, which is
+  # nothing: a release opens on commit TYPES, while what ships is decided by an
+  # ALLOWLIST, and nothing else compares the two. A `docs:` edit to README.md —
+  # which npm always packs — changes what `npm install` hands somebody under a
+  # type release-please hides.
+  #
+  # ⛔ The repair is not un-hiding `docs`: most docs do not ship, and a type
+  # that is always visible carries no information.
+  #
+  # 🔒 The verdict is not "you used the wrong type". A doc correction really is
+  # a `docs` change; what is missing is that it also SHIPS. Either remedy
+  # settles it: a visible type, or a `Release-As:` footer in a commit message.
+  #
+  # ⭐ It reads `npm pack --dry-run`, not the `files` array: npm adds
+  # `package.json`, the README and the LICENCE on top of the allowlist, and a
+  # literal reading of the array is blind to all three. The `npm adds` row below
+  # fires if this job ever regresses to that reading.
+  #
+  # ⚠️ The type is read from the pull request TITLE (what a squash writes onto
+  # `main`) and `Release-As:` from the branch COMMIT MESSAGES (what the squash
+  # body is made of). The pull request body reaches neither and is not read.
+  # 🕳️ GitHub lets the squash subject be rewritten in the merge box after this
+  # job reports; nothing available at pull request time can see that.
+  #
+  # ⛔ A `!` or a `BREAKING CHANGE:` footer is not accepted as visibility: that
+  # release-please bumps on a breaking marker carried by a hidden type is
+  # unmeasured here, and reading it as visible would buy the silent miss this
+  # job exists to remove.
+  #
+  # 🔒 Why here and not in `selftest.ts`: what a LANDING ships is a relation
+  # between two commits, and on a checkout at `main` the merge base is HEAD, so
+  # the comparison would be empty by construction.
+  ships:
+    # A relation between a branch and its base. A push to `main` has no such
+    # relation to read, which is the same fact that keeps this out of the suite.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Full history and tags, stated rather than inherited: `git merge-base`
+      # needs both sides, and the last control below reads the subject of a real
+      # cut off the newest reachable tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The npm that reads the allowlist. `release.yml` publishes with
+      # `npm@latest` while this job uses the runner's own npm, so the parser
+      # below accepts both `--json` shapes npm has used (an array in npm 10, an
+      # object keyed by package name in npm 12). A packlist SEMANTICS
+      # change between npm majors is a difference this job cannot see, and that
+      # is stated rather than guarded.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: A landing that changes the package is visible to the release
+        # 🔒 Through the environment and never interpolated into the script. A
+        # pull request title is written by whoever opened it, so `${{ }}` inside
+        # `run:` would be executing a stranger text. The BODY is not passed at
+        # all — see the comment above for the measurement that decided it.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # `sort` and `comm` have to agree on a collation, and a node-side sort
+          # is not in the loop: every list below is ordered by this one `sort`.
+          export LC_ALL=C
+          # GitHub default shell is `bash -e`, which does not include pipefail,
+          # and several readers here sit behind a pipe — including the one that
+          # turns `npm pack --json` into the list everything else is judged
+          # against, where a silent failure would answer an empty package.
+          set -o pipefail
+
+          work=$(mktemp -d)
+          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+
+          # What release-please can see, derived from the branch own config
+          # rather than listed here: un-hiding a type moves this job with it, and
+          # there is no table to fall out of date.
+          git show "$HEAD_SHA:release-please-config.json" > "$work/rp.json"
+          node -e '
+            const fs = require("fs");
+            const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const sections = cfg["changelog-sections"] || [];
+            const w = (f, a) => fs.writeFileSync(f, a.length ? a.join("\n") + "\n" : "");
+            w(process.argv[2], sections.filter(s => !s.hidden).map(s => s.type));
+            w(process.argv[3], sections.filter(s => s.hidden).map(s => s.type));
+            const pat = cfg["pull-request-title-pattern"] || "chore${scope}: release${component} ${version}";
+            const esc = pat.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            w(process.argv[4], ["^" + esc.replace(/\\\$\\\{[A-Za-z]+\\\}/g, ".+") + "$"]);
+            w(process.argv[5], [pat.replace(/\$\{[A-Za-z]+\}/g, "0.0.0")]);
+          ' "$work/rp.json" "$work/visible" "$work/hidden" "$work/release-title" "$work/release-sample"
+
+          # What npm would actually pack, at both ends of the relation, read out
+          # of an extraction of each revision rather than out of the working
+          # tree: the base side is a revision this checkout is not standing on.
+          ships () { # $1 rev, $2 label
+            mkdir -p "$work/tree-$2"
+            git archive "$1" | tar -x -C "$work/tree-$2"
+            if ! npm pack --dry-run --json "$work/tree-$2" > "$work/pack-$2.json" 2> "$work/pack-$2.err"; then
+              cat "$work/pack-$2.err"
+              echo "npm pack --dry-run failed on $1, so nothing is known about what ships and this job will not report green"
+              exit 1
+            fi
+            node -e '
+              const fs = require("fs");
+              const raw = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              const entries = Array.isArray(raw) ? raw : Object.values(raw);
+              const files = entries && entries[0] && entries[0].files;
+              if (!Array.isArray(files) || files.length === 0) {
+                console.error("npm pack --dry-run --json answered a shape this job does not understand, or an empty file list");
+                process.exit(1);
+              }
+              for (const f of files) console.log(f.path);
+            ' "$work/pack-$2.json" | sort > "$work/$2"
+          }
+          ships "$base" base
+          ships "$HEAD_SHA" head
+
+          # The UNION of the two, so a path that ships at the base and stops
+          # shipping on the branch is still a change to the package.
+          sort -u "$work/base" "$work/head" > "$work/ships"
+
+          # The allowlist as the filesystem reads it, for the one row below that
+          # says which of the two readings this job is doing.
+          node -e '
+            const fs = require("fs"), p = require("path");
+            const dir = process.argv[1];
+            const files = JSON.parse(fs.readFileSync(p.join(dir, "package.json"), "utf8")).files || [];
+            const packed = fs.readFileSync(process.argv[2], "utf8").split("\n").filter(Boolean);
+            const rows = files.map(e => packed.filter(x => x === e || x.indexOf(e + "/") === 0).length + " " + e);
+            fs.writeFileSync(process.argv[3], rows.join("\n") + "\n");
+            const lit = [];
+            const walk = (rel) => {
+              const abs = p.join(dir, rel);
+              if (!fs.existsSync(abs)) return;
+              if (fs.statSync(abs).isDirectory()) { for (const n of fs.readdirSync(abs)) walk(rel + "/" + n); }
+              else lit.push(rel);
+            };
+            files.forEach(walk);
+            for (const f of lit) console.log(f);
+          ' "$work/tree-head" "$work/head" "$work/rows" | sort > "$work/literal"
+
+          # 🚨 The floor, one row per allowlist ENTRY and never one on their sum.
+          # A narrowing of what this job calls "shipped"
+          # narrows BOTH revisions at once and is therefore invisible to a
+          # base-against-branch comparison, so the scope is held against the
+          # tree. It also catches a file deleted while its entry stays in
+          # `files`, which silently drops it out of the published package.
+          thin=0
+          while read -r n entry; do
+            echo "  files[] $entry -> $n packed path(s)"
+            if [ "$n" -eq 0 ]; then thin=$((thin + 1)); fi
+          done < "$work/rows"
+          if [ "$thin" -gt 0 ]; then
+            echo "$thin allowlist entry(ies) contributed nothing to the pack, so this scan is reading less of the package than the allowlist says"
+            exit 1
+          fi
+
+          # 🚨 The row that says WHICH reading this is. npm always adds `package.json`, the README and the
+          # LICENCE on top of the allowlist, so a run that finds npm adding
+          # nothing has regressed to expanding the array by hand — and `README.md`
+          # would be invisible to it.
+          comm -13 "$work/literal" "$work/head" > "$work/beyond"
+          nbeyond=$(( $(wc -l < "$work/beyond") ))
+          echo "  npm packs $(( $(wc -l < "$work/head") )) path(s) where a literal expansion of files[] yields $(( $(wc -l < "$work/literal") )); npm adds $nbeyond of its own:" $(cat "$work/beyond")
+          if [ "$nbeyond" -eq 0 ]; then
+            echo "the pack and the allowlist agree exactly, which is what reading the array instead of npm looks like"
+            exit 1
+          fi
+
+          git diff --name-only "$base" "$HEAD_SHA" | sort > "$work/changed"
+          nc=$(( $(wc -l < "$work/changed") ))
+          echo "base $base packs $(( $(wc -l < "$work/base") )) path(s), this branch packs $(( $(wc -l < "$work/head") )), and the branch changes $nc file(s)"
+
+          # 🚨 An empty change set is NOT a fault: a landing that changed nothing
+          # moves no package, and the honest verdict for it is the quiet one. The
+          # reader still needs a control, because a BROKEN diff and an empty
+          # branch look the same from the branch side; so the control is held
+          # against the tree: the diff from the empty tree to this revision is
+          # the whole revision.
+          probe=$(( $(git diff --name-only "$(git hash-object -t tree /dev/null)" "$HEAD_SHA" | wc -l) ))
+          echo "  control  the changed-file reader answers $probe path(s) for the whole of $HEAD_SHA"
+          if [ "$probe" -eq 0 ]; then
+            echo "control: the changed-file reader answered nothing for an entire revision, so its answer above means nothing either"
+            exit 1
+          fi
+
+          # Whether release-please would see this landing at all. Prints the
+          # reason either way, because the reason is the whole diagnostic.
+          visible () { # $1 subject, $2 file of commit message bodies
+            if printf '%s\n' "$1" | grep -qE -f "$work/release-title"; then
+              echo "this landing IS the release: its subject matches pull-request-title-pattern"
+              return 0
+            fi
+            t=$(printf '%s\n' "$1" | sed -nE 's/^([A-Za-z]+)(\([^)]*\))?!?:.*/\1/p')
+            if [ -n "$t" ] && grep -qxF "$t" "$work/visible"; then
+              echo "typed $t, which release-please does not hide"
+              return 0
+            fi
+            if grep -qiE '^[[:space:]]*Release-As:' "$2"; then
+              echo "a Release-As: footer in a commit message on this branch"
+              return 0
+            fi
+            if [ -z "$t" ]; then
+              echo "the subject carries no conventional-commit type, so release-please reads nothing from it"
+            else
+              echo "typed $t, which release-please hides from the changelog"
+            fi
+            return 1
+          }
+
+          # The judgement, written once so the controls below and the real run
+          # are the same code rather than two copies of it agreeing with each
+          # other.
+          judge () { # $1 changed paths, $2 subject, $3 commit bodies, $4 row prefix
+            comm -12 "$1" "$work/ships" > "$work/touched"
+            n=$(( $(wc -l < "$work/touched") ))
+            if why=$(visible "$2" "$3"); then seen=1; else seen=0; fi
+            invisible=0
+            if [ "$n" -eq 0 ]; then
+              echo "$4changes no packed file — $why"
+            elif [ "$seen" -eq 1 ]; then
+              echo "$4$n packed file(s) change and the release will carry them — $why"
+            else
+              invisible=$n
+              while read -r f; do
+                echo "$4SHIPS-UNSEEN  $f is inside the published package, and this landing is $why"
+              done < "$work/touched"
+            fi
+          }
+
+          # 🚨 The judgement controls: FOUR of them, plus a fifth row here that
+          # is not a judgement (the reader control above this block is a sixth).
+          # Two-sided in both directions the card asks for — a packed path under
+          # a hidden type has to be reported, a packed path under a visible type
+          # has to not be, and an unpacked path under a hidden type has to not
+          # be. The fourth is the release exemption; the fifth holds the pattern
+          # against a real cut instead of against the string it came from. All of
+          # them run on paths and types taken off this tree rather than written
+          # here, and the first four go through the same `judge` as the verdict
+          # below rather than a second copy of it agreeing with the first.
+          shipPath=$(head -n 1 "$work/ships")
+          git ls-tree -r --name-only "$HEAD_SHA" | sort > "$work/tracked"
+          comm -23 "$work/tracked" "$work/ships" > "$work/offpaths"
+          offPath=$(head -n 1 "$work/offpaths")
+          hiddenType=$(head -n 1 "$work/hidden")
+          visibleType=$(head -n 1 "$work/visible")
+          if [ -z "$shipPath" ] || [ -z "$offPath" ] || [ -z "$hiddenType" ] || [ -z "$visibleType" ]; then
+            echo "control: the tree offers no packed path, no unpacked path, no hidden type or no visible type, so the cases below cannot differ and nothing here exercised the rule"
+            exit 1
+          fi
+          : > "$work/c-said"
+
+          printf '%s\n' "$shipPath" > "$work/c-changed"
+          judge "$work/c-changed" "$hiddenType: a subject this repository hides" "$work/c-said" "  control  "
+          if [ "$invisible" -ne 1 ]; then
+            echo "control: $shipPath is packed and $hiddenType is hidden, and the judgement did not report it"
+            exit 1
+          fi
+
+          judge "$work/c-changed" "$visibleType: a subject this repository publishes" "$work/c-said" "  control  "
+          if [ "$invisible" -ne 0 ]; then
+            echo "control: $shipPath is packed under the visible type $visibleType, which releases, and the judgement reported it anyway"
+            exit 1
+          fi
+
+          printf '%s\n' "$offPath" > "$work/c-changed"
+          judge "$work/c-changed" "$hiddenType: a subject this repository hides" "$work/c-said" "  control  "
+          if [ "$invisible" -ne 0 ]; then
+            echo "control: $offPath is not packed and the judgement reported it under the hidden type $hiddenType"
+            exit 1
+          fi
+
+          # The release pull request changes `package.json`, which ships, under a
+          # subject that is not a listed type at all — so the exemption is real
+          # and it has to be REACHABLE or every cut goes red. Two rows: the first
+          # proves the exemption fires, the second holds the derived regex
+          # against a real cut out of this repository history rather than against
+          # the string it was derived from.
+          printf '%s\n' "$shipPath" > "$work/c-changed"
+          judge "$work/c-changed" "$(cat "$work/release-sample")" "$work/c-said" "  control  "
+          if [ "$invisible" -ne 0 ]; then
+            echo "control: $(cat "$work/release-sample") is what pull-request-title-pattern produces and the exemption did not fire, so every release pull request would go red"
+            exit 1
+          fi
+          lastTag=$(git describe --tags --abbrev=0 "$base" 2> /dev/null || true)
+          if [ -z "$lastTag" ]; then
+            echo "  control  SKIP  no tag is reachable from $base, so the release-title pattern was not held against a real cut"
+          else
+            realTitle=$(git log -1 --format=%s "$lastTag" | sed -E 's/ \(#[0-9]+\)$//')
+            if printf '%s\n' "$realTitle" | grep -qE -f "$work/release-title"; then
+              echo "  control  the pattern matches the real cut at $lastTag: $realTitle"
+            else
+              echo "control: the pattern derived from pull-request-title-pattern does not match the subject of the real cut at $lastTag ($realTitle), so the exemption would not fire on a cut"
+              exit 1
+            fi
+          fi
+
+          # What the change says about itself, and where it says it. See the
+          # comment above the job for the measurement that puts the type in the
+          # title and `Release-As:` in the commits.
+          git log --format=%B "$base..$HEAD_SHA" > "$work/said"
+          judge "$work/changed" "$PR_TITLE" "$work/said" "  "
+
+          if [ "$invisible" -gt 0 ]; then
+            echo "$invisible file(s) inside the published package change on this branch and no release will open for them"
+            echo "the verdict is not that the type is wrong: a doc correction really is a docs change, and what is missing is that it also ships"
+            echo "either of these settles it — land it under a type release-please does not hide ($(tr "\n" " " < "$work/visible")), or put a Release-As: footer in a COMMIT MESSAGE on this branch, which is what the squash body is made of, and not in the pull request body, which reaches nothing"
+            echo "taking the path back out of files[] in package.json is not a third remedy: package.json is itself packed, so that edit lands under this same rule"
+            exit 1
+          fi
+          echo "the package moves only where the release can see it"

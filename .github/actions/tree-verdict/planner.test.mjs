@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { workflowFixture } from './fixtures.mjs';
 import { compileCoverage } from './planner.mjs';
+import { actionUses } from './publication-fixtures.mjs';
 function refresh(f) { for(const [path,doc] of Object.entries(f.documents)) f.files[path]=Bun.YAML.stringify(doc); f.files['scripts/tree-verdict.json']=JSON.stringify(f.declaration); }
 function uploadFixture(style = 'parts') {
  const f = workflowFixture(style), collector = f.documents['.github/workflows/ci.yml'].jobs['tree-verdict-receipt'];
@@ -171,6 +172,9 @@ test('README collector YAML runs through lint CLI and its wrong producer binding
  expect(typeof yaml).toBe('string');
  for (const wrongID of [false, true]) {
   const f = workflowFixture('core'), collector = Bun.YAML.parse(yaml)['tree-verdict-receipt'];
+  const tooling = collector.steps.find(step => step.id === 'tools');
+  expect(tooling.uses).toBe('rig-c/core/.github/actions/tree-verdict@FULL_MERGED_CORE_SHA');
+  tooling.uses = actionUses;
   f.documents['.github/workflows/ci.yml'].jobs['tree-verdict-receipt'] = collector;
   if (wrongID) collector.steps.find(step => step.uses === 'actions/upload-artifact@v4').if =
    "${{ steps.other.outputs.receipt-created == 'true' }}";
@@ -302,6 +306,20 @@ function plainMatrixFixture(osOnly = false) {
   f.declaration.covers = Object.fromEntries(f.declaration.commands.map(command => [command, ['full']]));
   return f;
 }
+test('parts merge API name follows the YAML display name and excludes the required-check aggregator', () => {
+ const f = workflowFixture('parts'), root = f.documents['.github/workflows/ci.yml'];
+ root.jobs.test.name = 'selftest merge';
+ root.jobs['test-status'] = { name: 'test', needs: ['test', 'tree-verdict-receipt'],
+  if: '${{ always() }}', 'runs-on': 'ubuntu-latest', steps: [{ run: 'true' }] };
+ f.declaration.jobs.merge.legs[0].apiName = 'selftest merge';
+ refresh(f);
+ expect(compileCoverage(f.declaration, f.read).coverage.jobs.merge.legs[0].apiName).toBe('selftest merge');
+ expect(lintFixture(f).status).toBe(0);
+ f.declaration.jobs.merge.legs[0].apiName = 'test';
+ const result = lintFixture(f);
+ expect(result.status).toBe(1);
+ expect(result.stderr).toContain('COVER_MATRIX: leg inventory differs for merge');
+});
 for (const scope of ['step', 'job', 'workflow', 'argv', 'OS only']) test(`plain mapped matrix dependency ${scope}: actual CLI result`, () => {
   const f = plainMatrixFixture(scope === 'OS only');
   const root = f.documents['.github/workflows/ci.yml'];

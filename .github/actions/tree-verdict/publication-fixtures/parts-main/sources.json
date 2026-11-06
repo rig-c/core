@@ -1,0 +1,26 @@
+{
+  "repo": "rig-c/parts",
+  "sha": "6d0bb3dfaa22fced86cfb07252226509c2c71ae7",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "49a40da9cfd9b07f4dad5f1fa3f93fca8813096917191e87c9522aa9f4a59b85"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "sha256": "7f774dc71780b104ab6410937fa6c081e27eeb583fd8716b9736c1cf96854554"
+    },
+    {
+      "path": "scripts/lint_workflows.declarations.json",
+      "sha256": "a0e3a0c3c272ab83a3b459245cd3f9f0654e3bdfe541509a74c677da29ca1ef6"
+    },
+    {
+      "path": "scripts/tree-verdict.json",
+      "sha256": "0a6f7190f80aa5e3fdf930c64de69d7bf4cd59480ea718879ceab0fd09574951"
+    },
+    {
+      "path": "package.json",
+      "sha256": "ee8e2148ec2b59b6fbd8e7d113d19f9b218bd3d0012de4b7ac79ebc61e505525"
+    }
+  ]
+}

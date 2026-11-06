@@ -4,7 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { inspectPublication } from './publication.mjs';
-import { publicationFixture, mixedPublicationFixture, hash } from './publication-fixtures.mjs';
+import { publicationFixture, mixedPublicationFixture, partsMainFixture, reviewMainFixture, hash } from './publication-fixtures.mjs';
 import { stable } from './coverage.mjs';
 import { compileCoverage } from './planner.mjs';
 import { lintWorkflows } from '../../../scripts/lint_workflows.ts';
@@ -470,3 +470,372 @@ for (const subcommand of ['pa', 'pac']) test(`A1 global-option pack prefix ${sub
   expect(result.status).toBe(1);
   expect(result.stderr).toContain('PUBLICATION_SYNTAX: line 1: abbreviated npm publication command unsupported');
 });
+
+for (const repo of ['parts', 'review']) {
+  for (const uses of ['JS-DevTools/npm-publish@v3', './.github/actions/publisher',
+    'unknown/action@v1', 'actions/checkout@unknown', 'oven-sh/setup-bun-extra@v2',
+    'rig-c/core/.github/actions/tree-verdict@main']) {
+    test(`${repo} unrelated action ${uses} follows global publisher denylist scope`, () => {
+      const f = publicationFixture(repo);
+      f.doc.jobs.other = { steps: [{ uses, with: { package: 'unverified.tgz' } }] };
+      f.refresh();
+      const result = cli(f, `${repo} action inventory ${uses}`);
+      expect(result.status).toBe(uses === 'JS-DevTools/npm-publish@v3' ? 1 : 0);
+      if (uses === 'JS-DevTools/npm-publish@v3') expect(result.stderr).toContain(`ACTION_INVENTORY: found publisher action ${uses}`);
+    });
+    test(`${repo} protected job refuses uninventoried action ${uses}`, () => {
+      const f = publicationFixture(repo);
+      f.doc.jobs.publish.steps.unshift({ uses });
+      f.refresh();
+      const result = cli(f, `${repo} protected action inventory ${uses}`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('ACTION_INVENTORY');
+      expect(result.stderr).toContain(uses);
+      expect(result.stderr).toMatch(/[Rr]equires/);
+    });
+  }
+  for (const uses of ['actions/checkout@v4', 'actions/download-artifact@v4',
+    'actions/setup-node@v4', 'oven-sh/setup-bun@v2', './.github/actions/reference-video-tools']) {
+    test(`${repo} admitted tree writer ${uses} refuses after reader`, () => {
+      const f = publicationFixture(repo), steps = f.doc.jobs.publish.steps;
+      f.files['.github/actions/reference-video-tools/action.yml'] =
+        reviewMainFixture().files['.github/actions/reference-video-tools/action.yml'];
+      steps.splice(steps.indexOf(reader(f)) + 1, 0, { uses });
+      f.refresh();
+      const result = cli(f, `${repo} tree writer ${uses}`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`PUBLICATION_TREE_CHANGED: tree-rewriting action ${uses}`);
+    });
+  }
+  test(`${repo} known setup and checkout before reader remain admitted`, () => {
+    const f = publicationFixture(repo), steps = f.doc.jobs.publish.steps;
+    steps.splice(steps.indexOf(reader(f)), 0, { uses: 'actions/download-artifact@v4' });
+    f.refresh();
+    expect(cli(f, `${repo} preparation before reader`).status).toBe(0);
+  });
+  for (const run of ['printf changed > src/probe.ts', 'sed -i s/old/new/ src/probe.ts',
+    'bun run rewrite-source', 'node -e "require(\'fs\').writeFileSync(\'src/probe.ts\',\'changed\')"']) {
+    test(`${repo} unmodeled source-writing step before alias refuses ${run}`, () => {
+      const f = publicationFixture(repo), steps = f.doc.jobs.publish.steps;
+      steps.splice(steps.indexOf(alias(f)), 0, { id: 'edit-source', run });
+      f.refresh();
+      const result = cli(f, `${repo} source write`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('PUBLICATION_TREE_CHANGED: unmodeled run step edit-source');
+    });
+  }
+}
+for (const body of ['npx @jsdevtools/npm-publish --token "$T"',
+  'npx --yes @jsdevtools/npm-publish@3 --token "$T"',
+  '/usr/bin/npx -- @jsdevtools/npm-publish --token "$T"',
+  'npm exec --package=@jsdevtools/npm-publish -- npm-publish',
+  'bunx @jsdevtools/npm-publish', 'pnpm dlx @jsdevtools/npm-publish@latest',
+  'env TOKEN="$T" /usr/bin/npm-publish', 'command npm-publish --token "$T"',
+  'false || npx @jsdevtools/npm-publish', 'true && npm-publish',
+  'npx @jsdevtools/npm-pu\\blish', 'bash -c "npx @jsdevtools/npm-publish"']) {
+  test(`publisher CLI in new declared job refuses ${body}`, () => {
+    const f = publicationFixture('parts'); addUninventoriedJob(f, body);
+    const result = cli(f, `publisher CLI ${body}`);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('PUBLICATION_SYNTAX');
+  });
+}
+for (const destination of ['.', '"."', '"$RUNNER_TEMP/output"', 'output', '"$DESTINATION"', './']) {
+  test(`captured npm pack destination ${destination} binds only a dot basename`, () => {
+    const f = publicationFixture('parts'), step = alias(f);
+    const command = `npm pack . --ignore-scripts --pack-destination ${destination}`;
+    step.run = `set -euo pipefail\nalias_tgz="$(${command})"\nnpm publish "$alias_tgz" --access public`;
+    entry(f).invocations[0].producer.command = command;
+    f.refresh();
+    const result = cli(f, `pack destination ${destination}`);
+    const admitted = destination === '.' || destination === '"."';
+    expect(result.status).toBe(admitted ? 0 : 1);
+    if (!admitted) expect(result.stderr).toContain('captured npm pack destination must be literal dot');
+  });
+}
+test('a pack command cannot disguise an intervening arbitrary Bun script as publication activity', () => {
+  const f = publicationFixture('parts'), steps = f.doc.jobs.publish.steps;
+  steps.splice(steps.indexOf(alias(f)), 0, { run: 'npm pack . --pack-destination .\nbun run rewrite-source' });
+  f.refresh();
+  const result = cli(f, 'disguised source mutation');
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('unsupported Bun publication command');
+});
+
+test('actual full parts main refuses post-reader smoke and admits its smoke-before-reader rollout reorder', () => {
+  const f = partsMainFixture(), path = '.github/workflows/release.yml';
+  expect(f.source.repo).toBe('rig-c/parts');
+  expect(f.source.sha).toBe('6d0bb3dfaa22fced86cfb07252226509c2c71ae7');
+  const original = f.files[path], before = Bun.YAML.parse(original);
+  const expected = 'WFL002_PUBLISH_SUITE_WITHOUT_VERDICT: .github/workflows/release.yml jobs.publish: ' +
+    'PUBLICATION_TREE_CHANGED: unmodeled run step Gate parts output through @rig-c/play follows the publication reader';
+  expect(lintWorkflows(f.declaration, f.read)).toEqual([expected]);
+  const red = cli(f, 'actual full parts main before rollout');
+  expect(red.status).toBe(1);
+  expect(red.stderr.trim()).toBe(expected);
+
+  // Move the complete original smoke step and its comments as source text.
+  // Every other byte, publication body and declaration stays in the snapshot.
+  const startMarker = '      # Cross-package release gate (#741):';
+  const endMarker = '      # The publication reader gates this checkout before packing.';
+  const readerMarker = '      - name: Gate every publication through the lifecycle reader\n';
+  for (const marker of [startMarker, endMarker, readerMarker]) {
+    expect(original.indexOf(marker)).toBeGreaterThan(-1);
+    expect(original.indexOf(marker)).toBe(original.lastIndexOf(marker));
+  }
+  const start = original.indexOf(startMarker), end = original.indexOf(endMarker);
+  expect(end).toBeGreaterThan(start);
+  expect(start).toBeGreaterThan(original.indexOf(readerMarker));
+  const block = original.slice(start, end);
+  expect(block).toContain('        run: bun run smoke -- --case clean\n');
+  const withoutSmoke = original.slice(0, start) + original.slice(end);
+  const insertion = withoutSmoke.indexOf(readerMarker);
+  const reordered = withoutSmoke.slice(0, insertion) + block + withoutSmoke.slice(insertion);
+  expect(reordered).not.toBe(original);
+
+  // Independently compare the whole parsed workflow to a one-step list move.
+  const steps = before.jobs.publish.steps;
+  const matches = steps.filter(step => step.run === 'bun run smoke -- --case clean');
+  expect(matches).toHaveLength(1);
+  const smoke = matches[0];
+  steps.splice(steps.indexOf(smoke), 1);
+  steps.splice(steps.findIndex(step => step.id === 'publication-reader'), 0, smoke);
+  expect(Bun.YAML.parse(reordered)).toEqual(before);
+  const planBefore = compileCoverage(JSON.parse(f.files['scripts/tree-verdict.json']), f.read);
+  f.files[path] = reordered;
+  expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+  expect(cli(f, 'actual full parts main smoke-before-reader rollout').status).toBe(0);
+  expect(compileCoverage(JSON.parse(f.files['scripts/tree-verdict.json']), f.read)).toEqual(planBefore);
+});
+
+// These full consumer inputs and literal plants are independent of the shell reader.
+function actualPublicationFixture(repo) {
+  const source = repo === 'parts' ? partsMainFixture() : repo === 'review' ? reviewMainFixture() : undefined;
+  const files = source?.files ?? {};
+  const read = source?.read ?? (path => files[path] ??= readFileSync(new URL(`../../../${path}`, import.meta.url), 'utf8'));
+  const declaration = JSON.parse(read('scripts/lint_workflows.declarations.json'));
+  if (!source) {
+    for (const workflow of declaration.workflows) read(workflow.path);
+    for (const path of declaration.coverageDeclarations ?? []) compileCoverage(JSON.parse(read(path)), read, path);
+  }
+  const doc = Bun.YAML.parse(read('.github/workflows/release.yml'));
+  if (repo === 'parts') {
+    const steps = doc.jobs.publish.steps, smoke = steps.find(step => step.run === 'bun run smoke -- --case clean');
+    steps.splice(steps.indexOf(smoke), 1);
+    steps.splice(steps.findIndex(step => step.id === 'publication-reader'), 0, smoke);
+  }
+  const pkg = JSON.parse(read('package.json'));
+  return { repo, files, read, declaration, doc, pkg,
+    refresh() { files['.github/workflows/release.yml'] = Bun.YAML.stringify(doc); files['package.json'] = JSON.stringify(pkg); } };
+}
+const localToolsPath = '.github/actions/reference-video-tools/action.yml';
+const localToolsUses = './.github/actions/reference-video-tools';
+function insertLocalTools(f) {
+  const steps = f.doc.jobs.publish.steps;
+  if (!steps.some(step => step.uses === localToolsUses)) {
+    steps.splice(steps.findIndex(step => step.id === 'publication-reader'), 0, { uses: localToolsUses });
+  }
+  f.files[localToolsPath] = reviewMainFixture().files[localToolsPath];
+}
+for (const repo of ['core', 'parts', 'review']) {
+  test(`${repo} actual reader/tarball job remains green with auth env`, () => {
+    const f = actualPublicationFixture(repo);
+    f.doc.jobs.publish.env = { NODE_AUTH_TOKEN: '${{ secrets.NPM_TOKEN }}', NPM_TOKEN: '${{ secrets.NPM_TOKEN }}' };
+    f.refresh();
+    expect(cli(f, `${repo} real full auth positive`).status).toBe(0);
+  });
+  for (const hook of ['prepack', 'prepare', 'postpack']) {
+    for (const ignoreScripts of [false, true]) test(`${repo} P1 refuses defined scripts.${hook} even with ignore-scripts=${ignoreScripts}`, () => {
+      const f = actualPublicationFixture(repo);
+      f.pkg.scripts[hook] = 'node scripts/mutate.cjs';
+      if (ignoreScripts) {
+        const step = f.doc.jobs.publish.steps.find(step => step.run?.includes('npm pack . --pack-destination .'));
+        step.run = step.run.replace('npm pack . --pack-destination .', 'npm pack . --ignore-scripts --pack-destination .');
+        const entry = f.declaration.workflows.flatMap(workflow => workflow.publishes ?? [])
+          .find(entry => entry.invocations?.some(item => item.producer?.command === 'npm pack . --pack-destination .'));
+        entry.invocations[0].producer.command = 'npm pack . --ignore-scripts --pack-destination .';
+      }
+      f.refresh();
+      const result = cli(f, `${repo} P1 ${hook}`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`PUBLISH_PACK_HOOK: found package.json scripts.${hook}="node scripts/mutate.cjs"`);
+      expect(result.stderr).toContain('Requires this field absent');
+    });
+  }
+  for (const position of ['before publish', 'after last publish']) test(`${repo} P2-1 refuses another tree-verdict SHA ${position}`, () => {
+    const f = actualPublicationFixture(repo), steps = f.doc.jobs.publish.steps;
+    const uses = 'rig-c/core/.github/actions/tree-verdict@' + 'd'.repeat(40);
+    const at = position === 'before publish' ? steps.findIndex(step => step.id === 'publication-reader') + 1 : steps.length;
+    steps.splice(at, 0, { uses }); f.refresh();
+    const result = cli(f, `${repo} different action SHA`);
+    const required = steps.find(step => step.id === 'reuse').uses;
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`PUBLICATION_ACTION_REF: found uses ${uses}`);
+    expect(result.stderr).toContain(`Requires exactly steps.reuse.uses=${required}`);
+  });
+  test(`${repo} P2-1 admits the reader's exact tree-verdict source after reader`, () => {
+    const f = actualPublicationFixture(repo), steps = f.doc.jobs.publish.steps;
+    steps.splice(steps.findIndex(step => step.id === 'publication-reader') + 1, 0,
+      { uses: steps.find(step => step.id === 'reuse').uses });
+    f.refresh(); expect(cli(f, `${repo} exact action SHA`).status).toBe(0);
+  });
+  for (const scenario of ['real', 'publish', 'unknown action', 'missing', 'malformed', 'cycle', 'noncomposite', 'oversized']) {
+    test(`${repo} P2-2 local composite inventory ${scenario}`, () => {
+      const f = actualPublicationFixture(repo); insertLocalTools(f);
+      if (scenario === 'publish') f.files[localToolsPath] = 'runs:\n  using: composite\n  steps:\n    - run: npm publish "$GITHUB_WORKSPACE/unverified.tgz"\n';
+      if (scenario === 'unknown action') f.files[localToolsPath] = 'runs:\n  using: composite\n  steps:\n    - uses: unknown/inner@v1\n';
+      if (scenario === 'missing') delete f.files[localToolsPath];
+      if (scenario === 'malformed') f.files[localToolsPath] = 'runs: [';
+      if (scenario === 'cycle') f.files[localToolsPath] = `runs:\n  using: composite\n  steps:\n    - uses: ${localToolsUses}\n`;
+      if (scenario === 'noncomposite') f.files[localToolsPath] = 'runs:\n  using: node20\n  main: hidden.js\n';
+      if (scenario === 'oversized') f.files[localToolsPath] = 'runs:\n  using: composite\n  steps:\n' + '    - run: echo ordinary\n'.repeat(257);
+      f.refresh();
+      const readPaths = [];
+      const errors = lintWorkflows(f.declaration, path => { readPaths.push(path); return f.read(path); });
+      expect(readPaths).toContain(localToolsPath);
+      if (scenario === 'real') {
+        expect(errors).toEqual([]);
+        expect(f.files[localToolsPath]).toContain('actions/cache/restore@v4');
+        expect(cli(f, `${repo} actual local composite`).status).toBe(0);
+      } else {
+        const result = cli(f, `${repo} local composite ${scenario}`);
+        expect(result.status).toBe(1);
+        const reason = scenario === 'publish' ? 'PUBLISH_INVENTORY' : scenario === 'unknown action' ? 'ACTION_INVENTORY' : 'ACTION_BODY';
+        expect(result.stderr).toContain(reason);
+        expect(result.stderr).toMatch(/[Rr]equires/);
+      }
+    });
+  }
+  for (const body of ['npx lerna publish from-package --yes', 'npx changeset publish', 'npx lerna-lite publish']) {
+    test(`${repo} P2-3 raw unadmitted argv publish refuses ${body}`, () => {
+      const f = actualPublicationFixture(repo);
+      f.doc.jobs.extra = { steps: [{ run: body }] }; f.refresh();
+      const result = cli(f, `${repo} unadmitted argv publish`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('argv word publish. Requires an admitted direct npm publish invocation');
+    });
+  }
+  for (const scope of ['workflow', 'job', 'reader', 'publish', 'preparation', 'after publish']) {
+    test(`${repo} P2-4 refuses env at ${scope} scope`, () => {
+      const f = actualPublicationFixture(repo), job = f.doc.jobs.publish;
+      const env = { NODE_OPTIONS: '--require ./scripts/mutate.cjs', npm_config_ignore_scripts: 'false' };
+      if (scope === 'workflow') f.doc.env = env;
+      if (scope === 'job') job.env = env;
+      if (scope === 'reader') Object.assign(job.steps.find(step => step.id === 'publication-reader').env, env);
+      if (scope === 'publish') Object.assign(job.steps.find(step => step.name?.startsWith('Publish')).env, env);
+      if (scope === 'preparation') job.steps.unshift({ run: 'echo preparation', env });
+      if (scope === 'after publish') job.steps.push({ run: 'echo finished', env });
+      f.refresh();
+      const result = cli(f, `${repo} forbidden publication env ${scope}`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('PUBLICATION_ENV');
+      for (const key of Object.keys(env)) expect(result.stderr).toContain(`found ${key} present. Requires this variable absent`);
+    });
+  }
+}
+for (const hook of ['prepack', 'prepare', 'postpack']) test(`P1 rejects any present scripts.${hook} value`, () => {
+  for (const value of ['', null, false, 0]) {
+    const f = actualPublicationFixture('core'); f.pkg.scripts[hook] = value; f.refresh();
+    expect(lintWorkflows(f.declaration, f.read).join('\n')).toContain(`scripts.${hook}=${JSON.stringify(value)}. Requires this field absent`);
+  }
+});
+for (const key of ['npm_config_script_shell', 'NPM_CONFIG_SCRIPT_SHELL', 'Npm_Config_Script_Shell',
+  'npm_CONFIG_script_shell', 'npm_config_userconfig', 'npm_config_registry', 'npm_config_', 'node_options']) {
+  test(`P2-4 case-insensitive forbidden env key ${key}`, () => {
+    const f = actualPublicationFixture('core'); f.doc.jobs.publish.env = { [key]: 'fixture-value' }; f.refresh();
+    const result = cli(f, `case-insensitive env ${key}`);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`found ${key} present. Requires this variable absent`);
+    expect(result.stderr).not.toContain('fixture-value');
+  });
+}
+for (const body of ['npx --yes lerna "publish" from-package', '/usr/bin/npx lerna publish',
+  'env TOKEN="$T" npx changeset publish', 'false || npx lerna-lite publish']) {
+  test(`P2-3 independent executable/options/list form ${body}`, () => {
+    expect(() => inspectPublication(body)).toThrow('argv word publish. Requires an admitted direct npm publish invocation');
+  });
+}
+for (const body of ['npm exec -- clean-publish', 'semantic-release', 'np', 'release-it',
+  'node scripts/publish.mjs', 'gh release upload v1.0.0 package.tgz', 'curl -X PUT https://registry.example.invalid/package']) {
+  test(`bounded semantic limit has no argv word publish ${body}`, () => {
+    const f = actualPublicationFixture('core'); f.doc.jobs.extra = { steps: [{ run: body }] }; f.refresh();
+    expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+  });
+}
+for (const uses of ['actions/checkout@v5', 'actions/setup-node@v4.1.0', 'actions/cache@v4', 'unknown/action@v1', './.github/actions/unknown']) {
+  test(`P2-5 CI-only action admits ${uses} while protected job names its requirement`, () => {
+    const f = actualPublicationFixture('core');
+    f.doc.jobs.extra = { steps: [{ uses }] }; f.refresh();
+    expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+    delete f.doc.jobs.extra; f.doc.jobs.publish.steps.unshift({ uses }); f.refresh();
+    const result = cli(f, `protected action requirement ${uses}`);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(uses);
+    expect(result.stderr).toContain('requires');
+    if (uses.startsWith('actions/checkout@') || uses.startsWith('actions/setup-node@')) {
+      expect(result.stderr).toContain('requires @v4 or a full 40-hex SHA');
+    }
+  });
+}
+
+test('npm config independently reads lowercase uppercase and mixed-case config prefixes', () => {
+  const dir = mkdtempSync(join(process.env.TMPDIR, 'config-'));
+  const userconfig = join(dir, 'user.npmrc'), globalconfig = join(dir, 'global.npmrc');
+  writeFileSync(userconfig, ''); writeFileSync(globalconfig, '');
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_config_')));
+  for (const key of ['npm_config_script_shell', 'NPM_CONFIG_SCRIPT_SHELL', 'Npm_Config_Script_Shell', 'npm_CONFIG_script_shell']) {
+    const result = spawnSync('npm', ['--cache', join(dir, 'cache'), '--userconfig', userconfig,
+      '--globalconfig', globalconfig, 'config', 'get', 'script-shell'], {
+      cwd: dir, env: { ...clean, [key]: 'fixture-script-shell' }, encoding: 'utf8', timeout: 10000,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe('fixture-script-shell');
+  }
+});
+
+for (const repo of ['core', 'parts', 'review']) test(`${repo} P2-4 includes nested local composite step env`, () => {
+  const f = actualPublicationFixture(repo); insertLocalTools(f);
+  const body = Bun.YAML.parse(f.files[localToolsPath]);
+  body.runs.steps[1].env.nPm_CoNfIg_userconfig = 'private-fixture-value';
+  f.files[localToolsPath] = Bun.YAML.stringify(body); f.refresh();
+  const result = cli(f, `${repo} nested composite env`);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`${localToolsPath} runs steps.1 env: PUBLICATION_ENV: found nPm_CoNfIg_userconfig present`);
+  expect(result.stderr).not.toContain('private-fixture-value');
+});
+for (const uses of ['js-devtools/NPM-PUBLISH@v3', 'JS-DevTools/npm-publish/subaction@v3']) {
+  test(`P2-5 publisher repo identity stays denied outside protected jobs ${uses}`, () => {
+    const f = actualPublicationFixture('core'); f.doc.jobs.extra = { steps: [{ uses }] }; f.refresh();
+    const result = cli(f, 'publisher identity denylist');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`found publisher action ${uses}. Requires declared direct npm publication`);
+  });
+}
+
+for (const scope of ['workflow', 'job', 'reader']) test(`P2-4 opaque env mapping refuses at ${scope} scope`, () => {
+  const f = actualPublicationFixture('core');
+  const value = '${{ fromJSON(inputs.environment) }}';
+  if (scope === 'workflow') f.doc.env = value;
+  if (scope === 'job') f.doc.jobs.publish.env = value;
+  if (scope === 'reader') f.doc.jobs.publish.steps.find(step => step.id === 'publication-reader').env = value;
+  f.refresh();
+  expect(lintWorkflows(f.declaration, f.read).join('\n')).toContain('found nonmapping env (string). Requires an explicit environment mapping');
+});
+for (const body of ['echo "$RUNNER_TEMP/fake-bin" >> "$GITHUB_PATH"', 'nohup node scripts/mutate.cjs &']) {
+  test(`pre-reader side-effect boundary remains explicit ${body}`, () => {
+    const f = actualPublicationFixture('core'), steps = f.doc.jobs.publish.steps;
+    steps.splice(steps.findIndex(step => step.id === 'publication-reader'), 0, { run: body });
+    f.refresh();
+    expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+  });
+}
+
+for (const body of ['echo `date`\nnpx lerna publish from-package --yes',
+  'cat <<EOF\nordinary CI data\nEOF\nnpx changeset publish']) {
+  test(`P2-3 unreadable shell cannot hide a later literal publish command ${body}`, () => {
+    const f = actualPublicationFixture('core'); f.doc.jobs.extra = { steps: [{ run: body }] }; f.refresh();
+    const result = cli(f, 'unreadable shell publication marker');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('found publication marker in unreadable shell. Requires supported command syntax');
+  });
+}

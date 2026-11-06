@@ -221,6 +221,13 @@ leaf IDs in an outer job's `needs`. Parts' collector instead needs `[shard, test
           overwrite: true
 ```
 
+With no declaration, workflow or gate input and the default `ci` purpose, the
+composite supplies tooling for the collector and prints
+`TREE_VERDICT_COLLECTOR: tooling only; no lookup expected`. It keeps `reused=false`
+and the empty receipt/source outputs. A partial lookup configuration or `publish`
+purpose still takes the lookup path and fails closed. `consumer.test.mjs` executes
+the actual composite shell for each of these forms.
+
 The collector invocation uses the same bounded single-invocation lexer. It requires
 `bun` followed by a command path ending in `producer.mjs`, exactly one
 `--declaration` matching the checked declaration path, exactly one `--out` path,
@@ -396,6 +403,29 @@ shard unit. The `!cancelled()` conjunction also requires the run to be uncancell
 The guard must still declare its exact reuse output and be a direct dependency.
 The collector requires every covering job as a dependency under `success()`.
 
+The coverage declaration inventories the original chain's jobs. Other guarded
+platform matrices in the workflow-lint `heavyJobs` inventory remain subject to the
+source run's overall-success requirement. Their legs have no individual coverage
+receipt entry. `lookup.test.mjs` controls both an uncovered skipped platform leg
+under overall success and an uncovered failed leg under overall failure.
+Explicit platform-matrix evidence is a separate follow-up. This original-chain
+coverage preserves the previous `prepublishOnly` boundary.
+[core#1714](https://github.com/rig-c/core/issues/1714).
+
+Parts gives job ID `test` the display name `selftest merge`; its declaration's
+merge leg therefore uses `apiName: "selftest merge"`. The separate required-check
+aggregator has job ID `test-status` and display name `test`. Core's reusable
+workflow example above uses `selftest / test`. Display names must match the
+consumer's actual YAML. `planner.test.mjs` checks the parts display-name binding
+and refuses substituting the aggregator's display name.
+
+Receipt upload failures remain failures of the strict collector. A consumer
+aggregator that requires collector success also fails when the chain passed and
+only the upload failed. Caller rollout removes receipt collection from the
+required test aggregator while retaining strict upload errors. An overall failed
+source run remains ineligible for reuse. This disposition is part of
+[core#1709](https://github.com/rig-c/core/issues/1709).
+
 With the default root checkout and the same pinned action's `tooling-path` in
 `TREE_VERDICT_TOOLS`, run lint directly through that source pin:
 
@@ -536,6 +566,45 @@ publication lint alone supplies no hosted no-cut runtime verdict.
 
 ### Bounded shell and producer forms
 
+The action allowlist applies to jobs with a publication reader or publish.
+Admitted remote actions are checkout, setup-node, setup-bun, artifact
+upload/download, cache restore/save, release-please and the tree-verdict action.
+Their reviewed major tags or full SHAs are required. Tree-verdict requires a full
+SHA. Unknown actions and reusable calls in those jobs refuse with
+`ACTION_INVENTORY`, naming the found action and required identity/ref. Other CI
+jobs admit version bumps and unknown actions. The publisher-action denylist,
+including case-insensitive `JS-DevTools/npm-publish`, applies to every job.
+The local reusable selftest-shards workflow is admitted.
+
+The known local `reference-video-tools` installer requires a readable composite
+`action.yml`. Its `runs.steps` undergo the same action and publication inventory,
+including cache restore/save. Missing or malformed bodies, unknown inner actions,
+inner publishes and recursive local cycles refuse. The bounds are eight local
+levels and 256 steps per composite. Unknown local action identities in a protected
+job require explicit admission. `publication.test.mjs` uses pinned public action
+bodies and controls both the recursion and missing-body refusals.
+
+Between the job reader and its last publish, checkout, setup, artifact download
+and other admitted preparation actions refuse with `PUBLICATION_TREE_CHANGED`.
+An unmodeled run step in that interval also refuses. Publication bodies remain
+subject to the bounded command reader; adding a pack command cannot admit an
+arbitrary source-changing script. Preparation belongs before the reader.
+After the reader, a tree-verdict action must use exactly the reader's own source
+ref. Reader/tarball jobs refuse `NODE_OPTIONS` and every `npm_config_*` environment
+key at workflow, job and step scope, including inspected composite steps,
+regardless of value. Environment entries require explicit mappings and keys are
+matched case-insensitively. Independent `npm config get script-shell` controls exercise
+lowercase, uppercase and mixed-case prefixes. Auth keys such as `NODE_AUTH_TOKEN`
+and `NPM_TOKEN` remain admitted. Tests name the forbidden field and require its
+absence without printing environment values.
+
+These checks establish step order and bounded syntax. Pre-reader PATH changes and
+background processes can affect later commands outside this side-effect boundary.
+Parts rollout moves its `bun run smoke -- --case clean` step before the reader.
+The portable full-file control in `publication.test.mjs` preserves the original
+refusal and applies that exact reordering for the positive control. This rollout
+bar is recorded in [core#1709](https://github.com/rig-c/core/issues/1709).
+
 The direct-invocation lexer tracks quotes, comments, escaped command words and
 nested `$(...)`. A separate conservative text guard keys on **publish** and its
 prefixes of at least three characters. It scans argument strings and inline
@@ -543,14 +612,24 @@ comments for npm, Bun, Yarn or pnpm publication pairs. Only whole-line `#`
 comments are skipped. Other forms refuse by run-line number with
 `PUBLICATION_SYNTAX`, including quoted `bash -c`/`eval` commands, quoted publish
 diagnostics, `npm run publish` and `npm view package publish`.
+The `npm-publish` executable/package also activates the guard, including
+`npx @jsdevtools/npm-publish`, versioned package requests, executable paths and
+launcher/global-option variants. `publication.test.mjs` plants them in new jobs.
+Any unadmitted command carrying a literal argv word `publish` also refuses by
+name, including lerna, changeset and lerna-lite launcher forms. Executables such as
+`semantic-release`, `np`, `release-it`, `node scripts/publish.mjs`, `gh release upload`
+and registry `curl PUT` remain outside this semantic vocabulary. Likewise,
+`npm exec -- clean-publish` has no standalone argv word `publish` and remains
+outside that rule. Independent literal controls retain these bounded outcomes.
 
 Only full, direct `npm publish` is admitted. Abbreviations `pub`, `publ`, `publi`
 and `publis`, and `bun`/`yarn`/`pnpm` publish commands or those prefixes, refuse
 by name. The canonical lexer also recognizes npm pack; its abbreviations `pa`
 and `pac` refuse. Pack text alone leaves the text guard inactive. Unrelated
 heredocs, backticks and other unsupported lexer syntax produce no publication
-analysis when the step carries no publish pair. Such syntax with a publish pair
-refuses. Queries such as `npm view package version` remain outside the guard.
+analysis when the step carries no publication marker. Unreadable shell with a
+publish pair or literal `publish` word refuses. Queries such as
+`npm view package version` remain outside the guard.
 
 A substituted publication, publication continuation, unmodeled variable write or
 unsupported publication executable form refuses. The parser reads all branches
@@ -562,7 +641,7 @@ assignment and version case. An arbitrary expansion refuses.
 A tarball operand is a quoted simple variable. Its producer is one preceding,
 top-level direct command capture in the same run-step shell. The declaration
 matches the exact captured command. Supported producers are literal `npm pack`
-with `--pack-destination` and optional `--ignore-scripts`, and the measured
+with `--pack-destination .` and optional `--ignore-scripts`, and the measured
 `bun scripts/alias_tarball.ts pack --name ... --out "$RUNNER_TEMP/..."` form with
 an optional literal `--pack-timeout-ms`. Every tarball entry in the job must match that reader's declaration, verdict
 step and pinned proof source. The job reader is the gate. Producer
@@ -571,6 +650,14 @@ equality checks establish its payload relationship. Independent steps may each
 assign `alias_tgz`. Captures in `&&`/`||` lists, negated commands, groups or nested conditional
 positions refuse. Reassignment, output transforms, another job/step's variable,
 and unmodeled variable transport refuse with `PUBLISH_PRODUCER`.
+Captured npm pack stdout is a basename, so a destination other than literal `.`
+refuses with `PUBLICATION_SYNTAX` even when it is a quoted runner-temp directory.
+In a job with a reader and tarball publication, any defined package script
+`prepack`, `prepare` or `postpack` refuses as `PUBLISH_PACK_HOOK`, naming the field,
+found value and required absence. `--ignore-scripts` provides no exception.
+The recorded npm 10 pack behavior below ran `prepare` with that option.
+An uncaptured pack may still use its supported runner-temp destination.
+`publication.test.mjs` checks the dot captures and non-dot refusals.
 
 `WFL002_PUBLISH_SUITE_WITHOUT_VERDICT` includes named reasons for syntax,
 invocation inventory, condition, producer, ignored failure and missing
@@ -593,6 +680,14 @@ only missing wiring. FULLY WIRED fixtures split target/publication jobs and add
 only necessary job wiring, IDs, action/reader steps and environments. Tests compare
 all publish bodies and helper bytes with the snapshots and execute the actual lint
 CLI. Their green scope is **publication lint**.
+
+`publication-fixtures/parts-main/sources.json` separately binds the five full
+public parts files at `6d0bb3dfaa22fced86cfb07252226509c2c71ae7`. The portable rollout
+test moves the original smoke step and comments before the reader as source text,
+then compares the complete parsed workflow with an independent one-step move.
+`publication-fixtures/review-main/sources.json` binds the full review inputs and
+local action body at `3b88d07a12277fcb5f8b7a1c0b0396d42de66e33`. The historical
+review snapshot also carries its action body from its own declared commit.
 
 Package hook wrappers, declarations and generated coverage CI/collector metadata
 are explicit prospective fixture inputs. Review's `fixture-test`, `fixture-check`,

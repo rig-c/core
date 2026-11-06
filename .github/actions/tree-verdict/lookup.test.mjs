@@ -219,3 +219,15 @@ for (const phase of ['initial', 'relist']) test(`malformed event type in ${phase
   }
   expect((await drive(state)).reused).toBe(false);
 });
+
+for (const conclusion of ['success', 'failure']) test(`uncovered platform leg is subject to overall source ${conclusion}`, async () => {
+  const state = fixture();
+  state.jobRows.push({ id: 300, name: 'packed install windows-latest Bun latest',
+    run_id: state.run.id, run_attempt: state.run.run_attempt, head_sha: state.run.head_sha,
+    status: 'completed', conclusion: conclusion === 'success' ? 'skipped' : 'failure' });
+  state.run.conclusion = conclusion;
+  const result = await drive(state);
+  expect(result.reused).toBe(conclusion === 'success');
+  expect(Object.values(state.receipt.collector.coverage.jobs).flatMap(job => job.legs)
+    .some(leg => leg.apiName === 'packed install windows-latest Bun latest')).toBe(false);
+});

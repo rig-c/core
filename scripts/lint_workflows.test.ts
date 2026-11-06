@@ -18,14 +18,14 @@ function releaseActivationFixture() {
       steps: [{ id: 'target', run: 'echo "publish=true" >> "$GITHUB_OUTPUT"' }] },
     reuse: { needs: 'plan', if: "${{ needs.plan.outputs.publish == 'true' }}",
       outputs: { reused: '${{ steps.lookup.outputs.reused }}' },
-      steps: [{ id: 'lookup', uses: './.github/actions/tree-verdict', with: { workflow: '.github/workflows/ci.yml' } }] },
+      steps: [{ id: 'lookup', uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', with: { workflow: '.github/workflows/ci.yml' } }] },
     gate: { needs: ['plan', 'reuse'],
       if: "${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}",
       uses: './.github/workflows/selftest-shards.yml' },
   };
   const declaration: Declarations = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{
     path: '.github/workflows/release.yml', heavyJobs: ['gate'], activation: 'release-cut',
-    guard: { job: 'reuse', step: 'lookup', uses: './.github/actions/tree-verdict', sourceWorkflow: '.github/workflows/ci.yml' },
+    guard: { job: 'reuse', step: 'lookup', uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', sourceWorkflow: '.github/workflows/ci.yml' },
   }] };
   return { jobs, declaration, read: () => Bun.YAML.stringify({ on: { push: { branches: ['main'] } }, jobs }) };
 }
@@ -46,7 +46,7 @@ test('release-cut refuses changed activation, dependency, output and ignored fai
     jobs => { jobs.reuse['continue-on-error'] = true; },
     jobs => { jobs.plan.outputs = { publish: '${{ steps.other.outputs.publish }}' }; },
     jobs => { jobs.plan.steps = [{ id: 'target', if: 'false', run: 'true' }]; },
-    jobs => { jobs.reuse.steps = [{ id: 'lookup', if: 'false', uses: './.github/actions/tree-verdict', with: { workflow: '.github/workflows/ci.yml' } }]; },
+    jobs => { jobs.reuse.steps = [{ id: 'lookup', if: 'false', uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', with: { workflow: '.github/workflows/ci.yml' } }]; },
   ];
   for (const plant of plants) {
     const f = releaseActivationFixture();
@@ -58,15 +58,15 @@ test('release-cut refuses changed activation, dependency, output and ignored fai
 function fixture(suite = 'selftest') {
   const declaration: Declarations = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{
     path: '.github/workflows/ci.yml', heavyJobs: ['suite'],
-    guard: { job: 'tree-verdict', step: 'lookup', uses: './.github/actions/tree-verdict', sourceWorkflow: '.github/workflows/ci.yml' },
+    guard: { job: 'tree-verdict', step: 'lookup', uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', sourceWorkflow: '.github/workflows/ci.yml' },
     publishes: [{ job: 'publish', step: 'publish', gateJob: 'gate', verdictOutput: 'verdict', passedValue: 'green',
       downloadStep: 'download', artifact: 'suite-proof', evidenceEnv: 'SUITE_RECEIPT', evidenceValue: '${{ runner.temp }}/proof/receipt.json',
       lifecycle: 'prepublishOnly', readerCommand: 'bun scripts/check-publish.ts', suiteScripts: [suite] }],
   }] };
   const doc = { name: 'fixture', on: { push: { branches: ['main'] }, pull_request: null }, jobs: {
     'tree-verdict': { 'runs-on': 'ubuntu-latest', outputs: { reused: '${{ steps.lookup.outputs.reused }}' }, steps: [
-      { id: 'lookup', uses: './.github/actions/tree-verdict', with: { workflow: '.github/workflows/ci.yml' } } ] },
-    suite: { needs: 'tree-verdict', if: "${{ needs.tree-verdict.outputs.reused != 'true' }}", uses: './.github/workflows/suite.yml' },
+      { id: 'lookup', uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', with: { workflow: '.github/workflows/ci.yml' } } ] },
+    suite: { needs: 'tree-verdict', if: "${{ needs.tree-verdict.outputs.reused != 'true' }}", uses: './.github/workflows/selftest-shards.yml' },
     gate: { 'runs-on': 'ubuntu-latest', outputs: { verdict: '${{ steps.proof.outputs.verdict }}' }, steps: [{ id: 'proof', run: 'bun scripts/prove.ts' }] },
     publish: { needs: 'gate', if: "${{ needs.gate.outputs.verdict == 'green' }}", 'runs-on': 'ubuntu-latest', steps: [
       { id: 'download', uses: 'actions/download-artifact@v4', with: { name: 'suite-proof', path: '${{ runner.temp }}/proof' } },
@@ -177,7 +177,7 @@ test('WFL002 planted npm publish lifecycle without passed verdict is red', () =>
 });
 test('YAML flow mappings, aliases and block scripts parsed by native YAML', () => {
   const f = fixture(); f.declaration.workflows[0].publishes = [];
-  const yaml = `on: [push, pull_request]\nx: &lookup {id: lookup, uses: './.github/actions/tree-verdict', with: {workflow: '.github/workflows/ci.yml'}}\njobs:\n  tree-verdict:\n    outputs: {reused: '\${{ steps.lookup.outputs.reused }}'}\n    steps: [*lookup]\n  suite:\n    needs: [tree-verdict]\n    if: "\${{ needs.tree-verdict.outputs.reused != 'true' }}"\n    steps:\n      - run: |\n          echo 'if: misleading text'\n`;
+  const yaml = `on: [push, pull_request]\nx: &lookup {id: lookup, uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', with: {workflow: '.github/workflows/ci.yml'}}\njobs:\n  tree-verdict:\n    outputs: {reused: '\${{ steps.lookup.outputs.reused }}'}\n    steps: [*lookup]\n  suite:\n    needs: [tree-verdict]\n    if: "\${{ needs.tree-verdict.outputs.reused != 'true' }}"\n    steps:\n      - run: |\n          echo 'if: misleading text'\n`;
   expect(lintWorkflows(f.declaration, () => yaml)).toEqual([]);
 });
 test('malformed YAML, multi-document YAML and missing declarations fail closed', () => {
@@ -219,12 +219,12 @@ test('covering lifecycle consumer with compiled source and live action proof is 
   const f = fixture(), source = workflowFixture('parts');
   source.declaration.workflow = '.github/workflows/source.yml';
   f.declaration.workflows[0].publishes = [{ job: 'publish', step: 'publish', verdictStep: 'download',
-    declaration: 'scripts/tree-verdict.json', actionUses: './pinned/.github/actions/tree-verdict', lifecycle: 'prepublishOnly',
+    declaration: 'scripts/tree-verdict.json', actionUses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', lifecycle: 'prepublishOnly',
     readerCommand: 'node scripts/prepublish.cjs', evidenceEnv: 'TREE_VERDICT_PATH' }];
   Object.assign(f.pkg.scripts, JSON.parse(source.files['package.json']).scripts, { prepublishOnly: 'node scripts/prepublish.cjs' });
   const doc = structuredClone(f.doc) as unknown as Record<string, unknown>;
   const jobs = doc.jobs as Record<string, { steps: Record<string, unknown>[] }>;
-  jobs.publish.steps[0] = { id: 'download', uses: './pinned/.github/actions/tree-verdict', with: { declaration: 'scripts/tree-verdict.json', purpose: 'publish' } };
+  jobs.publish.steps[0] = { id: 'download', uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', with: { declaration: 'scripts/tree-verdict.json', purpose: 'publish' } };
   jobs.publish.steps[1].env = { TREE_VERDICT_PATH: '${{ steps.download.outputs.verdict-path }}' };
   const read = (p: string) => p === 'scripts/tree-verdict.json' ? JSON.stringify(source.declaration) : p === 'package.json' ? JSON.stringify(f.pkg) : p === '.github/workflows/source.yml' ? source.files['.github/workflows/ci.yml'] : Bun.YAML.stringify(doc);
   expect(lintWorkflows(f.declaration, read)).toEqual([]);
@@ -273,7 +273,7 @@ test('modern publish requires real npm hook: actual CLI positive and ordinary-sc
     const readerCommand = 'node scripts/prepublish.cjs';
     const doc = Bun.YAML.parse(source.files['.github/workflows/ci.yml']) as { jobs: Record<string, unknown> };
     doc.jobs.publish = { 'runs-on': 'ubuntu-latest', steps: [
-      { id: 'reuse', uses: './pinned/.github/actions/tree-verdict', with: { declaration: 'scripts/tree-verdict.json', purpose: 'publish' } },
+      { id: 'reuse', uses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', with: { declaration: 'scripts/tree-verdict.json', purpose: 'publish' } },
       { id: 'publish', run: 'npm publish --provenance --access public', env: { TREE_VERDICT_PATH: '${{ steps.reuse.outputs.verdict-path }}' } },
     ] };
     const pkg = JSON.parse(source.files['package.json']) as { scripts: Record<string, string> };
@@ -283,7 +283,7 @@ test('modern publish requires real npm hook: actual CLI positive and ordinary-sc
     const inventory: Declarations = { schema: 'workflow-verdict-lint/1', defaultBranch: 'main', workflows: [{
       path: '.github/workflows/ci.yml', heavyJobs: [], publishes: [{
         job: 'publish', step: 'publish', verdictStep: 'reuse', declaration: 'scripts/tree-verdict.json',
-        actionUses: './pinned/.github/actions/tree-verdict', lifecycle, readerCommand, evidenceEnv: 'TREE_VERDICT_PATH',
+        actionUses: 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50', lifecycle, readerCommand, evidenceEnv: 'TREE_VERDICT_PATH',
       }],
     }] };
     const dir = mkdtempSync(join(process.env.TMPDIR, 'npm-hook-cli-'));

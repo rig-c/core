@@ -1,0 +1,73 @@
+{
+  "schema": "tree-verdict-lifecycle/2",
+  "workflow": ".github/workflows/ci.yml",
+  "gate": "parts-full/2",
+  "chain": "bun run typecheck && bun run lint && bun run selftest",
+  "commands": [
+    "bun run typecheck",
+    "bun run lint",
+    "bun run selftest"
+  ],
+  "covers": {
+    "bun run typecheck": [
+      "merge"
+    ],
+    "bun run lint": [
+      "merge"
+    ],
+    "bun run selftest": [
+      "shards",
+      "merge"
+    ]
+  },
+  "jobs": {
+    "shards": {
+      "path": [
+        "shard"
+      ],
+      "role": "shard",
+      "legs": [
+        {
+          "matrix": {
+            "shard": "1"
+          },
+          "apiName": "selftest shard 1"
+        },
+        {
+          "matrix": {
+            "shard": "2"
+          },
+          "apiName": "selftest shard 2"
+        },
+        {
+          "matrix": {
+            "shard": "3"
+          },
+          "apiName": "selftest shard 3"
+        },
+        {
+          "matrix": {
+            "shard": "4"
+          },
+          "apiName": "selftest shard 4"
+        }
+      ]
+    },
+    "merge": {
+      "path": [
+        "test"
+      ],
+      "role": "merge",
+      "legs": [
+        {
+          "matrix": {},
+          "apiName": "selftest merge"
+        }
+      ]
+    }
+  },
+  "producer": {
+    "job": "tree-verdict-receipt"
+  },
+  "checkoutPolicy": "event-sha"
+}

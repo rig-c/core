@@ -4,7 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { inspectPublication } from './publication.mjs';
-import { publicationFixture, mixedPublicationFixture, partsMainFixture, reviewMainFixture, hash } from './publication-fixtures.mjs';
+import { publicationFixture, mixedPublicationFixture, partsMainFixture, reviewMainFixture, wireCollectorUpload, hash } from './publication-fixtures.mjs';
 import { stable } from './coverage.mjs';
 import { compileCoverage } from './planner.mjs';
 import { lintWorkflows } from '../../../scripts/lint_workflows.ts';
@@ -562,10 +562,33 @@ test('a pack command cannot disguise an intervening arbitrary Bun script as publ
   expect(result.stderr).toContain('unsupported Bun publication command');
 });
 
-test('actual full parts main refuses post-reader smoke and admits its smoke-before-reader rollout reorder', () => {
+for (const repo of ['parts', 'review']) test(`${repo} frozen raw collector is RED; prospective guard changes only one upload condition`, () => {
+  const f = repo === 'parts' ? partsMainFixture() : reviewMainFixture();
+  expect(lintWorkflows(f.declaration, f.read).join('\n')).toContain('COVER_PRODUCER:');
+  const raw = cli(f, `${repo} immutable raw unconditional collector`);
+  expect(raw.status).toBe(1);
+  expect(raw.stderr).toContain('COVER_PRODUCER:');
+  const originals = { ...f.files };
+  const migration = wireCollectorUpload(f);
+  const expected = Bun.YAML.parse(originals[migration.path]);
+  const coverage = JSON.parse(f.files['scripts/tree-verdict.json']);
+  const upload = expected.jobs[coverage.producer.job].steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+  upload.if = `\${{ steps.${coverage.producer.step ?? 'receipt'}.outputs.receipt-created == 'true' }}`;
+  expect(Bun.YAML.parse(f.files[migration.path])).toEqual(expected);
+  expect(f.files[migration.path].replace(`        if: \${{ ${migration.condition} }}\n`, '')).toBe(originals[migration.path]);
+  expect(migration.beforeSha256).toBe(hash(originals[migration.path]));
+  expect(migration.afterSha256).toBe(hash(f.files[migration.path]));
+  for (const path of Object.keys(originals).filter(path => path !== migration.path)) expect(f.files[path]).toBe(originals[path]);
+  expect(compileCoverage(coverage, f.read).collectorName).toBe('tree-verdict-receipt');
+  if (repo === 'review') expect(cli(f, 'review full prospective collector guard').status).toBe(0);
+  const frozen = repo === 'parts' ? partsMainFixture() : reviewMainFixture();
+  expect(frozen.files).toEqual(originals);
+});
+test('actual full parts main needs both the collector guard and smoke-before-reader rollout reorder', () => {
   const f = partsMainFixture(), path = '.github/workflows/release.yml';
   expect(f.source.repo).toBe('rig-c/parts');
   expect(f.source.sha).toBe('6d0bb3dfaa22fced86cfb07252226509c2c71ae7');
+  wireCollectorUpload(f);
   const original = f.files[path], before = Bun.YAML.parse(original);
   const expected = 'WFL002_PUBLISH_SUITE_WITHOUT_VERDICT: .github/workflows/release.yml jobs.publish: ' +
     'PUBLICATION_TREE_CHANGED: unmodeled run step Gate parts output through @rig-c/play follows the publication reader';
@@ -575,7 +598,8 @@ test('actual full parts main refuses post-reader smoke and admits its smoke-befo
   expect(red.stderr.trim()).toBe(expected);
 
   // Move the complete original smoke step and its comments as source text.
-  // Every other byte, publication body and declaration stays in the snapshot.
+  // The collector guard is already wired. Every release byte outside this move
+  // and every publication body/declaration stays in the snapshot.
   const startMarker = '      # Cross-package release gate (#741):';
   const endMarker = '      # The publication reader gates this checkout before packing.';
   const readerMarker = '      - name: Gate every publication through the lifecycle reader\n';
@@ -601,6 +625,11 @@ test('actual full parts main refuses post-reader smoke and admits its smoke-befo
   steps.splice(steps.indexOf(smoke), 1);
   steps.splice(steps.findIndex(step => step.id === 'publication-reader'), 0, smoke);
   expect(Bun.YAML.parse(reordered)).toEqual(before);
+  const unguarded = partsMainFixture();
+  unguarded.files[path] = reordered;
+  const reorderOnly = cli(unguarded, 'parts smoke reorder alone still refuses unconditional collector');
+  expect(reorderOnly.status).toBe(1);
+  expect(reorderOnly.stderr).toContain('COVER_PRODUCER:');
   const planBefore = compileCoverage(JSON.parse(f.files['scripts/tree-verdict.json']), f.read);
   f.files[path] = reordered;
   expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
@@ -611,6 +640,7 @@ test('actual full parts main refuses post-reader smoke and admits its smoke-befo
 // These full consumer inputs and literal plants are independent of the shell reader.
 function actualPublicationFixture(repo) {
   const source = repo === 'parts' ? partsMainFixture() : repo === 'review' ? reviewMainFixture() : undefined;
+  if (source) wireCollectorUpload(source);
   const files = source?.files ?? {};
   const read = source?.read ?? (path => files[path] ??= readFileSync(new URL(`../../../${path}`, import.meta.url), 'utf8'));
   const declaration = JSON.parse(read('scripts/lint_workflows.declarations.json'));

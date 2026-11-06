@@ -5,7 +5,7 @@ export function workflowFixture(style = 'parts') {
   const merge = { 'runs-on': 'ubuntu-latest', needs: 'shard', if: '${{ always() }}', steps: [checkout, { run: 'bun run typecheck' }, { run: 'bun run lint' }, { run: 'bun selftest.ts --merge "$RUNNER_TEMP"/tally/*.json' }] };
   const collector = { 'runs-on': 'ubuntu-latest', needs: ['shard','test'], if: '${{ success() }}', steps: [checkout,
     { id: 'receipt', run: 'bun helper/.github/actions/tree-verdict/producer.mjs --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"' },
-    { uses: 'actions/upload-artifact@v4', with: { name: 'tree-verdict-receipt', path: '${{ runner.temp }}/receipt.json', 'if-no-files-found': 'error' } }] };
+    { uses: 'actions/upload-artifact@v4', if: "${{ steps.receipt.outputs.receipt-created == 'true' }}", with: { name: 'tree-verdict-receipt', path: '${{ runner.temp }}/receipt.json', 'if-no-files-found': 'error' } }] };
   const root = { name: 'ci', on: { push: { branches: ['main'] }, pull_request: null }, jobs: { shard, test: merge, 'tree-verdict-receipt': collector } };
   const prefix = style === 'core' ? ['selftest'] : [];
   if (style === 'core') {

@@ -23,6 +23,22 @@ function mainFixture(repo) {
 }
 export function partsMainFixture() { return mainFixture('parts'); }
 export function reviewMainFixture() { return mainFixture('review'); }
+/** Add only the collector upload guard to an in-memory copy of a frozen source. */
+export function wireCollectorUpload(fixture) {
+  const declaration = JSON.parse(fixture.files['scripts/tree-verdict.json']);
+  const path = declaration.workflow, original = fixture.files[path];
+  const workflow = Bun.YAML.parse(original);
+  const collector = workflow.jobs[declaration.producer.job];
+  const uploads = collector.steps.filter(step => step.uses?.startsWith('actions/upload-artifact@'));
+  if (uploads.length !== 1 || uploads[0].if !== undefined) throw new Error('snapshot requires one unconditional collector upload');
+  const condition = `steps.${declaration.producer.step ?? 'receipt'}.outputs.receipt-created == 'true'`;
+  const marker = `      - uses: ${uploads[0].uses}\n`;
+  const start = original.indexOf(`  ${declaration.producer.job}:\n`);
+  const insertion = original.indexOf(marker, start) + marker.length;
+  if (start < 0 || insertion < marker.length) throw new Error('snapshot collector upload text missing');
+  fixture.files[path] = original.slice(0, insertion) + `        if: \${{ ${condition} }}\n` + original.slice(insertion);
+  return { path, condition, beforeSha256: hash(original), afterSha256: hash(fixture.files[path]) };
+}
 const output = (id, name) => `\${{ steps.${id}.outputs.${name} }}`;
 // Preserve snapshot comments, quoting and script bytes. Only the new wiring is
 // rendered; existing steps move as source text. Mutant fixtures use refresh().
@@ -182,7 +198,7 @@ export function mixedPublicationFixture(repo) {
     'validate-secondary': { 'runs-on': 'ubuntu-latest', steps: [checkout, { run: command }] },
     'secondary-receipt': { 'runs-on': 'ubuntu-latest', if: '${{ success() }}', needs: 'validate-secondary', steps: [checkout,
       { id: 'receipt', run: 'bun helper/.github/actions/tree-verdict/producer.mjs --declaration scripts/secondary-verdict.json --out "$RUNNER_TEMP/secondary-receipt.json"' },
-      { uses: 'actions/upload-artifact@v4', with: { name: 'tree-verdict-receipt', path: '${{ runner.temp }}/secondary-receipt.json', 'if-no-files-found': 'error' } }] },
+      { uses: 'actions/upload-artifact@v4', if: "${{ steps.receipt.outputs.receipt-created == 'true' }}", with: { name: 'tree-verdict-receipt', path: '${{ runner.temp }}/secondary-receipt.json', 'if-no-files-found': 'error' } }] },
   } };
   f.files[declaration.workflow] = Bun.YAML.stringify(doc);
   f.files['scripts/secondary-verdict.json'] = JSON.stringify(declaration);

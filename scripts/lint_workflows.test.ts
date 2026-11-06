@@ -1,5 +1,6 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { lintWorkflows, type Declarations } from './lint_workflows.ts';
 import { workflowFixture } from '../.github/actions/tree-verdict/fixtures.mjs';
@@ -10,6 +11,39 @@ test('the real complete core CI and release files pass the coverage compiler and
   expect(declaration.workflows.some(workflow => workflow.path === '.github/workflows/ci.yml')).toBe(true);
   expect(declaration.workflows.some(workflow => workflow.path === '.github/workflows/release.yml')).toBe(true);
   expect(lintWorkflows(declaration, path => readFileSync(join(root, path), 'utf8'))).toEqual([]);
+});
+
+test('the real complete core workflow refuses a planted unconditional collector upload by name', () => {
+  const root = resolve(import.meta.dir, '..');
+  const declaration = JSON.parse(readFileSync(join(root, 'scripts/lint_workflows.declarations.json'), 'utf8')) as Declarations;
+  const read = (path: string): string => {
+    const text = readFileSync(join(root, path), 'utf8');
+    if (path !== '.github/workflows/ci.yml') return text;
+    const workflow = Bun.YAML.parse(text) as { jobs: Record<string, { steps: Array<Record<string, unknown>> }> };
+    const uploads = workflow.jobs['tree-verdict-receipt'].steps.filter(step => step.uses === 'actions/upload-artifact@v4');
+    expect(uploads).toHaveLength(1);
+    delete uploads[0].if;
+    return Bun.YAML.stringify(workflow);
+  };
+  expect(lintWorkflows(declaration, read).join('\n')).toContain('COVER_PRODUCER:');
+});
+
+test('core required verdict is independent of receipt upload and still requires fresh green or verified reuse', () => {
+  const root = resolve(import.meta.dir, '..');
+  const workflow = Bun.YAML.parse(readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8')) as {
+    jobs: Record<string, { needs: string[]; steps: Array<{ run: string; env: Record<string, string> }> }>;
+  };
+  const job = workflow.jobs.test;
+  expect(job.needs).toEqual(['reuse', 'selftest']);
+  const step = job.steps[0];
+  expect(step.env).toEqual({ REUSED: '${{ needs.reuse.outputs.reused }}', SOURCE_RUN: '${{ needs.reuse.outputs.run-id }}',
+    TESTED_SHA: '${{ needs.reuse.outputs.tested-sha }}', VERDICT: '${{ needs.selftest.outputs.verdict }}' });
+  for (const [reused, verdict, exit] of [['false', 'green', 0], ['false', '', 1], ['false', 'red', 1], ['true', '', 0]] as const) {
+    const result = spawnSync('bash', ['-c', step.run], {
+      env: { ...process.env, REUSED: reused, VERDICT: verdict, SOURCE_RUN: '800', TESTED_SHA: 'a'.repeat(40) }, encoding: 'utf8',
+    });
+    expect(result.status).toBe(exit);
+  }
 });
 
 function releaseActivationFixture() {

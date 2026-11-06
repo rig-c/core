@@ -40,5 +40,11 @@
     "sha": "f06f270dde2f53a0dd5f8e9fce71bb5fd9e4c950",
     "path": ".github/workflows/ci.yml",
     "sha256": "fa6209d489aab894a55f4dea4f500ce9eebc745a2a5bd52a7c24df1cdf86bdb4"
+  },
+  {
+    "repo": "review",
+    "sha": "112fe8d316dd32748f7bd94e5fc6bc269ab27f8c",
+    "path": ".github/actions/reference-video-tools/action.yml",
+    "sha256": "0119c484498f6df0ac7cd4bc0cfff36b4eb96b5af4013e60fa83641cf130d0ee"
   }
 ]

@@ -566,20 +566,40 @@ publication lint alone supplies no hosted no-cut runtime verdict.
 
 ### Bounded shell and producer forms
 
-Every action in a declared workflow is checked against the explicit identities in
-`publication.mjs`. Admitted remote actions are checkout, setup-node, setup-bun,
-artifact upload/download, release-please and the SHA-pinned tree-verdict action.
+The action allowlist applies to jobs with a publication reader or publish.
+Admitted remote actions are checkout, setup-node, setup-bun, artifact
+upload/download, cache restore/save, release-please and the tree-verdict action.
 Their reviewed major tags or full SHAs are required. Tree-verdict requires a full
-SHA. The known local `reference-video-tools` installer is preparation only.
-Unknown remote/local actions and reusable calls refuse with `ACTION_INVENTORY`,
-including `JS-DevTools/npm-publish`. The local reusable selftest-shards workflow is
-admitted. `publication.test.mjs` exercises each admission and named refusal.
+SHA. Unknown actions and reusable calls in those jobs refuse with
+`ACTION_INVENTORY`, naming the found action and required identity/ref. Other CI
+jobs admit version bumps and unknown actions. The publisher-action denylist,
+including case-insensitive `JS-DevTools/npm-publish`, applies to every job.
+The local reusable selftest-shards workflow is admitted.
+
+The known local `reference-video-tools` installer requires a readable composite
+`action.yml`. Its `runs.steps` undergo the same action and publication inventory,
+including cache restore/save. Missing or malformed bodies, unknown inner actions,
+inner publishes and recursive local cycles refuse. The bounds are eight local
+levels and 256 steps per composite. Unknown local action identities in a protected
+job require explicit admission. `publication.test.mjs` uses pinned public action
+bodies and controls both the recursion and missing-body refusals.
 
 Between the job reader and its last publish, checkout, setup, artifact download
 and other admitted preparation actions refuse with `PUBLICATION_TREE_CHANGED`.
 An unmodeled run step in that interval also refuses. Publication bodies remain
 subject to the bounded command reader; adding a pack command cannot admit an
 arbitrary source-changing script. Preparation belongs before the reader.
+After the reader, a tree-verdict action must use exactly the reader's own source
+ref. Reader/tarball jobs refuse `NODE_OPTIONS` and every `npm_config_*` environment
+key at workflow, job and step scope, including inspected composite steps,
+regardless of value. Environment entries require explicit mappings and keys are
+matched case-insensitively. Independent `npm config get script-shell` controls exercise
+lowercase, uppercase and mixed-case prefixes. Auth keys such as `NODE_AUTH_TOKEN`
+and `NPM_TOKEN` remain admitted. Tests name the forbidden field and require its
+absence without printing environment values.
+
+These checks establish step order and bounded syntax. Pre-reader PATH changes and
+background processes can affect later commands outside this side-effect boundary.
 Parts rollout moves its `bun run smoke -- --case clean` step before the reader.
 The portable full-file control in `publication.test.mjs` preserves the original
 refusal and applies that exact reordering for the positive control. This rollout
@@ -595,14 +615,21 @@ diagnostics, `npm run publish` and `npm view package publish`.
 The `npm-publish` executable/package also activates the guard, including
 `npx @jsdevtools/npm-publish`, versioned package requests, executable paths and
 launcher/global-option variants. `publication.test.mjs` plants them in new jobs.
+Any unadmitted command carrying a literal argv word `publish` also refuses by
+name, including lerna, changeset and lerna-lite launcher forms. Executables such as
+`semantic-release`, `np`, `release-it`, `node scripts/publish.mjs`, `gh release upload`
+and registry `curl PUT` remain outside this semantic vocabulary. Likewise,
+`npm exec -- clean-publish` has no standalone argv word `publish` and remains
+outside that rule. Independent literal controls retain these bounded outcomes.
 
 Only full, direct `npm publish` is admitted. Abbreviations `pub`, `publ`, `publi`
 and `publis`, and `bun`/`yarn`/`pnpm` publish commands or those prefixes, refuse
 by name. The canonical lexer also recognizes npm pack; its abbreviations `pa`
 and `pac` refuse. Pack text alone leaves the text guard inactive. Unrelated
 heredocs, backticks and other unsupported lexer syntax produce no publication
-analysis when the step carries no publish pair. Such syntax with a publish pair
-refuses. Queries such as `npm view package version` remain outside the guard.
+analysis when the step carries no publication marker. Unreadable shell with a
+publish pair or literal `publish` word refuses. Queries such as
+`npm view package version` remain outside the guard.
 
 A substituted publication, publication continuation, unmodeled variable write or
 unsupported publication executable form refuses. The parser reads all branches
@@ -625,6 +652,10 @@ positions refuse. Reassignment, output transforms, another job/step's variable,
 and unmodeled variable transport refuse with `PUBLISH_PRODUCER`.
 Captured npm pack stdout is a basename, so a destination other than literal `.`
 refuses with `PUBLICATION_SYNTAX` even when it is a quoted runner-temp directory.
+In a job with a reader and tarball publication, any defined package script
+`prepack`, `prepare` or `postpack` refuses as `PUBLISH_PACK_HOOK`, naming the field,
+found value and required absence. `--ignore-scripts` provides no exception.
+The recorded npm 10 pack behavior below ran `prepare` with that option.
 An uncaptured pack may still use its supported runner-temp destination.
 `publication.test.mjs` checks the dot captures and non-dot refusals.
 
@@ -654,6 +685,9 @@ CLI. Their green scope is **publication lint**.
 public parts files at `6d0bb3dfaa22fced86cfb07252226509c2c71ae7`. The portable rollout
 test moves the original smoke step and comments before the reader as source text,
 then compares the complete parsed workflow with an independent one-step move.
+`publication-fixtures/review-main/sources.json` binds the full review inputs and
+local action body at `3b88d07a12277fcb5f8b7a1c0b0396d42de66e33`. The historical
+review snapshot also carries its action body from its own declared commit.
 
 Package hook wrappers, declarations and generated coverage CI/collector metadata
 are explicit prospective fixture inputs. Review's `fixture-test`, `fixture-check`,

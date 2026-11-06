@@ -8,6 +8,8 @@ const actions = new Map([
   ['oven-sh/setup-bun', { major: 'v2', rewritesTree: true }],
   ['actions/upload-artifact', { major: 'v4', rewritesTree: false }],
   ['actions/download-artifact', { major: 'v4', rewritesTree: true }],
+  ['actions/cache/restore', { major: 'v4', rewritesTree: true }],
+  ['actions/cache/save', { major: 'v4', rewritesTree: false }],
   ['googleapis/release-please-action', { major: 'v4', rewritesTree: true }],
   ['rig-c/core/.github/actions/tree-verdict', { rewritesTree: false }],
 ]);
@@ -19,6 +21,13 @@ function admittedAction(uses) {
   const action = match && actions.get(match[1]);
   return action && (match[2] === action.major || /^[a-f0-9]{40}$/.test(match[2])) ? action : undefined;
 }
+function actionRequirement(uses) {
+  const identity = typeof uses === 'string' ? uses.split('@')[0] : '';
+  const action = actions.get(identity);
+  if (action) return action.major ? `requires @${action.major} or a full 40-hex SHA` : 'requires a full 40-hex SHA';
+  return 'requires an explicitly allowlisted action identity and admitted ref';
+}
+const publisherAction = uses => typeof uses === 'string' && /^js-devtools\/npm-publish(?:\/|@|$)/i.test(uses);
 const fail = reason => { throw new Error(`PUBLICATION_SYNTAX: ${reason}`); };
 const tagSetup = 'tag=""\ncase "$(node -p "require(\'./package.json\').version")" in *-*) tag="--tag rc";; esac';
 
@@ -132,6 +141,10 @@ function refusePublicationLine(body, offset, reason) {
 }
 function guardPublicationText(body, calls, admitted) {
   for (const call of calls) {
+    const position = executable(call), argv = position < 0 ? [] : call.words.slice(position);
+    if (argv.some(word => word.value === 'publish') && !admitted.some(command => command.start === call.start)) {
+      refusePublicationLine(body, call.start, `found command ${argv[0].value} with argv word publish. Requires an admitted direct npm publish invocation`);
+    }
     const words = publicationWords(call.words.map(word => word.value).join(' '));
     if (hasPublicationPair(words) && !admitted.some(command => command.start === call.start)) {
       refusePublicationLine(body, call.start, 'unsupported publication executable form');
@@ -154,13 +167,16 @@ function guardPublicationText(body, calls, admitted) {
 }
 export function inspectPublication(body) {
   const text = body.split('\n').filter(line => !/^\s*#/.test(line)).join('\n').replace(/[\\'"]/g, '');
-  const carriesPublish = hasPublicationPair(publicationWords(text));
+  const words = publicationWords(text);
+  const carriesPublish = hasPublicationPair(words);
+  const carriesLiteralPublish = words.some(word => word.value === 'publish');
   let tokens;
   try {
     tokens = lex(body).tokens;
     if (tokens.some(token => token.operator && token.value === '<<')) fail('heredoc publication inventory unsupported');
   } catch (error) {
-    if (carriesPublish) refusePublicationLine(body, 0, error.message);
+    if (carriesPublish || carriesLiteralPublish) refusePublicationLine(body, 0,
+      `found publication marker in unreadable shell. Requires supported command syntax (${error.message})`);
     return { tokens: [], calls: [], publishes: [], packs: [], writes: [] };
   }
   if (carriesPublish && /\\\r?\n/.test(body)) refusePublicationLine(body, body.indexOf('\\'), 'publication continuation unsupported');
@@ -368,17 +384,55 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
   const report = (reason, location, detail) => errors.push(`WFL002_PUBLISH_SUITE_WITHOUT_VERDICT: ${location}: ${reason}: ${detail}`);
   const entries = workflow.publishes ?? [], readers = workflow.publicationReaders ?? [];
   const located = new Set();
+  function checkEnvironment(env, location) {
+    if (env !== undefined && !mapping(env)) {
+      report('PUBLICATION_ENV', location, `found nonmapping env (${env === null ? 'null' : typeof env}). Requires an explicit environment mapping for a reader/tarball job`);
+      return;
+    }
+    for (const key of Object.keys(mapping(env) ? env : {})) {
+      if (key.toLowerCase() === 'node_options' || key.toLowerCase().startsWith('npm_config_')) {
+        report('PUBLICATION_ENV', location, `found ${key} present. Requires this variable absent in a reader/tarball job`);
+      }
+    }
+  }
+  function inventoryActions(all, location, protectedJob, guardedEnvironment, parents = []) {
+    for (const [index, step] of all.entries()) {
+      const here = `${location} steps.${step.id ?? step.name ?? index}`;
+      if (guardedEnvironment && parents.length) checkEnvironment(step.env, `${here} env`);
+      if (parents.length && typeof step.run === 'string') {
+        try {
+          const analysis = inspectPublication(step.run);
+          if (analysis.publishes.length) report('PUBLISH_INVENTORY', here, 'found publish in local preparation action. Requires publication in a declared job with its reader and invocation inventory');
+        } catch (error) { report('PUBLICATION_SYNTAX', here, error.message); }
+      }
+      if (step.uses === undefined) continue;
+      if (publisherAction(step.uses)) {
+        report('ACTION_INVENTORY', here, `found publisher action ${step.uses}. Requires declared direct npm publication with its reader`);
+      } else if (protectedJob && !admittedAction(step.uses)) {
+        report('ACTION_INVENTORY', here, `unsupported action ${String(step.uses)}. ${actionRequirement(step.uses)}`);
+      }
+      if (step.uses !== './.github/actions/reference-video-tools') continue;
+      const path = '.github/actions/reference-video-tools/action.yml';
+      if (parents.includes(path) || parents.length >= 8) {
+        report('ACTION_BODY', here, `found recursive local action ${path}. Requires acyclic local composites within depth 8`);
+        continue;
+      }
+      let body;
+      try { body = Bun.YAML.parse(read(path)); }
+      catch { report('ACTION_BODY', here, `found missing, unreadable or malformed ${path}. Requires readable composite action.yml`); continue; }
+      if (body?.runs?.using !== 'composite' || !Array.isArray(body.runs.steps) || !body.runs.steps.length ||
+        body.runs.steps.length > 256 || body.runs.steps.some(inner => !mapping(inner))) {
+        report('ACTION_BODY', here, `found unsupported runs in ${path}. Requires composite runs.steps with 1 to 256 step mappings`);
+        continue;
+      }
+      inventoryActions(body.runs.steps, `${here} ${path} runs`, true, guardedEnvironment, [...parents, path]);
+    }
+  }
   for (const [jobId, job] of Object.entries(jobs)) {
     if (!mapping(job)) continue;
     const all = stepList(job), analyses = new Map();
     const location = `${workflow.path} jobs.${jobId}`;
-    if (job.uses !== undefined && job.uses !== './.github/workflows/selftest-shards.yml') {
-      report('ACTION_INVENTORY', location, `unsupported workflow action ${String(job.uses)}`);
-    }
     for (const step of all) {
-      if (step.uses !== undefined && !admittedAction(step.uses)) {
-        report('ACTION_INVENTORY', location, `unsupported action ${String(step.uses)}`);
-      }
       if (typeof step.run !== 'string') continue;
       try {
         const analysis = inspectPublication(step.run);
@@ -388,7 +442,18 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
       catch (error) { report('PUBLICATION_SYNTAX', `${workflow.path} jobs.${jobId}`, error.message); }
     }
     const jobEntries = entries.filter(entry => entry.job === jobId);
-    const modern = jobEntries.some(entry => entry.invocations !== undefined) || readers.some(reader => reader.job === jobId);
+    const jobReaders = readers.filter(reader => reader.job === jobId);
+    const publishing = [...analyses.values()].some(analysis => analysis.publishes.length);
+    const tarballs = [...analyses.values()].some(analysis => analysis.publishes.some(publish => publish.argv.slice(2).some(token => /^"\$/.test(token.raw))));
+    const declaredTarballs = jobEntries.some(entry => entry.invocations?.some(item => item.kind === 'tarball'));
+    const guardedEnvironment = tarballs || declaredTarballs || jobReaders.length > 0;
+    const protectedJob = jobEntries.length > 0 || jobReaders.length > 0 || publishing;
+    if (publisherAction(job.uses)) report('ACTION_INVENTORY', location, `found publisher action ${job.uses}. Requires declared direct npm publication with its reader`);
+    else if (protectedJob && job.uses !== undefined && job.uses !== './.github/workflows/selftest-shards.yml') {
+      report('ACTION_INVENTORY', location, `found workflow action ${String(job.uses)}. Requires ./.github/workflows/selftest-shards.yml`);
+    }
+    inventoryActions(all, location, protectedJob, guardedEnvironment);
+    const modern = jobEntries.some(entry => entry.invocations !== undefined) || jobReaders.length > 0;
     for (const [step, analysis] of analyses) {
       if (!analysis.publishes.length) continue;
       const matched = jobEntries.filter(entry => selectStep(all, entry.step) === step);
@@ -433,7 +498,19 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
       if (ref === jobId || !(job.needs === ref || Array.isArray(job.needs) && job.needs.includes(ref))) report('PUBLISH_PROOF_WIRING', location, 'output producer must be a direct job dependency');
     }
     const activity = [...analyses].filter(([, analysis]) => analysis.publishes.length || analysis.packs.length);
-    const tarballs = [...analyses.values()].some(analysis => analysis.publishes.some(publish => publish.argv.slice(2).some(token => /^"\$/.test(token.raw))));
+    if (guardedEnvironment) {
+      const environments = [[`${workflow.path} env`, context?.env], [`${location} env`, job.env],
+        ...all.map((step, index) => [`${location} steps.${step.id ?? step.name ?? index} env`, step.env])];
+      for (const [where, env] of environments) {
+        checkEnvironment(env, where);
+      }
+    }
+    if (jobReaders.length && (tarballs || declaredTarballs)) {
+      for (const hook of ['prepack', 'prepare', 'postpack']) {
+        if (Object.hasOwn(scripts, hook)) report('PUBLISH_PACK_HOOK', location,
+          `found package.json scripts.${hook}=${JSON.stringify(scripts[hook])}. Requires this field absent for reader-gated tarball publication, including --ignore-scripts`);
+      }
+    }
     for (const [step, analysis] of activity) {
       if (!rootShell(job, step, context)) report('PUBLISH_PROOF_WIRING', location, 'publication commands require the source-root default shell context');
       if (!publicationCondition(step.if, 'steps', all, all.indexOf(step))) report('PUBLISH_CONDITION', location, 'pack/publish condition must compare an earlier same-job output to a literal');
@@ -447,6 +524,12 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
     const reader = declaredReaders[0], step = reader && selectStep(all, reader.step);
     if (declaredReaders.length !== 1 || !step) { report('PUBLICATION_READER_WIRING', location, 'tarball job needs its own declared lifecycle reader step'); continue; }
     const lastPublication = Math.max(...activity.filter(([, analysis]) => analysis.publishes.length).map(([candidate]) => all.indexOf(candidate)));
+    const proof = selectStep(all, reader.verdictStep);
+    for (const after of all.slice(all.indexOf(step) + 1)) {
+      if (typeof after.uses === 'string' && after.uses.startsWith('rig-c/core/.github/actions/tree-verdict@') && after.uses !== proof?.uses) {
+        report('PUBLICATION_ACTION_REF', location, `found uses ${after.uses} after reader. Requires exactly steps.${reader.verdictStep}.uses=${String(proof?.uses)}`);
+      }
+    }
     for (const between of all.slice(all.indexOf(step) + 1, lastPublication + 1)) {
       if (between.uses !== undefined && admittedAction(between.uses)?.rewritesTree) {
         report('PUBLICATION_TREE_CHANGED', location, `tree-rewriting action ${between.uses} follows the publication reader`);
@@ -461,7 +544,6 @@ export function validatePublications(workflow, jobs, scripts, read, compileCover
       entry.verdictStep === reader.verdictStep && entry.actionUses === readerEntry?.actionUses &&
       (entry.declarationInput ?? entry.declaration) === (readerEntry?.declarationInput ?? readerEntry?.declaration));
     if (!oneContract) report('PUBLICATION_READER_WIRING', location, 'every tarball entry must match the job reader declaration and proof step/source');
-    const proof = selectStep(all, reader.verdictStep);
     const coreReader = reader.kind === 'core-prepublish';
     if (coreReader) {
       const commands = ['bun run typecheck', 'bun run lint', 'bun run selftest'];

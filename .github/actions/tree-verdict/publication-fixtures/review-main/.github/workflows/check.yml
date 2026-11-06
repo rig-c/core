@@ -1,0 +1,101 @@
+name: Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+jobs:
+  tree-verdict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      reused: ${{ steps.reuse.outputs.reused }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: reuse
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        with:
+          declaration: scripts/tree-verdict.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Lint tree-verdict workflows
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+        run: bun "$TREE_VERDICT_TOOLS/../../../scripts/lint_workflows.ts" scripts/lint_workflows.declarations.json .
+  check:
+    needs: tree-verdict
+    if: ${{ !cancelled() && needs.tree-verdict.outputs.reused != 'true' }}
+    runs-on: ubuntu-latest
+    # Recent full check: ~3 minutes; allow setup and shared-runner variance.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run check:readme
+      - run: bun run typecheck
+      - name: Install reference video export tools
+        timeout-minutes: 3
+        uses: ./.github/actions/reference-video-tools
+      - run: bun run test
+      - run: bun run build
+      - run: bun run check:demo
+  install-smoke:
+    needs: tree-verdict
+    if: ${{ !cancelled() && needs.tree-verdict.outputs.reused != 'true' }}
+    # What `npm i -D @rig-c/review` delivers, on the minimum Bun the package declares and on latest.
+    # The `release` entry is the release job's own environment (setup-node with registry-url, so its
+    # .npmrc is in use, and npm@latest), measured here so an npm change fails before a tag, not the cut.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ['1.3.0, npm bundled', 'latest, npm bundled', 'latest, npm release']
+    name: install-smoke (bun ${{ matrix.profile }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.profile == '1.3.0, npm bundled' && '1.3.0' || 'latest' }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: ${{ matrix.profile == 'latest, npm release' && 'https://registry.npmjs.org' || '' }}
+      - name: Use the release job's npm
+        if: ${{ matrix.profile == 'latest, npm release' }}
+        run: |
+          npm install -g npm@latest
+          npm --version
+      - run: bun run smoke
+  tree-verdict-receipt:
+    needs: [check, install-smoke]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - id: tools
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+      - id: receipt
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.tools.outputs.tooling-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-verdict-receipt
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          overwrite: true

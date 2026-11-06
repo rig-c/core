@@ -1,0 +1,83 @@
+{
+  "schema": "workflow-verdict-lint/1",
+  "defaultBranch": "main",
+  "coverageDeclarations": [
+    "scripts/tree-verdict.json"
+  ],
+  "workflows": [
+    {
+      "path": ".github/workflows/check.yml",
+      "heavyJobs": [
+        "check",
+        "install-smoke"
+      ],
+      "guard": {
+        "job": "tree-verdict",
+        "step": "reuse",
+        "uses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+        "sourceWorkflow": ".github/workflows/check.yml",
+        "declaration": "scripts/tree-verdict.json"
+      }
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "heavyJobs": [],
+      "publicationReaders": [
+        {
+          "job": "publish",
+          "step": "publication-reader",
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json"
+        }
+      ],
+      "publishes": [
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish @rig-c/review"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish @rig-c/review"
+                },
+                "variable": "x",
+                "command": "npm pack . --pack-destination ."
+              }
+            }
+          ]
+        },
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish the alias rig-review"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish the alias rig-review"
+                },
+                "variable": "alias_tgz",
+                "command": "bun scripts/alias_tarball.ts pack --name rig-review --out \"$RUNNER_TEMP/alias-rig-review\" --pack-timeout-ms 300000"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

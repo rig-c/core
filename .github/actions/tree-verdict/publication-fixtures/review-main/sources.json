@@ -1,0 +1,30 @@
+{
+  "repo": "rig-c/review",
+  "sha": "3b88d07a12277fcb5f8b7a1c0b0396d42de66e33",
+  "files": [
+    {
+      "path": ".github/workflows/check.yml",
+      "sha256": "3bd7a85889c0cde4f6044be7b09c564e231b597deae23694d2c06b4da052d18e"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "sha256": "509ef6e711fdee14a913a6f094a75caa0e147847a538fec2eee8fa79d780f62c"
+    },
+    {
+      "path": "package.json",
+      "sha256": "fd59afe011d38db030ea61a6743ec7d9a00b5d142b8823583730be63729a7234"
+    },
+    {
+      "path": "scripts/lint_workflows.declarations.json",
+      "sha256": "9f96d41226ab00afe824ca29b619996038c14401dbb0208ac5e5854320aeb453"
+    },
+    {
+      "path": "scripts/tree-verdict.json",
+      "sha256": "dbde4c6cbb30eb60e116128d4e0e8e4edeed004c7892bbcde251e04663786ee6"
+    },
+    {
+      "path": ".github/actions/reference-video-tools/action.yml",
+      "sha256": "0119c484498f6df0ac7cd4bc0cfff36b4eb96b5af4013e60fa83641cf130d0ee"
+    }
+  ]
+}

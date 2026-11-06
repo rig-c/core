@@ -6,9 +6,9 @@ import { inspectPublication } from './publication.mjs';
 const path = '.github/workflows/release.yml';
 export const actionUses = 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50';
 export const hash = text => createHash('sha256').update(text).digest('hex');
-/** Full public parts main snapshot for the smoke-before-reader rollout bar. */
-export function partsMainFixture() {
-  const root = new URL('./publication-fixtures/parts-main/', import.meta.url);
+/** Full public main snapshots, including any local composite bodies. */
+function mainFixture(repo) {
+  const root = new URL(`./publication-fixtures/${repo}-main/`, import.meta.url);
   const source = JSON.parse(readFileSync(new URL('sources.json', root), 'utf8'));
   const files = Object.fromEntries(source.files.map(row => {
     const text = readFileSync(new URL(row.path, root), 'utf8');
@@ -21,6 +21,8 @@ export function partsMainFixture() {
       return files[file];
     } };
 }
+export function partsMainFixture() { return mainFixture('parts'); }
+export function reviewMainFixture() { return mainFixture('review'); }
 const output = (id, name) => `\${{ steps.${id}.outputs.${name} }}`;
 // Preserve snapshot comments, quoting and script bytes. Only the new wiring is
 // rendered; existing steps move as source text. Mutant fixtures use refresh().

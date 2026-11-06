@@ -59,6 +59,8 @@ async function identity(options, env, api) {
 export async function produce(options, env = process.env, injectedApi, log = console.log) {
   let out;
   try {
+    need(env.GITHUB_ACTIONS !== 'true' || (typeof env.GITHUB_OUTPUT === 'string' && env.GITHUB_OUTPUT.length > 0),
+      'COVER_PRODUCER: GITHUB_OUTPUT required on Actions');
     if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, 'receipt-created=false\n');
     const { compileFromDisk } = await import('./planner.mjs');
     const plan = compileFromDisk(options.declaration, options.cwd);

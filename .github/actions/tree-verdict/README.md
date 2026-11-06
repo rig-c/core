@@ -239,17 +239,31 @@ The producer appends `receipt-created=false` to `GITHUB_OUTPUT` before collectio
 including on a reused output path. Only a completed receipt write changes it to
 `receipt-created=true`. Fork skips and failures keep the output false. An eligible
 receipt write failure exits 1. Outside Actions, `GITHUB_OUTPUT` is optional.
+On Actions (`GITHUB_ACTIONS=true`), missing or empty `GITHUB_OUTPUT` refuses with
+`COVER_PRODUCER: GITHUB_OUTPUT required on Actions`, exit 1. The producer step
+may not set `GITHUB_OUTPUT` in its own `env` mapping.
 `producer.test.mjs` runs this command for fork, PR, push and failure controls.
 
-The collector upload accepts only `steps.<producer step id>.outputs.receipt-created == 'true'`,
+The collector has exactly one upload, named `tree-verdict-receipt`, whose path
+equals the producer's `--out`. Shell `$RUNNER_TEMP` and `${RUNNER_TEMP}` map to
+the YAML `${{ runner.temp }}` prefix with the exact same suffix. Literal paths
+are resolved relative to the producer working directory or the upload workspace;
+a quoted literal `$RUNNER_TEMP` is distinct from expansion.
+Upload wildcard characters (`*`, `?`, `[` and `]`) and leading exclusion syntax
+refuse before path normalization.
+The upload accepts `steps.<producer step id>.outputs.receipt-created == 'true'`,
 optionally wrapped in `${{ }}`, with `if-no-files-found: error`. The producer step
 ID comes from the declaration, defaulting to `receipt`. Other conditions, that
 condition on another step, and `warn`/`ignore` missing-file policies refuse with
-`COVER_PRODUCER`. Existing unconditional uploads require the same `error` policy.
+`COVER_PRODUCER`. A single legacy unconditional upload is also admitted with the
+same name, path and `error` policy. Zero or multiple uploads refuse, including a
+guarded upload mixed with an unconditional one.
 `planner.test.mjs` runs the lint CLI over valid, malformed and mixed uploads.
 Caller adoption follows the shared action pin rollout after core#1709. Existing
 pins and unconditional uploads can still produce a red fork receipt job until
 that rollout, as accepted in core#1711's scope ruling.
+The core rollout PR removes legacy unconditional admission together with its
+final action pin update and core CI upload wiring.
 
 It compiles the checked-out workflow graph, verifies clean actual HEAD/tree equals
 runner `GITHUB_SHA`, validates repository/run/attempt/event/workflow/PR association,

@@ -89,6 +89,7 @@ globalThis.fetch = async url => {
 }
 test('README entry CLI authentic fork exits zero by name with no receipt, including a reused output path', () => {
  const r = repository(), s = forkSource(r);
+ s.env.GITHUB_ACTIONS = 'true';
  try {
   for (const stale of [false, true]) {
    if (stale) {
@@ -107,6 +108,7 @@ test('README entry CLI authentic fork exits zero by name with no receipt, includ
 });
 test('README entry CLI same-repository PR and default push replace stale output with actual receipts', () => {
  const r = repository(), s = source(r);
+ s.env.GITHUB_ACTIONS = 'true';
  try {
   // A caller-supplied fork boolean cannot turn same-repository evidence into a skip.
   s.run.head_repository.fork = true;
@@ -207,8 +209,25 @@ test('entry CLI outside Actions still writes an eligible receipt without GITHUB_
  const r = repository(), s = source(r);
  try {
   delete s.env.GITHUB_OUTPUT;
+  delete s.env.GITHUB_ACTIONS;
   expect(producerCLI(s).status).toBe(0);
   expect(JSON.parse(readFileSync(s.options.out, 'utf8')).verdict).toBe('success');
+ } finally { r.close(); }
+});
+for (const kind of ['same PR', 'fork', 'push']) for (const missing of [true, false]) test(`Actions entry CLI ${kind} refuses ${missing ? 'missing' : 'empty'} GITHUB_OUTPUT by name`, () => {
+ const r = repository(), s = kind === 'fork' ? forkSource(r) : source(r);
+ try {
+  s.env.GITHUB_ACTIONS = 'true';
+  if (missing) delete s.env.GITHUB_OUTPUT; else s.env.GITHUB_OUTPUT = '';
+  if (kind === 'push') {
+   s.run.event = s.env.GITHUB_EVENT_NAME = 'push'; s.run.head_branch = 'main'; s.env.GITHUB_REF = 'refs/heads/main';
+   s.run.head_sha = r.proof.sha; for (const row of s.rows) row.head_sha = r.proof.sha;
+  }
+  const result = producerCLI(s);
+  expect(result.status).toBe(1);
+  expect(result.stdout.trim()).toBe('TREE_VERDICT_PRODUCER_REFUSED: COVER_PRODUCER: GITHUB_OUTPUT required on Actions');
+  expect(existsSync(s.options.out)).toBe(false);
+  expect(result.apiCalls).toEqual(['']);
  } finally { r.close(); }
 });
 test('output write failure after receipt creation refuses and clears the candidate receipt', async () => {

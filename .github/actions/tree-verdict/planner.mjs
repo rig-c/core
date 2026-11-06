@@ -1,11 +1,24 @@
 // Bun >=1.4.4 only. This exact compiler is called by BOTH collector and lint.
 import { readFileSync } from 'node:fs';
-import { resolve, relative } from 'node:path';
+import { resolve, relative, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalCoverage, stable, digest, gateFor, requireCoverage as need } from './coverage.mjs';
 const map = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const condition = v => typeof v === 'string' ? v.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '').trim() : '';
 const list = v => typeof v === 'string' ? [v] : Array.isArray(v) ? v : [];
+// Shell tokens retain whether expansion occurred. YAML paths expand runner.temp
+// only through its expression, so a quoted literal $RUNNER_TEMP stays distinct.
+function receiptPath(value, dynamic, cwd = '.') {
+  need(typeof value === 'string' && value.length > 0 && !/[\r\n]/.test(value), 'COVER_PRODUCER', 'receipt upload path must be one exact path');
+  need(!/[*?\[\]]/.test(value) && !value.trimStart().startsWith('!'), 'COVER_PRODUCER', 'receipt upload path must be one file without glob or exclusion syntax');
+  if (dynamic !== false) {
+    const pattern = dynamic === true ? /^\$(?:RUNNER_TEMP|\{RUNNER_TEMP\})(\/[^$]+)$/ : /^\$\{\{\s*runner\.temp\s*\}\}(\/[^$]+)$/;
+    const match = value.match(pattern);
+    if (match) return stable(['runner-temp', match[1]]);
+    need(dynamic !== true && !value.includes('${{'), 'COVER_PRODUCER', 'receipt path has unsupported expansion');
+  }
+  return stable(['literal', posix.isAbsolute(value) ? posix.normalize(value) : posix.normalize(posix.join(cwd, value))]);
+}
 function render(text, matrix = {}, inputs = {}, total = 1) {
   need(['string', 'number', 'boolean'].includes(typeof text), 'COVER_DYNAMIC', 'nonliteral expression');
   return String(text).replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_, expression) => {
@@ -215,20 +228,15 @@ export function compileCoverage(declaration, read, declarationPath = 'scripts/tr
   const producerSteps = (collector.steps ?? []).filter(s => s.id === coverage.producer.step);
   const step = producerSteps[0];
   need(producerSteps.length === 1 && step.if === undefined && step['continue-on-error'] === undefined && typeof step.run === 'string', 'COVER_PRODUCER', 'collector step must invoke the shared producer unconditionally with one unique ID');
+  need(!Object.hasOwn(step.env ?? {}, 'GITHUB_OUTPUT'), 'COVER_PRODUCER', 'producer step must not override GITHUB_OUTPUT');
+  const uploads = (collector.steps ?? []).filter(entry => typeof entry.uses === 'string' && /^actions\/upload-artifact@/.test(entry.uses));
+  need(uploads.length === 1, 'COVER_PRODUCER', 'collector requires exactly one receipt upload');
+  const upload = uploads[0];
   const uploadCondition = `steps.${coverage.producer.step}.outputs.receipt-created == 'true'`;
   const workflowJobs = [...documents.values()].flatMap(doc => Object.values(doc.jobs));
   for (const job of workflowJobs) {
     for (const entry of job.steps ?? []) {
-      const upload = job === collector && typeof entry.uses === 'string' && /^actions\/upload-artifact@/.test(entry.uses);
-      need(upload || !String(entry.if ?? '').includes('receipt-created'), 'COVER_PRODUCER', 'receipt-created condition belongs only on the collector upload');
-      if (upload) {
-        need(entry.with?.['if-no-files-found'] === 'error' &&
-          (entry['continue-on-error'] === undefined || entry['continue-on-error'] === false) &&
-          (entry.if === undefined || (typeof entry.if === 'string' &&
-            [uploadCondition, `\${{ ${uploadCondition} }}`].includes(entry.if.trim()) &&
-            collector.steps.indexOf(entry) > collector.steps.indexOf(step))),
-          'COVER_PRODUCER', 'collector upload requires if-no-files-found: error and only its producer receipt-created condition');
-      }
+      need((job === collector && entry === upload) || !String(entry.if ?? '').includes('receipt-created'), 'COVER_PRODUCER', 'receipt-created condition belongs only on the collector upload');
     }
   }
   const collectorArgv = singleInvocation(step.run);
@@ -250,6 +258,15 @@ export function compileCoverage(declaration, read, declarationPath = 'scripts/tr
     'COVER_PRODUCER', 'collector declaration must match the checked declaration path and output is required');
   const collectorCwd = step['working-directory'] ?? collector.defaults?.run?.['working-directory'] ?? root.defaults?.run?.['working-directory'] ?? '.';
   need(collectorCwd === collectorPath, 'COVER_CHECKOUT', 'collector working-directory differs from source checkout');
+  need(upload.with?.name === 'tree-verdict-receipt' && upload.with?.['if-no-files-found'] === 'error' &&
+    (upload['continue-on-error'] === undefined || upload['continue-on-error'] === false) &&
+    collector.steps.indexOf(upload) > collector.steps.indexOf(step) &&
+    (upload.if === undefined || (typeof upload.if === 'string' &&
+      [uploadCondition, `\${{ ${uploadCondition} }}`].includes(upload.if.trim()))),
+    'COVER_PRODUCER', 'receipt upload requires exact name, error policy and only its producer receipt-created condition or legacy unconditional form');
+  const output = collectorOptions.get('--out');
+  need(receiptPath(output.value, output.dynamic, collectorCwd) === receiptPath(upload.with.path),
+    'COVER_PRODUCER', 'receipt upload path must equal producer --out');
   const name = display(collector, coverage.producer.job, {}, {}, 1);
   need(name === coverage.producer.apiName && !Object.values(coverage.jobs).flatMap(j => j.legs).some(l => l.apiName === name), 'COVER_PRODUCER', 'collector display name overlaps covering leg');
   if (previous) {

@@ -6,6 +6,21 @@ import { inspectPublication } from './publication.mjs';
 const path = '.github/workflows/release.yml';
 export const actionUses = 'rig-c/core/.github/actions/tree-verdict@4abdcdd0dacba90a4f57f08ef9b06390e915aa50';
 export const hash = text => createHash('sha256').update(text).digest('hex');
+/** Full public parts main snapshot for the smoke-before-reader rollout bar. */
+export function partsMainFixture() {
+  const root = new URL('./publication-fixtures/parts-main/', import.meta.url);
+  const source = JSON.parse(readFileSync(new URL('sources.json', root), 'utf8'));
+  const files = Object.fromEntries(source.files.map(row => {
+    const text = readFileSync(new URL(row.path, root), 'utf8');
+    if (hash(text) !== row.sha256) throw new Error(`immutable source differs: ${source.repo}/${row.path}`);
+    return [row.path, text];
+  }));
+  return { source, files, declaration: JSON.parse(files['scripts/lint_workflows.declarations.json']),
+    read(file) {
+      if (!(file in files)) throw new Error(`fixture input missing: ${file}`);
+      return files[file];
+    } };
+}
 const output = (id, name) => `\${{ steps.${id}.outputs.${name} }}`;
 // Preserve snapshot comments, quoting and script bytes. Only the new wiring is
 // rendered; existing steps move as source text. Mutant fixtures use refresh().

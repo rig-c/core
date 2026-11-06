@@ -75,4 +75,8 @@ runs:
       run: |
         printf 'reused=false\nrun-id=\nhead-sha=\npr=\ntested-sha=\nverdict-path=\n' >> "$GITHUB_OUTPUT"
         printf 'tooling-path=%s\n' "$GITHUB_ACTION_PATH" >> "$GITHUB_OUTPUT"
-        node "$GITHUB_ACTION_PATH/run.mjs" || echo 'TREE_VERDICT_MISS: lookup process failed; run the full gate'
+        if [[ "$TV_PURPOSE" == ci && -z "$TV_DECLARATION" && -z "$TV_WORKFLOW" && -z "$TV_GATE" ]]; then
+          echo 'TREE_VERDICT_COLLECTOR: tooling only; no lookup expected'
+        else
+          node "$GITHUB_ACTION_PATH/run.mjs" || echo 'TREE_VERDICT_MISS: lookup process failed; run the full gate'
+        fi

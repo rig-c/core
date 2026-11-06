@@ -1,0 +1,80 @@
+{
+  "name": "@rig-c/parts",
+  "version": "2.19.4",
+  "description": "AI-authored 2D character parts from one anime painting and its See-through layer decomposition: measured parts, weighted-mesh rig specs, verified through rig-c before anything is written. A CLI for agents that cannot see the image.",
+  "type": "module",
+  "bin": {
+    "rig-parts": "./bin/rig-parts.cjs",
+    "spine-parts": "./bin/rig-parts.cjs"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "license": "MIT",
+  "author": "firejune",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rig-c/parts.git"
+  },
+  "homepage": "https://github.com/rig-c/parts#readme",
+  "bugs": "https://github.com/rig-c/parts/issues",
+  "keywords": [
+    "spine",
+    "spine2d",
+    "spine-2d",
+    "ai",
+    "ai-agents",
+    "rigging",
+    "character-rigging",
+    "character-parts",
+    "layer-decomposition",
+    "see-through",
+    "anime",
+    "live2d-alternative",
+    "weighted-mesh",
+    "skeletal-animation",
+    "psd",
+    "cli"
+  ],
+  "files": [
+    "bin/rig-parts.cjs",
+    "cli.ts",
+    "tools/configwrite.ts",
+    "tools/build-process.ts",
+    "tools/alternate-cli.ts",
+    "tools/neck-propose.ts",
+    "src",
+    "workflows",
+    "docs/AUTHORING.md",
+    "docs/DEPTH.md",
+    "docs/MIGRATION.md",
+    "docs/PAINTING.md",
+    "docs/STABILITY.md",
+    "skills",
+    "NOTICE.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "fetch-examples": "bash scripts/fetch-examples.sh",
+    "selftest": "bun selftest.ts",
+    "check:readme": "bun scripts/readme_policy.ts",
+    "selftest:pre": "bun selftest.ts --pre",
+    "smoke": "bun scripts/install_smoke.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "lint": "bunx eslint .",
+    "prepublishOnly": "node scripts/prepublish.cjs"
+  },
+  "dependencies": {
+    "ag-psd": "^31.0.2",
+    "@rig-c/core": "3.2.1"
+  },
+  "devDependencies": {
+    "@esotericsoftware/spine-core": "4.3.13",
+    "@types/bun": "^1.4.2",
+    "eslint": "^10.11.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1"
+  }
+}

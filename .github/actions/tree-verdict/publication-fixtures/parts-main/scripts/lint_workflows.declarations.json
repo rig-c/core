@@ -1,0 +1,109 @@
+{
+  "schema": "workflow-verdict-lint/1",
+  "defaultBranch": "main",
+  "coverageDeclarations": [
+    "scripts/tree-verdict.json"
+  ],
+  "workflows": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "heavyJobs": [
+        "shard",
+        "test",
+        "install-platforms",
+        "build-platforms"
+      ],
+      "guard": {
+        "job": "tree-verdict",
+        "step": "reuse",
+        "uses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+        "sourceWorkflow": ".github/workflows/ci.yml",
+        "declaration": "scripts/tree-verdict.json"
+      },
+      "publishes": []
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "heavyJobs": [],
+      "publishes": [
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish to npm"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish to npm"
+                },
+                "variable": "x",
+                "command": "npm pack . --pack-destination ."
+              }
+            }
+          ]
+        },
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish the alias rig-parts"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish the alias rig-parts"
+                },
+                "variable": "alias_tgz",
+                "command": "bun scripts/alias_tarball.ts pack --name rig-parts --out \"$RUNNER_TEMP/alias\""
+              }
+            }
+          ]
+        },
+        {
+          "job": "publish",
+          "step": {
+            "name": "Publish the alias spine-parts"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish the alias spine-parts"
+                },
+                "variable": "alias_tgz",
+                "command": "bun scripts/alias_tarball.ts pack --name spine-parts --out \"$RUNNER_TEMP/alias\""
+              }
+            }
+          ]
+        }
+      ],
+      "publicationReaders": [
+        {
+          "job": "publish",
+          "step": "publication-reader",
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json"
+        }
+      ]
+    }
+  ]
+}

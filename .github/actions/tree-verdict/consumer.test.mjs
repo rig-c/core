@@ -109,3 +109,31 @@ test('publish lifecycle reader validates proof against fresh source receipt; abs
     expect(await readPublishVerdict(path, f.c, f.api, f.readReceipt)).toBe(false);
   } finally { rmSync(dir, { recursive: true }); }
 });
+
+test('collector tooling-only composite preserves fail-closed outputs and explicitly skips lookup', () => {
+  const dir = mkdtempSync(join(scratch, 'tooling-'));
+  try {
+    const action = Bun.YAML.parse(readFileSync(join(actionPath, 'action.yml'), 'utf8'));
+    for (const scenario of ['collector', 'partial lookup', 'publish', 'invalid purpose']) {
+      const output = join(dir, scenario);
+      const env = { ...process.env, GITHUB_OUTPUT: output, GITHUB_ACTION_PATH: actionPath,
+        TV_DECLARATION: '', TV_WORKFLOW: '', TV_GATE: '', TV_PURPOSE: 'ci',
+        // Any accidental Node invocation in collector mode is observable.
+        NODE_OPTIONS: '--import=/nonexistent-tree-verdict-probe.mjs' };
+      if (scenario === 'partial lookup') env.TV_GATE = 'full/1';
+      if (scenario === 'publish') env.TV_PURPOSE = 'publish';
+      if (scenario === 'invalid purpose') env.TV_PURPOSE = 'other';
+      const run = spawnSync('bash', ['-c', action.runs.steps[0].run], { env, encoding: 'utf8' });
+      expect(run.status).toBe(0);
+      expect(readFileSync(output, 'utf8')).toBe(
+        `reused=false\nrun-id=\nhead-sha=\npr=\ntested-sha=\nverdict-path=\ntooling-path=${actionPath}\n`);
+      if (scenario === 'collector') {
+        expect(run.stdout).toBe('TREE_VERDICT_COLLECTOR: tooling only; no lookup expected\n');
+        expect(run.stderr).toBe('');
+      } else {
+        expect(run.stdout).toContain('TREE_VERDICT_MISS: lookup process failed; run the full gate');
+        expect(run.stdout).not.toContain('TREE_VERDICT_COLLECTOR');
+      }
+    }
+  } finally { rmSync(dir, { recursive: true }); }
+});

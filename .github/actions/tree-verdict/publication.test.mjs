@@ -4,7 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { inspectPublication } from './publication.mjs';
-import { publicationFixture, mixedPublicationFixture, hash } from './publication-fixtures.mjs';
+import { publicationFixture, mixedPublicationFixture, partsMainFixture, hash } from './publication-fixtures.mjs';
 import { stable } from './coverage.mjs';
 import { compileCoverage } from './planner.mjs';
 import { lintWorkflows } from '../../../scripts/lint_workflows.ts';
@@ -469,4 +469,129 @@ for (const subcommand of ['pa', 'pac']) test(`A1 global-option pack prefix ${sub
   const result = cli(f, `A1 npm --silent ${subcommand}`);
   expect(result.status).toBe(1);
   expect(result.stderr).toContain('PUBLICATION_SYNTAX: line 1: abbreviated npm publication command unsupported');
+});
+
+for (const repo of ['parts', 'review']) {
+  for (const uses of ['JS-DevTools/npm-publish@v3', './.github/actions/publisher',
+    'unknown/action@v1', 'actions/checkout@unknown', 'oven-sh/setup-bun-extra@v2',
+    'rig-c/core/.github/actions/tree-verdict@main']) {
+    test(`${repo} uninventoried action ${uses} refuses even in a new job`, () => {
+      const f = publicationFixture(repo);
+      f.doc.jobs.other = { steps: [{ uses, with: { package: 'unverified.tgz' } }] };
+      f.refresh();
+      const result = cli(f, `${repo} action inventory ${uses}`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`ACTION_INVENTORY: unsupported action ${uses}`);
+    });
+  }
+  for (const uses of ['actions/checkout@v4', 'actions/download-artifact@v4',
+    'actions/setup-node@v4', 'oven-sh/setup-bun@v2', './.github/actions/reference-video-tools']) {
+    test(`${repo} admitted tree writer ${uses} refuses after reader`, () => {
+      const f = publicationFixture(repo), steps = f.doc.jobs.publish.steps;
+      steps.splice(steps.indexOf(reader(f)) + 1, 0, { uses });
+      f.refresh();
+      const result = cli(f, `${repo} tree writer ${uses}`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`PUBLICATION_TREE_CHANGED: tree-rewriting action ${uses}`);
+    });
+  }
+  test(`${repo} known setup and checkout before reader remain admitted`, () => {
+    const f = publicationFixture(repo), steps = f.doc.jobs.publish.steps;
+    steps.splice(steps.indexOf(reader(f)), 0, { uses: 'actions/download-artifact@v4' });
+    f.refresh();
+    expect(cli(f, `${repo} preparation before reader`).status).toBe(0);
+  });
+  for (const run of ['printf changed > src/probe.ts', 'sed -i s/old/new/ src/probe.ts',
+    'bun run rewrite-source', 'node -e "require(\'fs\').writeFileSync(\'src/probe.ts\',\'changed\')"']) {
+    test(`${repo} unmodeled source-writing step before alias refuses ${run}`, () => {
+      const f = publicationFixture(repo), steps = f.doc.jobs.publish.steps;
+      steps.splice(steps.indexOf(alias(f)), 0, { id: 'edit-source', run });
+      f.refresh();
+      const result = cli(f, `${repo} source write`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('PUBLICATION_TREE_CHANGED: unmodeled run step edit-source');
+    });
+  }
+}
+for (const body of ['npx @jsdevtools/npm-publish --token "$T"',
+  'npx --yes @jsdevtools/npm-publish@3 --token "$T"',
+  '/usr/bin/npx -- @jsdevtools/npm-publish --token "$T"',
+  'npm exec --package=@jsdevtools/npm-publish -- npm-publish',
+  'bunx @jsdevtools/npm-publish', 'pnpm dlx @jsdevtools/npm-publish@latest',
+  'env TOKEN="$T" /usr/bin/npm-publish', 'command npm-publish --token "$T"',
+  'false || npx @jsdevtools/npm-publish', 'true && npm-publish',
+  'npx @jsdevtools/npm-pu\\blish', 'bash -c "npx @jsdevtools/npm-publish"']) {
+  test(`publisher CLI in new declared job refuses ${body}`, () => {
+    const f = publicationFixture('parts'); addUninventoriedJob(f, body);
+    const result = cli(f, `publisher CLI ${body}`);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('PUBLICATION_SYNTAX');
+  });
+}
+for (const destination of ['.', '"."', '"$RUNNER_TEMP/output"', 'output', '"$DESTINATION"', './']) {
+  test(`captured npm pack destination ${destination} binds only a dot basename`, () => {
+    const f = publicationFixture('parts'), step = alias(f);
+    const command = `npm pack . --ignore-scripts --pack-destination ${destination}`;
+    step.run = `set -euo pipefail\nalias_tgz="$(${command})"\nnpm publish "$alias_tgz" --access public`;
+    entry(f).invocations[0].producer.command = command;
+    f.refresh();
+    const result = cli(f, `pack destination ${destination}`);
+    const admitted = destination === '.' || destination === '"."';
+    expect(result.status).toBe(admitted ? 0 : 1);
+    if (!admitted) expect(result.stderr).toContain('captured npm pack destination must be literal dot');
+  });
+}
+test('a pack command cannot disguise an intervening arbitrary Bun script as publication activity', () => {
+  const f = publicationFixture('parts'), steps = f.doc.jobs.publish.steps;
+  steps.splice(steps.indexOf(alias(f)), 0, { run: 'npm pack . --pack-destination .\nbun run rewrite-source' });
+  f.refresh();
+  const result = cli(f, 'disguised source mutation');
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('unsupported Bun publication command');
+});
+
+test('actual full parts main refuses post-reader smoke and admits its smoke-before-reader rollout reorder', () => {
+  const f = partsMainFixture(), path = '.github/workflows/release.yml';
+  expect(f.source.repo).toBe('rig-c/parts');
+  expect(f.source.sha).toBe('6d0bb3dfaa22fced86cfb07252226509c2c71ae7');
+  const original = f.files[path], before = Bun.YAML.parse(original);
+  const expected = 'WFL002_PUBLISH_SUITE_WITHOUT_VERDICT: .github/workflows/release.yml jobs.publish: ' +
+    'PUBLICATION_TREE_CHANGED: unmodeled run step Gate parts output through @rig-c/play follows the publication reader';
+  expect(lintWorkflows(f.declaration, f.read)).toEqual([expected]);
+  const red = cli(f, 'actual full parts main before rollout');
+  expect(red.status).toBe(1);
+  expect(red.stderr.trim()).toBe(expected);
+
+  // Move the complete original smoke step and its comments as source text.
+  // Every other byte, publication body and declaration stays in the snapshot.
+  const startMarker = '      # Cross-package release gate (#741):';
+  const endMarker = '      # The publication reader gates this checkout before packing.';
+  const readerMarker = '      - name: Gate every publication through the lifecycle reader\n';
+  for (const marker of [startMarker, endMarker, readerMarker]) {
+    expect(original.indexOf(marker)).toBeGreaterThan(-1);
+    expect(original.indexOf(marker)).toBe(original.lastIndexOf(marker));
+  }
+  const start = original.indexOf(startMarker), end = original.indexOf(endMarker);
+  expect(end).toBeGreaterThan(start);
+  expect(start).toBeGreaterThan(original.indexOf(readerMarker));
+  const block = original.slice(start, end);
+  expect(block).toContain('        run: bun run smoke -- --case clean\n');
+  const withoutSmoke = original.slice(0, start) + original.slice(end);
+  const insertion = withoutSmoke.indexOf(readerMarker);
+  const reordered = withoutSmoke.slice(0, insertion) + block + withoutSmoke.slice(insertion);
+  expect(reordered).not.toBe(original);
+
+  // Independently compare the whole parsed workflow to a one-step list move.
+  const steps = before.jobs.publish.steps;
+  const matches = steps.filter(step => step.run === 'bun run smoke -- --case clean');
+  expect(matches).toHaveLength(1);
+  const smoke = matches[0];
+  steps.splice(steps.indexOf(smoke), 1);
+  steps.splice(steps.findIndex(step => step.id === 'publication-reader'), 0, smoke);
+  expect(Bun.YAML.parse(reordered)).toEqual(before);
+  const planBefore = compileCoverage(JSON.parse(f.files['scripts/tree-verdict.json']), f.read);
+  f.files[path] = reordered;
+  expect(lintWorkflows(f.declaration, f.read)).toEqual([]);
+  expect(cli(f, 'actual full parts main smoke-before-reader rollout').status).toBe(0);
+  expect(compileCoverage(JSON.parse(f.files['scripts/tree-verdict.json']), f.read)).toEqual(planBefore);
 });

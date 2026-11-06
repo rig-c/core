@@ -261,9 +261,9 @@ export function compileCoverage(declaration, read, declarationPath = 'scripts/tr
   need(upload.with?.name === 'tree-verdict-receipt' && upload.with?.['if-no-files-found'] === 'error' &&
     (upload['continue-on-error'] === undefined || upload['continue-on-error'] === false) &&
     collector.steps.indexOf(upload) > collector.steps.indexOf(step) &&
-    (upload.if === undefined || (typeof upload.if === 'string' &&
-      [uploadCondition, `\${{ ${uploadCondition} }}`].includes(upload.if.trim()))),
-    'COVER_PRODUCER', 'receipt upload requires exact name, error policy and only its producer receipt-created condition or legacy unconditional form');
+    typeof upload.if === 'string' &&
+    [uploadCondition, `\${{ ${uploadCondition} }}`].includes(upload.if.trim()),
+    'COVER_PRODUCER', 'receipt upload requires exact name, error policy and only its producer receipt-created condition');
   const output = collectorOptions.get('--out');
   need(receiptPath(output.value, output.dynamic, collectorCwd) === receiptPath(upload.with.path),
     'COVER_PRODUCER', 'receipt upload path must equal producer --out');

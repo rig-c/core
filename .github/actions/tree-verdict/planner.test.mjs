@@ -26,15 +26,14 @@ function lintFixture(f) {
  writeFileSync(join(dir, 'stdout.log'), result.stdout); writeFileSync(join(dir, 'stderr.log'), result.stderr);
  return result;
 }
-for (const style of ['core', 'parts']) test(`${style} upload lint CLI accepts exact producer output condition and legacy erroring upload`, () => {
- for (const form of ['wrapped', 'bare', 'custom ID', 'legacy']) {
+for (const style of ['core', 'parts']) test(`${style} upload lint CLI accepts only the exact producer output condition`, () => {
+ for (const form of ['wrapped', 'bare', 'custom ID']) {
   const s = uploadFixture(style);
   if (form === 'bare') s.upload.if = "steps.receipt.outputs.receipt-created == 'true'";
   if (form === 'custom ID') {
    s.f.declaration.producer.step = 'record'; s.collector.steps[1].id = 'record';
    s.upload.if = "${{ steps.record.outputs.receipt-created == 'true' }}";
   }
-  if (form === 'legacy') delete s.upload.if;
   s.upload['continue-on-error'] = false;
   const result = lintFixture(s.f);
   expect(result.status).toBe(0);
@@ -42,10 +41,11 @@ for (const style of ['core', 'parts']) test(`${style} upload lint CLI accepts ex
  }
 });
 const uploadPlants = {
+ 'unconditional upload': s => { delete s.upload.if; },
  'no upload': s => { s.collector.steps.pop(); },
  'two exact uploads': s => { s.collector.steps.push(structuredClone(s.upload)); },
  'exact plus unconditional upload': s => { const other = structuredClone(s.upload); delete other.if; s.collector.steps.push(other); },
- 'two legacy uploads': s => { delete s.upload.if; s.collector.steps.push(structuredClone(s.upload)); },
+ 'two unconditional uploads': s => { delete s.upload.if; s.collector.steps.push(structuredClone(s.upload)); },
  'wrong upload name': s => { s.upload.with.name = 'nope'; },
  'dynamic upload name': s => { s.upload.with.name = '${{ env.RECEIPT_NAME }}'; },
  'upload runner temp directory': s => { s.upload.with.path = '${{ runner.temp }}'; },
@@ -244,7 +244,9 @@ for(const [label,plant]of Object.entries(plants))test(`actual lint CLI plant ${l
 });
 test('canonical covers edit changes gate; optional previous declaration refuses unchanged version',()=>{
  const f=workflowFixture('parts'),old=structuredClone(f.declaration),before=compileCoverage(f.declaration,f.read);
- f.declaration.producer.step='record';f.documents['.github/workflows/ci.yml'].jobs['tree-verdict-receipt'].steps[1].id='record';refresh(f);
+ f.declaration.producer.step='record';
+ const collector=f.documents['.github/workflows/ci.yml'].jobs['tree-verdict-receipt'];
+ collector.steps[1].id='record';collector.steps.at(-1).if="${{ steps.record.outputs.receipt-created == 'true' }}";refresh(f);
  expect(compileCoverage(f.declaration,f.read).gate).not.toBe(before.gate);
  expect(()=>compileCoverage(f.declaration,f.read,'scripts/tree-verdict.json',old)).toThrow('COVER_VERSION');
  f.declaration.gate='parts-full/3';refresh(f);expect(compileCoverage(f.declaration,f.read,'scripts/tree-verdict.json',old).gate).toContain('parts-full/3/');

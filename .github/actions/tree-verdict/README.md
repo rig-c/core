@@ -5,11 +5,13 @@ jobs over the **exact same Git tree**. It does not mean API `head_sha` was the
 checkout SHA. PR CI normally checks out a synthetic merge; its actual tested SHA
 and tree are recorded separately. Old `tree-verdict/1` receipts are ineligible.
 
-Phase A supplies the action, Bun coverage compiler/collector, Node lifecycle
-reader, lint and cheap controls. **Existing core ci.yml/release.yml, reusable
-selftest-shards.yml, prepublish_gate.ts and CUR119/120/131 adoption are excluded**
-(core#1705). No old duplicate work is declared green. Core's old tally still binds
-an exact commit, clean source and full census; this receipt does not bypass it.
+The shared action supplies the Bun coverage compiler/collector, Node lifecycle
+reader, lint and focused controls. Core's CI/release callers use the exact
+`d43f730151d5db0b71682a1a4057145cd4a95fa8` action pin and condition their single
+receipt upload on the producer output. The required CI check reads reuse and the
+substantive selftest verdict independently of the receipt job. The source run's
+overall success remains required for reuse. Core's tally binds an exact commit,
+clean source and full census.
 
 ## Frozen interface and runtime
 
@@ -262,15 +264,20 @@ The upload accepts `steps.<producer step id>.outputs.receipt-created == 'true'`,
 optionally wrapped in `${{ }}`, with `if-no-files-found: error`. The producer step
 ID comes from the declaration, defaulting to `receipt`. Other conditions, that
 condition on another step, and `warn`/`ignore` missing-file policies refuse with
-`COVER_PRODUCER`. A single legacy unconditional upload is also admitted with the
-same name, path and `error` policy. Zero or multiple uploads refuse, including a
-guarded upload mixed with an unconditional one.
+`COVER_PRODUCER`. Unconditional uploads refuse with `COVER_PRODUCER` under the
+core#1716 rollout contract. Zero or multiple uploads refuse, including a guarded
+upload mixed with an unconditional one.
 `planner.test.mjs` runs the lint CLI over valid, malformed and mixed uploads.
-Caller adoption follows the shared action pin rollout after core#1709. Existing
-pins and unconditional uploads can still produce a red fork receipt job until
-that rollout, as accepted in core#1711's scope ruling.
-The core rollout PR removes legacy unconditional admission together with its
-final action pin update and core CI upload wiring.
+Core adopts the #1711/#1709 implementation with that exact pin and upload guard
+in the same change that removes legacy admission. Parts and review adoption use
+their own rollout cards and the resulting merged core SHA. Frozen raw consumer
+snapshots with unconditional collectors are intentionally RED under this contract.
+`producer.test.mjs` runs the real producer CLI and a local upload-step model
+against core's actual collector YAML. A fork fixture exits 0 with
+`TREE_VERDICT_PRODUCER_NOT_ELIGIBLE`, leaves `receipt-created=false`, skips the
+modeled upload and finishes green. Eligible fixtures copy the receipt, while a
+missing receipt with output true fails the modeled strict upload. Hosted PR
+artifact upload and merged-main reuse require the corresponding Actions runs.
 
 It compiles the checked-out workflow graph, verifies clean actual HEAD/tree equals
 runner `GITHUB_SHA`, validates repository/run/attempt/event/workflow/PR association,
@@ -602,8 +609,9 @@ These checks establish step order and bounded syntax. Pre-reader PATH changes an
 background processes can affect later commands outside this side-effect boundary.
 Parts rollout moves its `bun run smoke -- --case clean` step before the reader.
 The portable full-file control in `publication.test.mjs` preserves the original
-refusal and applies that exact reordering for the positive control. This rollout
-bar is recorded in [core#1709](https://github.com/rig-c/core/issues/1709).
+refusal after adding the collector upload guard, then applies that exact reordering
+for the positive control. The two prospective edits satisfy the rollout contracts.
+[Core#1709](https://github.com/rig-c/core/issues/1709), [core#1716](https://github.com/rig-c/core/issues/1716).
 
 The direct-invocation lexer tracks quotes, comments, escaped command words and
 nested `$(...)`. A separate conservative text guard keys on **publish** and its
@@ -683,11 +691,20 @@ CLI. Their green scope is **publication lint**.
 
 `publication-fixtures/parts-main/sources.json` separately binds the five full
 public parts files at `6d0bb3dfaa22fced86cfb07252226509c2c71ae7`. The portable rollout
-test moves the original smoke step and comments before the reader as source text,
-then compares the complete parsed workflow with an independent one-step move.
+test first records raw `COVER_PRODUCER` RED, inserts only the exact producer-output
+guard in a copied CI workflow, and records the retained post-reader smoke refusal.
+It then moves the original smoke step and comments before the reader as source text
+and compares the complete parsed release workflow with an independent one-step move.
 `publication-fixtures/review-main/sources.json` binds the full review inputs and
 local action body at `3b88d07a12277fcb5f8b7a1c0b0396d42de66e33`. The historical
 review snapshot also carries its action body from its own declared commit.
+Its raw collector is also `COVER_PRODUCER` RED. `wireCollectorUpload()` creates the
+prospective guarded copy in memory and returns the source path, exact condition
+and before/after SHA-256. Tests compare the complete parsed workflow against one
+added `if`, remove that one line to recover the original bytes, and check every
+other file against the snapshot. The fully wired review copy and the guarded,
+smoke-reordered parts copy are the green rollout controls. Snapshot files and
+their source manifests retain their original bytes and hashes.
 
 Package hook wrappers, declarations and generated coverage CI/collector metadata
 are explicit prospective fixture inputs. Review's `fixture-test`, `fixture-check`,

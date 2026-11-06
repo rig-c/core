@@ -216,7 +216,7 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}
       - id: lookup
-        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        uses: rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8
         with:
           declaration: scripts/tree-verdict.json
           purpose: ci
@@ -320,7 +320,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - id: reuse
-        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        uses: rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8
         with:
           declaration: scripts/tree-verdict.json
           purpose: publish

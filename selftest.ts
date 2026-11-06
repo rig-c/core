@@ -81735,7 +81735,7 @@ function runCurrencySuite(): number {
       if (!reuse || !needsOf(reuse).includes(planName) || reuse.if !== resolved ||
         reuse.outputs?.reused !== '${{ steps.lookup.outputs.reused }}' ||
         !reuse.steps?.some(step => step.id === 'lookup' && step.uses ===
-          'rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3' &&
+          'rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8' &&
           step.with?.purpose === 'ci' && step.with?.declaration === 'scripts/tree-verdict.json')) {
         faults.push('release.yml: reuse does not read the pinned source under the resolved cut condition');
       }
@@ -81876,7 +81876,7 @@ function runCurrencySuite(): number {
         if (!needsOf(test).includes(caller) || !reads) faults.push(`ci.yml's \`test\` does not need "${caller}" and read its \`verdict\` output, so the required check is not the merge's verdict`);
         const lookup = ci?.jobs?.reuse;
         const proof = lookup?.steps?.find((step) => step.id === 'lookup');
-        const pinned = 'rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3';
+        const pinned = 'rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8';
         if (proof?.uses !== pinned || proof.with?.declaration !== 'scripts/tree-verdict.json' || proof.with?.purpose !== 'ci' ||
           lookup?.outputs?.reused !== '${{ steps.lookup.outputs.reused }}') faults.push('ci.yml has no pinned lookup and exact reuse output');
         const fresh = ci?.jobs?.[caller];

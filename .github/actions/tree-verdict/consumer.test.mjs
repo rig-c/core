@@ -110,6 +110,16 @@ test('publish lifecycle reader validates proof against fresh source receipt; abs
   } finally { rmSync(dir, { recursive: true }); }
 });
 
+test('overall failed source remains ineligible even when all substantive legs and its receipt are green', async () => {
+  const f = fixture();
+  expect(f.receipt.verdict).toBe('success');
+  expect(f.jobRows.every(row => row.conclusion === 'success')).toBe(true);
+  f.run.conclusion = 'failure';
+  const result = await lookup(f.c, f.api, f.readReceipt);
+  expect(result.reused).toBe(false);
+  expect(f.receiptCalls).toBe(0);
+});
+
 test('collector tooling-only composite preserves fail-closed outputs and explicitly skips lookup', () => {
   const dir = mkdtempSync(join(scratch, 'tooling-'));
   try {

@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -129,6 +129,51 @@ test('README entry CLI same-repository PR and default push replace stale output 
    expect(receipt.jobs).toHaveLength(5);
    expect(result.outputText.trim().split('\n').slice(-2)).toEqual(['receipt-created=false', 'receipt-created=true']);
   }
+ } finally { r.close(); }
+});
+for (const scenario of ['fork', 'eligible PR', 'producer failure', 'missing receipt']) test(`core collector job fixture ${scenario}: real producer CLI and simulated hosted upload`, () => {
+ const r = repository('core'), s = scenario === 'fork' ? forkSource(r) : source(r);
+ s.env.GITHUB_ACTIONS = 'true';
+ try {
+  const workflow = Bun.YAML.parse(readFileSync(new URL('../../workflows/ci.yml', import.meta.url), 'utf8'));
+  const declaration = JSON.parse(readFileSync(new URL('../../../scripts/tree-verdict.json', import.meta.url), 'utf8'));
+  const collector = workflow.jobs[declaration.producer.job];
+  const producerID = declaration.producer.step ?? 'receipt';
+  const uploads = collector.steps.filter(step => step.uses?.startsWith('actions/upload-artifact@'));
+  expect(uploads).toHaveLength(1);
+  const upload = uploads[0];
+  expect(upload.if).toBe(`\${{ steps.${producerID}.outputs.receipt-created == 'true' }}`);
+  expect(upload.with).toEqual({ name: 'tree-verdict-receipt', path: '${{ runner.temp }}/receipt.json', 'if-no-files-found': 'error' });
+  expect(upload['continue-on-error']).toBeUndefined();
+  const producer = collector.steps.find(step => step.id === producerID);
+  expect(producer.run).toBe('bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"');
+  if (scenario === 'producer failure') s.rows.shift();
+  const result = producerCLI(s);
+  const outputs = Object.fromEntries(result.outputText.trim().split('\n').map(line => line.split('=')));
+  if (scenario === 'missing receipt') rmSync(s.options.out);
+  // Local upload model. The actual Actions upload-artifact implementation and
+  // a hosted fork run are outside this fixture. Apply the checked YAML guard,
+  // copy its exact file on true, and preserve the strict missing-file failure.
+  const path = upload.with.path.replace('${{ runner.temp }}', dirname(s.options.out));
+  const artifact = join(r.dir, upload.with.name);
+  let uploadResult = 'skipped';
+  if (result.status === 0 && outputs['receipt-created'] === 'true') {
+   uploadResult = existsSync(path) ? 'success' : 'failure';
+   if (uploadResult === 'success') copyFileSync(path, artifact);
+  }
+  const jobResult = result.status === 0 && uploadResult !== 'failure' ? 'success' : 'failure';
+  expect(result.status).toBe(scenario === 'producer failure' ? 1 : 0);
+  expect(uploadResult).toBe(scenario === 'eligible PR' ? 'success' : scenario === 'missing receipt' ? 'failure' : 'skipped');
+  expect(jobResult).toBe(scenario === 'fork' || scenario === 'eligible PR' ? 'success' : 'failure');
+  expect(existsSync(artifact)).toBe(scenario === 'eligible PR');
+  if (scenario === 'fork') {
+   expect(result.stdout.trim()).toBe('TREE_VERDICT_PRODUCER_NOT_ELIGIBLE: fork pull request');
+   expect(outputs['receipt-created']).toBe('false');
+   expect(existsSync(path)).toBe(false);
+  }
+  if (scenario === 'eligible PR') expect(JSON.parse(readFileSync(artifact, 'utf8')).verdict).toBe('success');
+  console.log('COLLECTOR_JOB_FIXTURE ' + JSON.stringify({ scenario, hostedRun: false, producerExit: result.status,
+   producerLine: result.stdout.trim(), receiptCreated: outputs['receipt-created'], upload: uploadResult, job: jobResult }));
  } finally { r.close(); }
 });
 const forkPlants = {

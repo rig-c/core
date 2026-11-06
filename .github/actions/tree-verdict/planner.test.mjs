@@ -6,6 +6,179 @@ import { spawnSync } from 'node:child_process';
 import { workflowFixture } from './fixtures.mjs';
 import { compileCoverage } from './planner.mjs';
 function refresh(f) { for(const [path,doc] of Object.entries(f.documents)) f.files[path]=Bun.YAML.stringify(doc); f.files['scripts/tree-verdict.json']=JSON.stringify(f.declaration); }
+function uploadFixture(style = 'parts') {
+ const f = workflowFixture(style), collector = f.documents['.github/workflows/ci.yml'].jobs['tree-verdict-receipt'];
+ const upload = collector.steps.at(-1);
+ upload.if = "${{ steps.receipt.outputs.receipt-created == 'true' }}";
+ return { f, collector, upload };
+}
+function lintFixture(f) {
+ refresh(f);
+ const dir = mkdtempSync(join(process.env.TMPDIR, 'upload-'));
+ for (const [path, text] of Object.entries(f.files)) {
+  mkdirSync(join(dir, path, '..'), { recursive: true }); writeFileSync(join(dir, path), text);
+ }
+ const config = join(dir, 'inventory.json');
+ writeFileSync(config, JSON.stringify({ schema: 'workflow-verdict-lint/1', defaultBranch: 'main',
+  coverageDeclarations: ['scripts/tree-verdict.json'], workflows: [{ path: '.github/workflows/ci.yml', heavyJobs: [] }] }));
+ const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../scripts/lint_workflows.ts', import.meta.url)), config, dir], { encoding: 'utf8' });
+ writeFileSync(join(dir, 'stdout.log'), result.stdout); writeFileSync(join(dir, 'stderr.log'), result.stderr);
+ return result;
+}
+for (const style of ['core', 'parts']) test(`${style} upload lint CLI accepts exact producer output condition and legacy erroring upload`, () => {
+ for (const form of ['wrapped', 'bare', 'custom ID', 'legacy']) {
+  const s = uploadFixture(style);
+  if (form === 'bare') s.upload.if = "steps.receipt.outputs.receipt-created == 'true'";
+  if (form === 'custom ID') {
+   s.f.declaration.producer.step = 'record'; s.collector.steps[1].id = 'record';
+   s.upload.if = "${{ steps.record.outputs.receipt-created == 'true' }}";
+  }
+  if (form === 'legacy') delete s.upload.if;
+  s.upload['continue-on-error'] = false;
+  const result = lintFixture(s.f);
+  expect(result.status).toBe(0);
+  expect(compileCoverage(s.f.declaration, s.f.read).collectorName).toBe('tree-verdict-receipt');
+ }
+});
+const uploadPlants = {
+ 'no upload': s => { s.collector.steps.pop(); },
+ 'two exact uploads': s => { s.collector.steps.push(structuredClone(s.upload)); },
+ 'exact plus unconditional upload': s => { const other = structuredClone(s.upload); delete other.if; s.collector.steps.push(other); },
+ 'two legacy uploads': s => { delete s.upload.if; s.collector.steps.push(structuredClone(s.upload)); },
+ 'wrong upload name': s => { s.upload.with.name = 'nope'; },
+ 'dynamic upload name': s => { s.upload.with.name = '${{ env.RECEIPT_NAME }}'; },
+ 'upload runner temp directory': s => { s.upload.with.path = '${{ runner.temp }}'; },
+ 'upload wrong file': s => { s.upload.with.path = '${{ runner.temp }}/other.json'; },
+ 'upload path prefix lookalike': s => { s.upload.with.path = '${{ runner.temp }}/receipt.json.extra'; },
+ 'upload multiline paths': s => { s.upload.with.path += '\n${{ runner.temp }}/other.json'; },
+ 'upload unsupported context': s => { s.upload.with.path = '${{ env.RUNNER_TEMP }}/receipt.json'; },
+ 'output variable prefix lookalike': s => { s.collector.steps[1].run = 'bun helper/producer.mjs --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP_EXTRA/receipt.json"'; },
+ 'literal output is not runner temp': s => { s.collector.steps[1].run = "bun helper/producer.mjs --declaration scripts/tree-verdict.json --out '$RUNNER_TEMP/receipt.json'"; },
+ 'producer output env override': s => { s.collector.steps[1].env = { GITHUB_TOKEN: '${{ github.token }}', GITHUB_OUTPUT: '/dev/null' }; },
+ 'empty producer output env override': s => { s.collector.steps[1].env = { GITHUB_OUTPUT: '' }; },
+ 'null producer output env override': s => { s.collector.steps[1].env = { GITHUB_OUTPUT: null }; },
+ 'wrong producer ID': s => { s.upload.if = "${{ steps.other.outputs.receipt-created == 'true' }}"; },
+ 'wrong output': s => { s.upload.if = "${{ steps.receipt.outputs.reused == 'true' }}"; },
+ 'dynamic step index': s => { s.upload.if = "${{ steps[env.PRODUCER].outputs.receipt-created == 'true' }}"; },
+ 'bracket step syntax': s => { s.upload.if = "${{ steps['receipt'].outputs.receipt-created == 'true' }}"; },
+ 'extra conjunct': s => { s.upload.if = "${{ steps.receipt.outputs.receipt-created == 'true' && true }}"; },
+ 'extra disjunct': s => { s.upload.if = "${{ steps.receipt.outputs.receipt-created == 'true' || false }}"; },
+ 'success conjunct': s => { s.upload.if = "${{ success() && steps.receipt.outputs.receipt-created == 'true' }}"; },
+ 'always bypass': s => { s.upload.if = "${{ always() || steps.receipt.outputs.receipt-created == 'true' }}"; },
+ 'literal bypass': s => { s.upload.if = '${{ true }}'; },
+ 'boolean bypass': s => { s.upload.if = true; },
+ 'boolean comparison': s => { s.upload.if = '${{ steps.receipt.outputs.receipt-created == true }}'; },
+ 'inequality': s => { s.upload.if = "${{ steps.receipt.outputs.receipt-created != 'false' }}"; },
+ 'empty condition': s => { s.upload.if = ''; },
+ 'malformed wrapper': s => { s.upload.if = "${{ steps.receipt.outputs.receipt-created == 'true'"; },
+ 'warn with condition': s => { s.upload.with['if-no-files-found'] = 'warn'; },
+ 'ignore with condition': s => { s.upload.with['if-no-files-found'] = 'ignore'; },
+ 'default warn with condition': s => { delete s.upload.with['if-no-files-found']; },
+ 'warn without condition': s => { delete s.upload.if; s.upload.with['if-no-files-found'] = 'warn'; },
+ 'ignore without condition': s => { delete s.upload.if; s.upload.with['if-no-files-found'] = 'ignore'; },
+ 'default warn without condition': s => { delete s.upload.if; delete s.upload.with['if-no-files-found']; },
+ 'ignored upload failure': s => { s.upload['continue-on-error'] = true; },
+ 'upload before producer': s => { s.collector.steps.splice(1, 0, s.collector.steps.pop()); },
+ 'condition on another step': s => { s.collector.steps.push({ run: 'echo cleanup', if: s.upload.if }); },
+ 'condition in another job': s => { s.f.documents['.github/workflows/ci.yml'].jobs.other = { steps: [{ run: 'echo cleanup', if: s.upload.if }] }; },
+ 'aliased upload in another job': s => { s.f.documents['.github/workflows/ci.yml'].jobs.other = { steps: [s.upload] }; },
+ 'duplicate producer ID': s => { s.collector.steps.push({ id: 'receipt', run: 'echo replaced' }); },
+};
+for (const [name, plant] of Object.entries(uploadPlants)) test(`upload lint CLI refuses ${name} by name`, () => {
+ const s = uploadFixture(); plant(s);
+ const result = lintFixture(s.f);
+ expect(result.status).toBe(1);
+ expect(result.stderr).toContain('COVER_PRODUCER:');
+ expect(() => compileCoverage(s.f.declaration, s.f.read)).toThrow('COVER_PRODUCER:');
+});
+test('upload lint CLI binds normalized runner temp and literal paths to producer --out exactly', () => {
+ const pairs = [
+  ['"${RUNNER_TEMP}/receipt.json"', '${{ runner.temp }}/receipt.json'],
+  ['"$RUNNER_TEMP"/receipt.json', '${{runner.temp}}/receipt.json'],
+  ['"/fixed/receipt.json"', '/fixed/receipt.json'],
+  ['"../receipt.json"', '../receipt.json'],
+ ];
+ for (const [output, path] of pairs) {
+  const s = uploadFixture();
+  s.collector.steps[1].run = `bun helper/producer.mjs --declaration scripts/tree-verdict.json --out ${output}`;
+  s.upload.with.path = path;
+  expect(lintFixture(s.f).status).toBe(0);
+ }
+});
+test('upload lint CLI accounts for the producer working directory in relative paths', () => {
+ for (const wrongPath of [false, true]) {
+  const s = uploadFixture();
+  for (const job of Object.values(s.f.documents['.github/workflows/ci.yml'].jobs)) {
+   job.steps[0].with = { path: 'consumer' }; job.defaults = { run: { 'working-directory': 'consumer' } };
+  }
+  s.collector.steps[1].run = 'bun helper/producer.mjs --declaration scripts/tree-verdict.json --out "../receipt.json"';
+  s.upload.with.path = wrongPath ? '../receipt.json' : 'receipt.json';
+  const result = lintFixture(s.f);
+  expect(result.status).toBe(wrongPath ? 1 : 0);
+  if (wrongPath) expect(result.stderr).toContain('COVER_PRODUCER:');
+ }
+});
+test('upload lint CLI refuses matched wildcard paths and wildcard segments before normalization', () => {
+ for (const pattern of ['*', '?', '[ab]', '**']) {
+  for (const matched of [false, true]) {
+   const s = uploadFixture();
+   const output = matched ? `/fixed/receipt${pattern}.json` : '/fixed/receipt.json';
+   s.collector.steps[1].run = `bun helper/producer.mjs --declaration scripts/tree-verdict.json --out "${output}"`;
+   s.upload.with.path = matched ? output : `/fixed/${pattern}/../receipt.json`;
+   const result = lintFixture(s.f);
+   expect(result.status).toBe(1); expect(result.stderr).toContain('COVER_PRODUCER:');
+  }
+ }
+ const s = uploadFixture();
+ s.collector.steps[1].run = 'bun helper/producer.mjs --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt*.json"';
+ s.upload.with.path = '${{ runner.temp }}/receipt*.json';
+ const result = lintFixture(s.f);
+ expect(result.status).toBe(1); expect(result.stderr).toContain('COVER_PRODUCER:');
+});
+test('upload lint CLI rejects exclusion syntax while permitting literal braces and exclamation characters', () => {
+ const literal = uploadFixture();
+ literal.collector.steps[1].run = 'bun helper/producer.mjs --declaration scripts/tree-verdict.json --out "/fixed/receipt{a,b}!.json"';
+ literal.upload.with.path = '/fixed/receipt{a,b}!.json';
+ expect(lintFixture(literal.f).status).toBe(0);
+ for (const exclusion of [false, true]) {
+  const s = uploadFixture();
+  for (const job of Object.values(s.f.documents['.github/workflows/ci.yml'].jobs)) {
+   job.steps[0].with = { path: 'consumer' }; job.defaults = { run: { 'working-directory': 'consumer' } };
+  }
+  s.collector.steps[1].run = 'bun helper/producer.mjs --declaration scripts/tree-verdict.json --out "../!receipt.json"';
+  s.upload.with.path = exclusion ? '!receipt.json' : './!receipt.json';
+  const result = lintFixture(s.f);
+  expect(result.status).toBe(exclusion ? 1 : 0);
+  if (exclusion) expect(result.stderr).toContain('COVER_PRODUCER:');
+ }
+});
+for (const reverse of [false, true]) test(`upload lint CLI checks mixed valid/invalid uploads, reverse=${reverse}`, () => {
+ const s = uploadFixture(), invalid = structuredClone(s.upload);
+ invalid.if = "${{ steps.other.outputs.receipt-created == 'true' }}";
+ s.collector.steps.splice(reverse ? 2 : 3, 0, invalid);
+ const result = lintFixture(s.f);
+ expect(result.status).toBe(1); expect(result.stderr).toContain('COVER_PRODUCER:');
+});
+test('upload lint CLI refuses the output condition on another step in a traversed reusable workflow', () => {
+ const s = uploadFixture('core');
+ s.f.documents['.github/workflows/selftest-shards.yml'].jobs.shard.steps.push({ run: 'echo cleanup', if: s.upload.if });
+ const result = lintFixture(s.f);
+ expect(result.status).toBe(1); expect(result.stderr).toContain('COVER_PRODUCER:');
+});
+test('README collector YAML runs through lint CLI and its wrong producer binding refuses', () => {
+ const text = readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+ const yaml = text.match(/## Collector:[\s\S]*?```yaml\n([\s\S]*?)\n```/)?.[1];
+ expect(typeof yaml).toBe('string');
+ for (const wrongID of [false, true]) {
+  const f = workflowFixture('core'), collector = Bun.YAML.parse(yaml)['tree-verdict-receipt'];
+  f.documents['.github/workflows/ci.yml'].jobs['tree-verdict-receipt'] = collector;
+  if (wrongID) collector.steps.find(step => step.uses === 'actions/upload-artifact@v4').if =
+   "${{ steps.other.outputs.receipt-created == 'true' }}";
+  const result = lintFixture(f);
+  expect(result.status).toBe(wrongID ? 1 : 0);
+  if (wrongID) expect(result.stderr).toContain('COVER_PRODUCER:');
+ }
+});
 for(const style of ['core','parts']) test(`${style} literal shard display names expand and merge proves full gate`,()=>{
  const f=workflowFixture(style),plan=compileCoverage(f.declaration,f.read);
  expect(plan.coverage.jobs.shards.legs.length).toBe(style==='core'?6:4);

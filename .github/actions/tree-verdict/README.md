@@ -60,8 +60,11 @@ a diagnostic, never a fresh-head signing requirement.
 
 Dispatch consumers always run the full chain. A fresh dispatch CI collector may
 record completed coverage without breaking the workflow's existing dispatch path;
-lookup will never accept dispatch as a reusable source. Forks and
-`pull_request_target` refuse. Failed/missing/malformed/API/permission/incomplete
+lookup will never accept dispatch as a reusable source. Fork PR collectors exit 0
+with `TREE_VERDICT_PRODUCER_NOT_ELIGIBLE: fork pull request` and no receipt after
+validating matching base/head repository identities in the run, event and PR API.
+Lookup refuses fork PRs and fork run candidates. `pull_request_target` refuses.
+Failed/missing/malformed/API/permission/incomplete
 pagination evidence always means full fallback. No ignore-scripts or boolean bypass
 exists.
 
@@ -210,6 +213,7 @@ leaf IDs in an outer job's `needs`. Parts' collector instead needs `[shard, test
           GITHUB_TOKEN: ${{ github.token }}
         run: bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
       - uses: actions/upload-artifact@v4
+        if: ${{ steps.receipt.outputs.receipt-created == 'true' }}
         with:
           name: tree-verdict-receipt
           path: ${{ runner.temp }}/receipt.json
@@ -231,6 +235,36 @@ Exact producer command:
 bun "$TREE_VERDICT_TOOLS/producer.mjs" --declaration scripts/tree-verdict.json --out "$RUNNER_TEMP/receipt.json"
 ```
 
+The producer appends `receipt-created=false` to `GITHUB_OUTPUT` before collection,
+including on a reused output path. Only a completed receipt write changes it to
+`receipt-created=true`. Fork skips and failures keep the output false. An eligible
+receipt write failure exits 1. Outside Actions, `GITHUB_OUTPUT` is optional.
+On Actions (`GITHUB_ACTIONS=true`), missing or empty `GITHUB_OUTPUT` refuses with
+`COVER_PRODUCER: GITHUB_OUTPUT required on Actions`, exit 1. The producer step
+may not set `GITHUB_OUTPUT` in its own `env` mapping.
+`producer.test.mjs` runs this command for fork, PR, push and failure controls.
+
+The collector has exactly one upload, named `tree-verdict-receipt`, whose path
+equals the producer's `--out`. Shell `$RUNNER_TEMP` and `${RUNNER_TEMP}` map to
+the YAML `${{ runner.temp }}` prefix with the exact same suffix. Literal paths
+are resolved relative to the producer working directory or the upload workspace;
+a quoted literal `$RUNNER_TEMP` is distinct from expansion.
+Upload wildcard characters (`*`, `?`, `[` and `]`) and leading exclusion syntax
+refuse before path normalization.
+The upload accepts `steps.<producer step id>.outputs.receipt-created == 'true'`,
+optionally wrapped in `${{ }}`, with `if-no-files-found: error`. The producer step
+ID comes from the declaration, defaulting to `receipt`. Other conditions, that
+condition on another step, and `warn`/`ignore` missing-file policies refuse with
+`COVER_PRODUCER`. A single legacy unconditional upload is also admitted with the
+same name, path and `error` policy. Zero or multiple uploads refuse, including a
+guarded upload mixed with an unconditional one.
+`planner.test.mjs` runs the lint CLI over valid, malformed and mixed uploads.
+Caller adoption follows the shared action pin rollout after core#1709. Existing
+pins and unconditional uploads can still produce a red fork receipt job until
+that rollout, as accepted in core#1711's scope ruling.
+The core rollout PR removes legacy unconditional admission together with its
+final action pin update and core CI upload wiring.
+
 It compiles the checked-out workflow graph, verifies clean actual HEAD/tree equals
 runner `GITHUB_SHA`, validates repository/run/attempt/event/workflow/PR association,
 and reads **every** covering job from:
@@ -248,7 +282,10 @@ collector job ID and actual tested SHA/tree. It recompiles and rechecks clean
 checkout before writing. No chain is executed, no old wrapper grammar is accepted,
 and no successful reused CI may fabricate fresh evidence. Upload remains success
 conditioned. A failed collection exits 1 with no receipt. Fresh dispatch collection
-is allowed; reusing dispatch evidence is not.
+is allowed; reusing dispatch evidence is not. An authenticated fork PR exits 0
+without collecting jobs or writing a receipt. The existing output invalidation
+also removes a prior receipt at the same validated output path before this skip
+(`producer.test.mjs` exercises the entry CLI with fresh and reused paths).
 
 Receipt schema is `tree-verdict/2`. Source artifact name remains
 `tree-verdict-receipt`, with exactly `receipt.json`. Digest/size/expiry/run metadata

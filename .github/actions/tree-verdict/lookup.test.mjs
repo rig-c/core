@@ -67,6 +67,25 @@ test('direct commit successful default-branch push reuses with PR 0', async () =
   for (const r of [...s.jobRows,...s.receipt.jobs]) r.head_sha=s.c.sha;
   expect(await drive(s)).toMatchObject({ reused: true, pr: 0 });
 });
+test('authentic fork PR and fork run candidates refuse by name before reading any receipt', async () => {
+  for (const kind of ['fork PR', 'fork run', 'mixed runs', 'same-name fork ID']) {
+    const s = fixture(), fork = { id: 2, full_name: 'contributor/core' };
+    if (kind === 'fork PR') {
+      s.pr.head.repo = fork;
+      s.run.head_repository = fork;
+      s.run.pull_requests[0].head.repo = fork;
+    } else {
+      const run = structuredClone(s.run);
+      run.id = 801; run.run_number = 9;
+      run.head_repository = kind === 'same-name fork ID' ? { ...fork, full_name: s.c.repository } : fork;
+      s.listings = kind === 'mixed runs' ? [s.run, run] : [run];
+    }
+    const reason = kind === 'fork PR' ? 'untrusted PR repository/base' :
+      kind === 'same-name fork ID' ? 'fork run' : 'untrusted run repository';
+    expect(await drive(s)).toEqual({ reused: false, reason });
+    expect(s.receiptCalls).toBe(0);
+  }
+});
 test('one-byte file mutation changes real tree identity and executes fallback', async () => {
   const s = fixture(); expect(tree('a')).not.toBe(tree('b'));
   s.commits.get(s.c.sha).tree.sha = tree('b');

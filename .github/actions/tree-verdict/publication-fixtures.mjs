@@ -164,7 +164,8 @@ export function mixedPublicationFixture(repo) {
   const doc = { on: { push: { branches: ['main'] } }, jobs: {
     'validate-secondary': { 'runs-on': 'ubuntu-latest', steps: [checkout, { run: command }] },
     'secondary-receipt': { 'runs-on': 'ubuntu-latest', if: '${{ success() }}', needs: 'validate-secondary', steps: [checkout,
-      { id: 'receipt', run: 'bun helper/.github/actions/tree-verdict/producer.mjs --declaration scripts/secondary-verdict.json --out "$RUNNER_TEMP/secondary-receipt.json"' }] },
+      { id: 'receipt', run: 'bun helper/.github/actions/tree-verdict/producer.mjs --declaration scripts/secondary-verdict.json --out "$RUNNER_TEMP/secondary-receipt.json"' },
+      { uses: 'actions/upload-artifact@v4', with: { name: 'tree-verdict-receipt', path: '${{ runner.temp }}/secondary-receipt.json', 'if-no-files-found': 'error' } }] },
   } };
   f.files[declaration.workflow] = Bun.YAML.stringify(doc);
   f.files['scripts/secondary-verdict.json'] = JSON.stringify(declaration);

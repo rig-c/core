@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { workflowFixture } from './fixtures.mjs';
 import { compileCoverage } from './planner.mjs';
 import { checkoutProof } from './checkout.mjs';
@@ -22,22 +23,245 @@ function repository(style='parts') {
 }
 function source(r){
  const plan=compileCoverage(r.f.declaration,r.f.read),repo={id:1,full_name:'sample/core',default_branch:'main'};
- const event={repository:repo,number:7,pull_request:{head:{sha:'b'.repeat(40)}}};
+ const pull={number:7,head:{sha:'b'.repeat(40),repo},base:{ref:'main',repo}};
+ const event={repository:repo,number:7,pull_request:structuredClone(pull)};
  const eventPath=join(r.dir,'event.json');writeFileSync(eventPath,JSON.stringify(event));
  const run={id:800,run_attempt:2,workflow_id:10,path:plan.coverage.workflow,head_sha:'b'.repeat(40),event:'pull_request',status:'in_progress',conclusion:null,repository:repo,head_repository:repo};
- const env={...process.env,GITHUB_REPOSITORY:repo.full_name,GITHUB_RUN_ID:'800',GITHUB_RUN_ATTEMPT:'2',GITHUB_EVENT_NAME:'pull_request',GITHUB_EVENT_PATH:eventPath,GITHUB_SHA:r.proof.sha,GITHUB_JOB:plan.coverage.producer.job};
+ const env={...process.env,GITHUB_REPOSITORY:repo.full_name,GITHUB_RUN_ID:'800',GITHUB_RUN_ATTEMPT:'2',GITHUB_EVENT_NAME:'pull_request',GITHUB_EVENT_PATH:eventPath,GITHUB_SHA:r.proof.sha,GITHUB_JOB:plan.coverage.producer.job,GITHUB_OUTPUT:join(r.dir,'github-output')};
  const rows=Object.values(plan.coverage.jobs).flatMap(j=>j.legs).map((l,i)=>({id:100+i,name:l.apiName,run_id:800,run_attempt:2,head_sha:run.head_sha,status:'completed',conclusion:'success'}));
  rows.push({id:200,name:plan.collectorName,run_id:800,run_attempt:2,head_sha:run.head_sha,status:'in_progress',conclusion:null});
  const options={cwd:r.repo,declaration:join(r.repo,'scripts/tree-verdict.json'),out:join(r.dir,'receipt.json')};
- const state={plan,run,env,rows,options,event,calls:[]};
+ const state={plan,run,env,rows,options,event,pull,calls:[]};
  state.api=async path=>{state.calls.push(path);
   if(path.endsWith('/runs/800'))return run;
   if(path.endsWith('/ci.yml'))return{id:10,path:run.path,state:'active'};
-  if(path.endsWith('/pulls/7'))return{number:7,head:{sha:run.head_sha,repo},base:{ref:'main',repo}};
+  if(path.endsWith('/pulls/7'))return state.pull;
   if(path.includes('/jobs?'))return{total_count:state.rows.length,jobs:state.rows};
   if(path.includes('/git/commits/'))return{sha:r.proof.sha,tree:{sha:r.proof.tree}};
   throw new Error('unexpected fixture API');};return state;
 }
+function forkSource(r) {
+ const s = source(r);
+ const head = { id: 2, full_name: 'contributor/core', fork: false };
+ s.run.head_repository = structuredClone(head);
+ s.event.pull_request.head.repo = structuredClone(head);
+ s.pull.head.repo = structuredClone(head);
+ return s;
+}
+// Replace only the transport in the child. The real producer CLI parses arguments,
+// compiles on-disk workflows, reads the event and checkout, and manages its output.
+function producerCLI(s) {
+ writeFileSync(s.env.GITHUB_EVENT_PATH, JSON.stringify(s.event));
+ const statePath = join(s.options.cwd, '..', 'api.json');
+ const preload = join(s.options.cwd, '..', 'fetch.mjs');
+ const calls = join(s.options.cwd, '..', 'api-calls.log');
+ writeFileSync(calls, '');
+ writeFileSync(statePath, JSON.stringify({ run: s.run, pull: s.pull, rows: s.rows,
+  sha: s.env.GITHUB_SHA, tree: checkoutProof(s.options.cwd).tree }));
+ writeFileSync(preload, `
+import { readFileSync, appendFileSync } from 'node:fs';
+const data = JSON.parse(readFileSync(${JSON.stringify(statePath)}, 'utf8'));
+globalThis.fetch = async url => {
+ const target = new URL(url);
+ if (target.origin !== 'https://fixture.invalid') throw new Error('unexpected fixture origin');
+ const path = target.pathname;
+ appendFileSync(${JSON.stringify(calls)}, path + '\\n');
+ let response;
+ if (path.endsWith('/runs/800')) response = data.run;
+ else if (path.endsWith('/ci.yml')) response = { id: 10, path: data.run.path, state: 'active' };
+ else if (path.endsWith('/pulls/7')) response = data.pull;
+ else if (path.endsWith('/jobs')) response = { total_count: data.rows.length, jobs: data.rows };
+ else if (path.includes('/git/commits/')) response = { sha: data.sha, tree: { sha: data.tree } };
+ else throw new Error('unexpected fixture route');
+ return Response.json(response);
+};
+`);
+ const command = readFileSync(new URL('./README.md', import.meta.url), 'utf8')
+  .match(/Exact producer command:\n\n```sh\n([^\n]+)\n```/)?.[1];
+ if (!command) throw new Error('README producer command missing');
+ const result = spawnSync('bash', ['-c', 'bun() { command bun --preload "$FIXTURE_PRELOAD" "$@"; }\n' + command], {
+  env: { ...s.env, GITHUB_API_URL: 'https://fixture.invalid', GITHUB_TOKEN: 'fixture', FIXTURE_PRELOAD: preload,
+   TREE_VERDICT_TOOLS: fileURLToPath(new URL('.', import.meta.url)), RUNNER_TEMP: dirname(s.options.out) },
+  cwd: s.options.cwd, encoding: 'utf8', timeout: 10_000,
+ });
+ return { ...result, apiCalls: readFileSync(calls, 'utf8').trim().split('\n'),
+  outputText: s.env.GITHUB_OUTPUT ? readFileSync(s.env.GITHUB_OUTPUT, 'utf8') : '' };
+}
+test('README entry CLI authentic fork exits zero by name with no receipt, including a reused output path', () => {
+ const r = repository(), s = forkSource(r);
+ s.env.GITHUB_ACTIONS = 'true';
+ try {
+  for (const stale of [false, true]) {
+   if (stale) {
+    expect(producerCLI(source(r)).status).toBe(0);
+    expect(JSON.parse(readFileSync(s.options.out, 'utf8')).schema).toBe('tree-verdict/2');
+   }
+   const result = producerCLI(s);
+   expect(result.status).toBe(0);
+   expect(result.stdout.trim()).toBe('TREE_VERDICT_PRODUCER_NOT_ELIGIBLE: fork pull request');
+   expect(existsSync(s.options.out)).toBe(false);
+   expect(result.outputText.trim().split('\n').at(-1)).toBe('receipt-created=false');
+   expect(result.apiCalls).toEqual(['/repos/sample/core/actions/runs/800',
+    '/repos/sample/core/actions/workflows/ci.yml', '/repos/sample/core/pulls/7']);
+  }
+ } finally { r.close(); }
+});
+test('README entry CLI same-repository PR and default push replace stale output with actual receipts', () => {
+ const r = repository(), s = source(r);
+ s.env.GITHUB_ACTIONS = 'true';
+ try {
+  // A caller-supplied fork boolean cannot turn same-repository evidence into a skip.
+  s.run.head_repository.fork = true;
+  for (const event of ['pull_request', 'push']) {
+   s.run.event = event; s.env.GITHUB_EVENT_NAME = event;
+   s.run.head_branch = 'main'; s.env.GITHUB_REF = 'refs/heads/main';
+   if (event === 'push') {
+    s.run.head_sha = r.proof.sha;
+    for (const row of s.rows) row.head_sha = r.proof.sha;
+   }
+   writeFileSync(s.options.out, 'previous receipt');
+   const result = producerCLI(s);
+   expect(result.status).toBe(0);
+   expect(result.stdout).toContain('TREE_VERDICT_PRODUCED:');
+   const receipt = JSON.parse(readFileSync(s.options.out, 'utf8'));
+   expect(receipt).toMatchObject({ schema: 'tree-verdict/2', event, pr: event === 'push' ? 0 : 7,
+    head_sha: s.run.head_sha, tested_sha: r.proof.sha, tree: r.proof.tree });
+   expect(receipt.jobs).toHaveLength(5);
+   expect(result.outputText.trim().split('\n').slice(-2)).toEqual(['receipt-created=false', 'receipt-created=true']);
+  }
+ } finally { r.close(); }
+});
+const forkPlants = {
+ 'missing run head repository': s => { delete s.run.head_repository; },
+ 'blank run source name': s => { s.run.head_repository.full_name = ''; },
+ 'invalid run source ID': s => { s.run.head_repository.id = 0; },
+ 'same source ID, different name': s => { s.run.head_repository.id = 1; },
+ 'same source name, different ID': s => { s.run.head_repository.full_name = s.run.repository.full_name; },
+ 'wrong event source ID': s => { s.event.pull_request.head.repo.id = 3; },
+ 'wrong event source name': s => { s.event.pull_request.head.repo.full_name = 'another/core'; },
+ 'missing event source repository': s => { delete s.event.pull_request.head.repo; },
+ 'missing event base': s => { delete s.event.pull_request.base; },
+ 'wrong event base repository': s => { s.event.pull_request.base.repo.id = 3; },
+ 'wrong event base name': s => { s.event.pull_request.base.repo.full_name = 'another/core'; },
+ 'wrong event base branch': s => { s.event.pull_request.base.ref = 'other'; },
+ 'blank default branch': s => { s.event.repository = { ...s.event.repository, default_branch: '' };
+  s.event.pull_request.base.ref = s.pull.base.ref = ''; },
+ 'wrong event head SHA': s => { s.event.pull_request.head.sha = 'e'.repeat(40); },
+ 'wrong event repository': s => { s.event.repository = { ...s.event.repository, id: 3 }; },
+ 'missing event PR number': s => { delete s.event.number; },
+ 'wrong API source ID': s => { s.pull.head.repo.id = 3; },
+ 'wrong API source name': s => { s.pull.head.repo.full_name = 'another/core'; },
+ 'missing API source repository': s => { delete s.pull.head.repo; },
+ 'wrong API base repository': s => { s.pull.base.repo = { id: 3, full_name: 'another/core' }; },
+ 'wrong API base name': s => { s.pull.base.repo = { id: 1, full_name: 'another/core' }; },
+ 'wrong API base branch': s => { s.pull.base.ref = 'other'; },
+ 'wrong API PR number': s => { s.pull.number = 8; },
+ 'wrong API head SHA': s => { s.pull.head.sha = 'e'.repeat(40); },
+ 'inactive run': s => { s.run.status = 'completed'; },
+ 'wrong workflow': s => { s.run.path = '.github/workflows/other.yml'; },
+ 'fork push': s => { s.run.event = s.env.GITHUB_EVENT_NAME = 'push'; },
+ 'fork dispatch': s => { s.run.event = s.env.GITHUB_EVENT_NAME = 'workflow_dispatch'; },
+ 'pull_request_target': s => { s.run.event = s.env.GITHUB_EVENT_NAME = 'pull_request_target'; },
+};
+for (const [name, plant] of Object.entries(forkPlants)) test(`entry CLI malformed fork ${name} still refuses`, () => {
+ const r = repository(), s = forkSource(r);
+ try {
+  plant(s);
+  writeFileSync(s.options.out, 'previous receipt');
+  const result = producerCLI(s);
+  expect(result.status).toBe(1);
+  expect(result.stdout).toContain('TREE_VERDICT_PRODUCER_REFUSED:');
+  expect(result.stdout).not.toContain('TREE_VERDICT_PRODUCER_NOT_ELIGIBLE:');
+  expect(existsSync(s.options.out)).toBe(false);
+  expect(result.outputText.trim().split('\n').at(-1)).toBe('receipt-created=false');
+ } finally { r.close(); }
+});
+test('receipt-created stays false until the eligible receipt has been written', async () => {
+ const r = repository(), s = source(r);
+ try {
+  expect(await produce(s.options, s.env, s.api, line => {
+   expect(line).toContain('TREE_VERDICT_PRODUCED:');
+   expect(JSON.parse(readFileSync(s.options.out, 'utf8')).verdict).toBe('success');
+   expect(readFileSync(s.env.GITHUB_OUTPUT, 'utf8')).toBe('receipt-created=false\n');
+  })).toBe(0);
+  expect(readFileSync(s.env.GITHUB_OUTPUT, 'utf8')).toBe('receipt-created=false\nreceipt-created=true\n');
+ } finally { r.close(); }
+});
+for (const failure of ['missing leg', 'receipt write', 'malformed arguments']) test(`entry CLI eligible ${failure} resets reused output to false and fails`, () => {
+ const r = repository(), s = source(r);
+ try {
+  expect(producerCLI(s).status).toBe(0);
+  let result;
+  if (failure === 'malformed arguments') {
+   result = spawnSync(process.execPath, [fileURLToPath(new URL('./producer.mjs', import.meta.url)), '--out', s.options.out],
+    { env: s.env, encoding: 'utf8', timeout: 10_000 });
+  } else {
+   if (failure === 'missing leg') s.rows.shift();
+   else s.options.out = join(r.dir, 'absent', 'receipt.json');
+   result = producerCLI(s);
+   expect(existsSync(s.options.out)).toBe(false);
+  }
+  expect(result.status).toBe(1);
+  expect(readFileSync(s.env.GITHUB_OUTPUT, 'utf8').trim().split('\n').at(-1)).toBe('receipt-created=false');
+ } finally { r.close(); }
+});
+test('entry CLI outside Actions still writes an eligible receipt without GITHUB_OUTPUT', () => {
+ const r = repository(), s = source(r);
+ try {
+  delete s.env.GITHUB_OUTPUT;
+  delete s.env.GITHUB_ACTIONS;
+  expect(producerCLI(s).status).toBe(0);
+  expect(JSON.parse(readFileSync(s.options.out, 'utf8')).verdict).toBe('success');
+ } finally { r.close(); }
+});
+for (const kind of ['same PR', 'fork', 'push']) for (const missing of [true, false]) test(`Actions entry CLI ${kind} refuses ${missing ? 'missing' : 'empty'} GITHUB_OUTPUT by name`, () => {
+ const r = repository(), s = kind === 'fork' ? forkSource(r) : source(r);
+ try {
+  s.env.GITHUB_ACTIONS = 'true';
+  if (missing) delete s.env.GITHUB_OUTPUT; else s.env.GITHUB_OUTPUT = '';
+  if (kind === 'push') {
+   s.run.event = s.env.GITHUB_EVENT_NAME = 'push'; s.run.head_branch = 'main'; s.env.GITHUB_REF = 'refs/heads/main';
+   s.run.head_sha = r.proof.sha; for (const row of s.rows) row.head_sha = r.proof.sha;
+  }
+  const result = producerCLI(s);
+  expect(result.status).toBe(1);
+  expect(result.stdout.trim()).toBe('TREE_VERDICT_PRODUCER_REFUSED: COVER_PRODUCER: GITHUB_OUTPUT required on Actions');
+  expect(existsSync(s.options.out)).toBe(false);
+  expect(result.apiCalls).toEqual(['']);
+ } finally { r.close(); }
+});
+test('output write failure after receipt creation refuses and clears the candidate receipt', async () => {
+ const r = repository(), s = source(r), output = s.env.GITHUB_OUTPUT, blocked = join(r.dir, 'blocked-output');
+ mkdirSync(blocked);
+ try {
+  const result = await produce(s.options, s.env, s.api, line => {
+   if (line.startsWith('TREE_VERDICT_PRODUCED:')) {
+    expect(existsSync(s.options.out)).toBe(true);
+    s.env.GITHUB_OUTPUT = blocked;
+   }
+  });
+  expect(result).toBe(1);
+  expect(existsSync(s.options.out)).toBe(false);
+  expect(readFileSync(output, 'utf8')).toBe('receipt-created=false\n');
+ } finally { r.close(); }
+});
+test('producer becoming a fork during receipt collection refuses without writing evidence', async () => {
+ const r = repository(), s = source(r);
+ try {
+  const original = s.api;
+  let reads = 0;
+  s.api = async path => {
+   if (path.endsWith('/runs/800') && ++reads === 2) {
+    s.run.head_repository = { id: 2, full_name: 'contributor/core' };
+    s.pull.head.repo = s.event.pull_request.head.repo = s.run.head_repository;
+    writeFileSync(s.env.GITHUB_EVENT_PATH, JSON.stringify(s.event));
+   }
+   return structuredClone(await original(path));
+  };
+  expect(await produce(s.options, s.env, s.api)).toBe(1);
+  expect(existsSync(s.options.out)).toBe(false);
+ } finally { r.close(); }
+});
 for(const style of ['parts','core'])test(`${style} collector compiles checked source, collects every successful leg, executes no chain`,async()=>{
  const r=repository(style),s=source(r);try{
  expect(await produce(s.options,s.env,s.api)).toBe(0);

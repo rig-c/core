@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.0](https://github.com/rig-c/core/compare/v3.4.3...v3.5.0) (2026-11-07)
+
+
+### Features
+
+* **build:** a rigc-run/1 run stamp beside what build writes ([#1723](https://github.com/rig-c/core/issues/1723)) ([334062e](https://github.com/rig-c/core/commit/334062e4acad05c47c5b83bcfbba78962da8be48))
+
 ## [3.4.3](https://github.com/rig-c/core/compare/v3.4.2...v3.4.3) (2026-11-07)
 
 

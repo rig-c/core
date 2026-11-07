@@ -81236,8 +81236,12 @@ function runCurrencySuite(): number {
         const resolvedTag = /^needs\.[A-Za-z_][\w-]*\.outputs\.publish\s*==\s*'true'$/;
         const needsOf = (job: WfJob): string[] => Array.isArray(job.needs) ? job.needs : job.needs === undefined ? [] : [job.needs];
         const admittedCut = (publisher: WfJob): boolean => {
-          const relayName = /^\$\{\{ needs\.([A-Za-z_][\w-]*)\.outputs\.ready == 'true' \}\}$/.exec(publisher.if ?? '')?.[1];
+          const relayName = /^\$\{\{ (?:!cancelled\(\) && )?needs\.([A-Za-z_][\w-]*)\.outputs\.ready == 'true' \}\}$/.exec(publisher.if ?? '')?.[1];
           if (relayName === undefined) return false;
+          if (publisher.if !== `\${{ !cancelled() && needs.${relayName}.outputs.ready == 'true' }}`) {
+            faults.push(`publish condition ${JSON.stringify(publisher.if ?? null)} lacks a status function (!cancelled()), so implicit success() skips publish whenever the reuse path skips gate`);
+            return false;
+          }
           const relay = parsed.jobs?.[relayName];
           const producerId = /^\$\{\{ steps\.([A-Za-z_][\w-]*)\.outputs\.ready \}\}$/.exec(relay?.outputs?.ready ?? '')?.[1];
           const producer = relay?.steps?.find((step) => step.id === producerId);
@@ -81369,7 +81373,8 @@ function runCurrencySuite(): number {
       const plantInto = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
       const plants: Array<{ what: string; yml: [string, string] | null; doc: [string, string] | null; quiet?: boolean }> = [
         { what: 'release-please stops being held to a push', yml: ["        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'], doc: null },
-        { what: 'the publishing job stops being held to the admission', yml: ["    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n", '    needs: [plan, admit]\n'], doc: null },
+        { what: 'the publishing job stops being held to the admission', yml: ["    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n", '    needs: [plan, admit]\n'], doc: null },
+        { what: 'the publishing job condition lacks a status function', yml: ["    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n", "    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n"], doc: null },
         { what: 'the admission starts ready before checking the cut', yml: ['          ready=false\n', '          ready=true\n'], doc: null },
         { what: 'the admission reads a different cut output', yml: ['          CUT: ${{ needs.plan.outputs.publish }}\n', '          CUT: ${{ needs.plan.outputs.unrelated }}\n'], doc: null },
         { what: 'the confirmation stops refusing an empty version', yml: [" && inputs.version != '' && inputs.tag == '' }}", " && inputs.tag == '' }}"], doc: null },
@@ -81748,7 +81753,11 @@ function runCurrencySuite(): number {
         !admit.steps?.some(step => step.id === 'decision' && step.env?.GATE_RESULT === '${{ needs.gate.result }}' &&
           step.env?.VERDICT === '${{ needs.gate.outputs.verdict }}')) faults.push('release.yml: admission does not read the actual gate and reuse results');
       if (!needsOf(publishJob).includes('admit') || needsOf(publishJob).includes(gateName) ||
-        publishJob.if !== "${{ needs.admit.outputs.ready == 'true' }}") faults.push('release.yml: publish does not use the single admission output');
+        (publishJob.if ?? '').replace(/^\$\{\{\s*!cancelled\(\)\s*&&\s*/, '${{ ') !== "${{ needs.admit.outputs.ready == 'true' }}") {
+        faults.push('release.yml: publish does not use the single admission output');
+      } else if (publishJob.if !== "${{ !cancelled() && needs.admit.outputs.ready == 'true' }}") {
+        faults.push(`release.yml: publish condition ${JSON.stringify(publishJob.if ?? null)} lacks a status function (!cancelled()), so implicit success() skips publish whenever the reuse path skips "${gateName}"`);
+      }
       const planSteps = planJob.steps ?? [];
       const please = planSteps.findIndex((step) => /release-please/.test(step.uses ?? ''));
       if (!heldToPush(planSteps[please]) && !heldToPush(planJob)) {
@@ -81941,7 +81950,7 @@ function runCurrencySuite(): number {
         graphFaults(edited['release.yml'] ?? '', Object.fromEntries(Object.entries(edited).filter(([file]) => file !== 'release.yml')));
       const standing = check(texts);
       const gateIf = "    if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}\n    permissions:\n      contents: read # check out the tag\n    uses:";
-      const publishIf = "    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n";
+      const publishIf = "    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n";
       /** `from` → `to` where `from` occurs exactly once, or null — a plant whose anchor is ambiguous has planted nothing it can name. */
       const uniq = (text: string, from: string, to: string): string | null => (text.split(from).length === 2 ? text.replace(from, to) : null);
       const downloadStep = releaseText.slice(releaseText.indexOf('      - name: Download the merged tally the gate wrote\n'), releaseText.indexOf('      # The only chain reader'));
@@ -81958,7 +81967,8 @@ function runCurrencySuite(): number {
           { what: 'the publish stops needing admission', edit: once(releaseText, '    needs: [plan, admit]\n', '    needs: [plan]\n') },
           { what: 'the gate loses the resolved condition', edit: once(releaseText, gateIf, gateIf.replace("needs.plan.outputs.publish == 'true'", "github.event_name == 'push'")) },
           { what: 'a dispatch reaches the gate past the resolve step', edit: once(releaseText, gateIf, gateIf.replace("needs.plan.outputs.publish == 'true'", "needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'")) },
-          { what: 'the publish is keyed on release-please again', edit: uniq(releaseText, publishIf, publishIf.replace("needs.admit.outputs.ready == 'true'", "github.event_name == 'push' && needs.plan.outputs.release_created == 'true'")) },
+          { what: 'the publish is keyed on release-please again', edit: uniq(releaseText, publishIf, "    needs: [plan, admit]\n    if: ${{ github.event_name == 'push' && needs.plan.outputs.release_created == 'true' }}\n") },
+          { what: 'the publish condition lacks a status function', edit: uniq(releaseText, publishIf, "    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n") },
           { what: 'the gate is called on the default branch rather than the tag', edit: uniq(releaseText, '\n      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n\n', "\n      ref: ''\n\n") },
           { what: 'release-please runs on a dispatch', edit: uniq(releaseText, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n') },
           { what: 'the resolve step is skipped on a dispatch', edit: uniq(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n") },
@@ -82120,9 +82130,14 @@ function runCurrencySuite(): number {
         const tag = `\${{ needs.${planName}.outputs.tag }}`;
         const ref = `\${{ needs.${planName}.outputs.sha || needs.${planName}.outputs.tag }}`;
         const gateCondition = "${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}";
-        const publishCondition = "${{ needs.admit.outputs.ready == 'true' }}";
+        const publishCondition = "${{ !cancelled() && needs.admit.outputs.ready == 'true' }}";
         if (gateEntry[1].if !== gateCondition) faults.push(`release.yml: job "${gateEntry[0]}" runs under a different cut-only miss condition`);
-        if (publishEntry[1].if !== publishCondition || !needsOf(publishEntry[1]).includes('admit')) faults.push(`release.yml: job "${publishEntry[0]}" runs under a different admission condition`);
+        if (!needsOf(publishEntry[1]).includes('admit') ||
+          (publishEntry[1].if ?? '').replace(/^\$\{\{\s*!cancelled\(\)\s*&&\s*/, '${{ ') !== "${{ needs.admit.outputs.ready == 'true' }}") {
+          faults.push(`release.yml: job "${publishEntry[0]}" runs under a different admission condition`);
+        } else if (publishEntry[1].if !== publishCondition) {
+          faults.push(`release.yml: job "${publishEntry[0]}" condition ${JSON.stringify(publishEntry[1].if ?? null)} lacks a status function (!cancelled()), so implicit success() skips it whenever the reuse path skips "${gateEntry[0]}"`);
+        }
         if (gateEntry[1].with?.ref !== ref) faults.push(`release.yml: job "${gateEntry[0]}" calls ${SHARDS_FILE} with ref ${JSON.stringify(gateEntry[1].with?.ref ?? null)}, not ${ref}`);
         const publishSteps = publishEntry[1].steps ?? [];
         const checkout = publishSteps.find((step) => /^actions\/checkout@/.test(step.uses ?? ''));
@@ -82169,7 +82184,8 @@ function runCurrencySuite(): number {
         { what: 'release-please runs on a dispatch', yml: one(releaseText, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'), want: 'so a dispatch could cut' },
         { what: 'the resolve step skipped on a dispatch', yml: one(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n"), want: 'could skip its refusals' },
         { what: 'the gate keyed on release-please again', yml: one(releaseText, "    needs: [plan, reuse]\n    if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}\n", "    needs: plan\n    if: ${{ github.event_name == 'push' && needs.plan.outputs.release_created == 'true' }}\n"), want: 'job "gate" runs under' },
-        { what: 'the publish admits any dispatch', yml: one(releaseText, "    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n", "    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch' }}\n"), want: 'job "publish" runs under' },
+        { what: 'the publish admits any dispatch', yml: one(releaseText, "    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n", "    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch' }}\n"), want: 'job "publish" runs under' },
+        { what: 'the publish condition lacks a status function', yml: one(releaseText, "    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n", "    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n"), want: 'lacks a status function (!cancelled()), so implicit success() skips it whenever the reuse path skips "gate"' },
         { what: 'the gate reads the cut tag again', yml: one(releaseText, '\n      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n', '\n      ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'with ref' },
         { what: 'the publish checks out the cut tag again', yml: one(releaseText, '          # Do not resolve a push\'s mutable tag again after the plan checked it.\n          ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n', '          # Do not resolve a push\'s mutable tag again after the plan checked it.\n          ref: ${{ needs.plan.outputs.tag_name }}\n'), want: 'checks out' },
         { what: 'the confirmation reads the cut tag again', yml: one(releaseText, 'TAG_NAME: ${{ needs.plan.outputs.tag }}', 'TAG_NAME: ${{ needs.plan.outputs.tag_name }}'), want: 'reads TAG_NAME' },

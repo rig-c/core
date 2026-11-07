@@ -558,10 +558,12 @@ default shell. The source coverage compiler, receipt schema, OIDC and consumer
 byte/provenance equality checks retain their existing contracts.
 
 The publishing **job** may use a single literal `==` or `!=` comparison over
-`needs.<job>.outputs.<name>`, with an optional Actions wrapper. That source job must
+`needs.<job>.outputs.<name>` (optionally prefixed with `!cancelled() && ` so an
+upstream skipped gate in the `needs` graph does not trip Actions' implicit
+`success()`), with an optional Actions wrapper. That source job must
 exist in the same workflow and be a direct dependency. A pack or publish **step**
 may compare an earlier, unique same-job `steps.<id>.outputs.<name>` to a literal.
-Functions, logical combinations, forward references and other contexts refuse.
+Other functions, logical combinations, forward references and other contexts refuse.
 
 Both measured release workflows currently condition their source checkout, Bun and
 dependency setup on the target output. Adoption must make those prerequisites

@@ -234,7 +234,8 @@ export function inspectPublication(body) {
 export function publicationCondition(value, scope, all, index) {
   if (value === undefined) return true;
   if (typeof value !== 'string') return false;
-  const text = value.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '').trim();
+  const raw = value.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '').trim();
+  const text = scope === 'needs' ? raw.replace(/^!cancelled\(\)\s*&&\s*/, '') : raw;
   const match = /^(steps|needs)\.([\w-]+)\.outputs\.([\w-]+)\s*(==|!=)\s*('(?:[^'\r\n]|'')*'|true|false|null|-?\d+(?:\.\d+)?)$/.exec(text);
   if (!match || match[1] !== scope) return false;
   if (scope === 'needs') return Object.hasOwn(all, match[2]);

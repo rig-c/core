@@ -43,4 +43,4 @@
 import { CORE_COMMAND_RUNS, CORE_ENTRY_RUNS } from './src/cli/core_commands.ts';
 import { runCli } from './src/cli/shared.ts';
 
-runCli({ checkout: 'cli_core.ts', linksRuntime: false, runs: { ...CORE_COMMAND_RUNS, ...CORE_ENTRY_RUNS } }, process.argv.slice(2));
+runCli({ checkout: 'cli_core.ts', now: () => new Date().toISOString(), linksRuntime: false, runs: { ...CORE_COMMAND_RUNS, ...CORE_ENTRY_RUNS } }, process.argv.slice(2));

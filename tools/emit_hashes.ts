@@ -16,6 +16,8 @@
  * across two commits. This tool is that instrument, and it is measurement only:
  * it changes nothing under `src/` and nothing in `cli.ts`.
  *
+ * The wall-clock producer receipt `run.json` is excluded. Every other file is compared.
+ *
  * ⚠️ It hashes what lands on disk through the CLI, not what `compile()` returns.
  * `build --pack` and `build --copy-images` write atlas text after `compile` has
  * returned (docs/COMPILED_MODEL.md §5, third bullet), so a gate on the return
@@ -353,7 +355,7 @@ function filesUnder(dir: string): string[] {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
-      else out.push(relative(dir, full).split(sep).join('/'));
+      else if (relative(dir, full) !== 'run.json') out.push(relative(dir, full).split(sep).join('/'));
     }
   };
   walk(dir);

@@ -3050,7 +3050,7 @@ function cmdSplit(flags: Record<string, string>): void {
  * is `build --pack` run over a build's own lifted regions.
  */
 export const CORE_ENTRY_RUNS: Readonly<Record<string, CommandRun>> = {
-  build: ({ flags }) => runBuild(flags, MODEL_AND_TEXT_GATE),
+  build: ({ flags, now }) => runBuild(flags, MODEL_AND_TEXT_GATE, null, now),
   repack: (args) => cmdRepack(args, MODEL_AND_TEXT_GATE),
 };
 

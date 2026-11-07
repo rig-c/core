@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 interface PackageMeta {
+  name?: string;
   version?: string;
   repository?: string | { url?: string };
 }

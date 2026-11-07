@@ -67874,12 +67874,110 @@ function firstLineApartOf(a: string, b: string): string {
   return 'equal';
 }
 
+/** Producer stamps are measured through both real executable entries. */
+function runStampControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-run-stamp-'));
+  const fixture = join(work, 'fixture');
+  cpSync(join(import.meta.dir, 'gallery', 'nod'), fixture, { recursive: true });
+  const rig = join(fixture, 'rig.json');
+  const motion = join(fixture, 'motion.json');
+  const digest = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex');
+  interface Stamp {
+    spec: string; package: { name: string; version: string }; command: string;
+    started_at: string; finished_at: string;
+    inputs: Array<{ role: string; path: string; sha256: string }>;
+    outputs: Array<{ path: string; sha256: string }>;
+  }
+  const version = (JSON.parse(readFileSync(join(import.meta.dir, 'package.json'), 'utf8')) as { version: string }).version;
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const mode of ['plain', 'copy', 'pack', 'cut']) {
+      const out = join(fixture, `${entry}-${mode}`);
+      mkdirSync(out);
+      writeFileSync(join(out, 'stray.txt'), 'not a stage output');
+      const cuts = join(fixture, 'cuts.json');
+      writeFileSync(cuts, JSON.stringify({ probe: { rig: 'rig.json', motion: 'motion.json', out: `${entry}-${mode}` } }));
+      const args = mode === 'cut' ? ['--cut', 'probe', '--cuts', cuts] : ['--rig', rig, '--motion', motion, '--out', out];
+      if (mode === 'copy') args.push('--copy-images');
+      if (mode === 'pack') args.push('--pack');
+      const run = (): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [entry, 'build', ...args], { cwd: import.meta.dir, encoding: 'utf8' });
+      const first = run();
+      const stampPath = join(out, 'run.json');
+      const read = (): Stamp | null => existsSync(stampPath) ? JSON.parse(readFileSync(stampPath, 'utf8')) as Stamp : null;
+      const audit = (stamp: Stamp | null, status: number | null): string[] => {
+        if (status !== 0) return stamp === null ? [] : ['stamp on refusal'];
+        if (stamp === null) return ['stamp missing on green'];
+        const faults: string[] = [];
+        if (stamp.spec !== 'rigc-run/1' || stamp.package.name !== 'rig-c' || stamp.package.version !== version || stamp.command !== 'build') faults.push('identity');
+        if (Object.keys(stamp).join(',') !== 'spec,package,command,started_at,finished_at,inputs,outputs') faults.push('key order');
+        if (!/^\d{4}-.*Z$/.test(stamp.started_at) || !/^\d{4}-.*Z$/.test(stamp.finished_at) || stamp.finished_at < stamp.started_at) faults.push('time');
+        const roles = mode === 'cut' ? 'rig,motion,cuts' : 'rig,motion';
+        if (stamp.inputs.map((row) => row.role).join(',') !== roles) faults.push('input roles');
+        for (const row of [...stamp.inputs, ...stamp.outputs]) {
+          if (isAbsolute(row.path) || row.path.includes('\\') || digest(join(out, row.path)) !== row.sha256) faults.push('path/hash');
+        }
+        const files = readdirSync(out).filter((file) => file !== 'run.json' && file !== 'stray.txt').sort();
+        if (JSON.stringify(stamp.outputs.map((row) => row.path)) !== JSON.stringify(files)) faults.push('output inventory');
+        return faults;
+      };
+      const original = read();
+      const faults = audit(original, first.status);
+      say('RS01_BOTH_ENTRIES_WRITE_THE_RETURNED_OUTPUTS_AND_INPUTS', faults.length === 0 && first.status === 0,
+        `${entry} ${mode}: exit=${String(first.status)}, ${original?.outputs.length ?? 0} outputs, faults=${faults.join(',')}`, 'a successful producer names its inputs and actual output bytes');
+      if (original === null) continue;
+      const wrongVersion = structuredClone(original); wrongVersion.package.version += '-plant';
+      const wrongHash = structuredClone(original); wrongHash.outputs[0].sha256 = '0'.repeat(64);
+      say('RS02_THE_STAMP_READER_REJECTS_PLANTED_FAILURES',
+        audit(null, 0).includes('stamp missing on green') && audit(original, 1).includes('stamp on refusal') && audit(wrongVersion, 0).includes('identity') && audit(wrongHash, 0).includes('path/hash'),
+        `${entry} ${mode}: missing, refused, version and hash plants`, 'a reader must be observed refusing every claimed failure');
+      const usage = spawnSync(process.execPath, [entry, 'build', ...args.filter((arg) => arg !== '--pack'), '--page-size', 'bad', '--pack'], { cwd: import.meta.dir, encoding: 'utf8' });
+      say('RS07_USAGE_ERRORS_PRESERVE_THE_EARLIER_STAMP', usage.status === 2 && readFileSync(stampPath, 'utf8') === JSON.stringify(original, null, 2) + '\n',
+        `${entry} ${mode}: exit=${String(usage.status)}`, 'usage errors must stop before touching the output directory');
+      const previousMotion = readFileSync(motion, 'utf8');
+      writeFileSync(motion, previousMotion + '\n');
+      const second = run();
+      const changed = read();
+      say('RS03_MOTION_CHANGES_ARE_BOUND_AND_OTHER_OUTPUT_BYTES_STAY_IDENTICAL',
+        second.status === 0 && audit(changed, second.status).length === 0 && changed?.inputs.find((row) => row.role === 'motion')?.sha256 !== original.inputs.find((row) => row.role === 'motion')?.sha256 && JSON.stringify(changed?.outputs) === JSON.stringify(original.outputs),
+        `${entry} ${mode}: exit=${String(second.status)}, motion whitespace changed, output hashes compared`, 'a changed input replaces the earlier receipt while deterministic artifacts remain equal');
+      writeFileSync(motion, '{');
+      const refused = run();
+      say('RS04_REFUSAL_REMOVES_AN_EARLIER_STAMP', refused.status !== 0 && !existsSync(stampPath),
+        `${entry} ${mode}: exit=${String(refused.status)}, stamp exists=${existsSync(stampPath)}`, 'a reused output directory must not retain an earlier success receipt');
+      writeFileSync(motion, previousMotion);
+    }
+  }
+  // A minimal copy of the receipt module gives metadata plants their own package.
+  const root = join(work, 'package');
+  mkdirSync(join(root, 'src', 'cli'), { recursive: true });
+  for (const file of ['src/cli/run_stamp.ts', 'src/errors.ts', 'src/package_meta.ts']) cpSync(join(import.meta.dir, file), join(root, file));
+  for (const metadata of [{ name: 'rig-c' }, { name: '', version }, { name: 'rig-c', version: '' }]) {
+    writeFileSync(join(root, 'package.json'), JSON.stringify(metadata));
+    const planted = spawnSync(process.execPath, ['-e', "import {runStampPackage} from './src/cli/run_stamp.ts'; runStampPackage();"], { cwd: root, encoding: 'utf8' });
+    say('RS05_INVALID_PACKAGE_METADATA_IS_REFUSED', planted.status !== 0 && planted.stderr.includes('RUN_STAMP_PACKAGE'),
+      `metadata=${JSON.stringify(metadata)}, exit=${String(planted.status)}`, 'missing or empty metadata cannot identify a producer');
+  }
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'rig-c', version }));
+  writeFileSync(join(root, 'motion.json'), '{}');
+  const changedInput = spawnSync(process.execPath, ['-e', `
+    import {readRunInputs, writeRunStamp, runStampPackage} from './src/cli/run_stamp.ts';
+    import {writeFileSync} from 'node:fs';
+    const inputs = readRunInputs([{role: 'motion', path: 'motion.json'}]);
+    writeFileSync('motion.json', '{}\\n');
+    writeRunStamp('.', inputs, [], runStampPackage(), '2026-01-01T00:00:00.000Z', () => '2026-01-01T00:00:01.000Z');
+  `], { cwd: root, encoding: 'utf8' });
+  say('RS06_AN_INPUT_CHANGED_DURING_BUILD_REFUSES_PUBLICATION', changedInput.status !== 0 && changedInput.stderr.includes('RUN_STAMP_INPUT_CHANGED') && !existsSync(join(root, 'run.json')),
+    `exit=${String(changedInput.status)}, stamp exists=${existsSync(join(root, 'run.json'))}`, 'the receipt cannot bind a recipe changed while the stage ran');
+  rmSync(work, { recursive: true, force: true });
+}
+
 function runCliSuite(): number {
   console.log('\n── cli ergonomics (subprocess: bun cli.ts …) ──');
   let bad = 0;
   const say = (name: string, ok: boolean, detail: string, why: string): void => {
     bad += reportCase(name, ok, detail, why);
   };
+
+  runStampControls(say);
 
   {
     const { status, stderr } = runCli(['init']);

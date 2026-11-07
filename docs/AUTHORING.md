@@ -8075,7 +8075,46 @@ Fix A00 and run it again.
 `both ◑` marks a mixed assertion: its validity half always runs and its policy
 clauses are gated by profile.
 
-### 5.3 The report as a document — `--report <file>`
+#### Producer run stamp (`run.json`, `rigc-run/1`)
+
+Both CLI entries write `run.json` beside a successful `build` after every gate
+and output write finishes. The fixed top-level key order is `spec`, `package`,
+`command`, `started_at`, `finished_at`, `inputs`, `outputs`.
+`package` has `name`, `version` in that order, read from the running package's
+own `package.json`. Its name is `rig-c`. `command` is `build`.
+The UTC timestamps use ISO 8601 with milliseconds and a trailing `Z`, supplied
+by the executable entry's wall clock.
+
+This follows the shared [rig-run/1 shape and rules](https://github.com/rig-c/parts/blob/15f4993e09d49b82e380ecedc772f02e4afe4032/docs/STABILITY.md#run-stamp-runjson-spec-rig-run1).
+The one schema difference is that `inputs` replaces `config` in the same
+position. Each input row has `role`, `path`, `sha256`, in that order.
+Roles sort in the fixed order `rig`, `motion`, `manifest`, `cuts`, then by
+path in UTF-16 code-unit order. Explicit builds bind the rig and motion plus
+the manifest when supplied. Named cuts additionally bind their cuts table and
+the rig, motion and manifest resolved from it. These are the build recipe
+files. Image and imported-atlas content remains governed by the existing
+compiler and gate.
+
+Every path is relative to the output directory, uses `/`, and may start with
+`../` for an input outside that directory. Output rows have `path`, `sha256`,
+in that order, sorted by path in UTF-16 code-unit order. The inventory comes
+from the files the build writes, including copied or packed pages. Earlier or
+stray files in the output directory are excluded. SHA-256 binds file bytes.
+Inputs are captured before compilation and checked again before publication.
+`RUN_STAMP_INPUT_CHANGED` refuses a recipe changed during the build and asks
+for a rerun with fixed inputs. `RUN_STAMP_PACKAGE` refuses a missing or empty
+package name or version.
+
+An earlier stamp is removed before compilation. A refused build leaves no
+stamp. Usage errors stop before removal. `repack` and in-process compilation
+retain their existing output contracts. `run.json` records wall-clock time
+and is excluded from A18 and `emit_hashes` byte comparisons. All other output
+bytes keep their existing determinism contract.
+
+**Stability promise.** The keys, key order and meanings of `rigc-run/1` are
+fixed. Adding, removing or redefining a key requires a new spec version.
+
+## 5.3 The report as a document — `--report <file>`
 
 The lines above are written for an agent to read. A program that acts on a build —
 take it or refuse it, read where the packer put the pages — should not read them with

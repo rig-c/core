@@ -173,6 +173,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { RUN_STAMP_FILE } from '../src/cli/run_stamp.ts';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { MODEL_DOCUMENT_FILE } from '../src/model.ts';
@@ -355,7 +356,7 @@ function filesUnder(dir: string): string[] {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (relative(dir, full) !== 'run.json') out.push(relative(dir, full).split(sep).join('/'));
+      else if (relative(dir, full) !== RUN_STAMP_FILE) out.push(relative(dir, full).split(sep).join('/'));
     }
   };
   walk(dir);

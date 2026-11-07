@@ -7377,7 +7377,8 @@ retain the minimal inputs and report that code rather than inventing author data
 | <a id="CE_COMPILE_ATLAS_REGION_UNKNOWN"></a>`CE_COMPILE_ATLAS_REGION_UNKNOWN` | “image "&lt;value&gt;" resolves to region "&lt;value&gt;", which the atlas at &lt;value&gt; does not have. [Did you mean &lt;value&gt;?  / ]The atlas declares &lt;value&gt; region(s): &lt;value&gt;”<br>Also: “&lt;value&gt;.png” | Correct the image's region name or add that region to the imported atlas. |
 | <a id="CE_COMPILE_ATLAS_REGION_PAGE_MISSING"></a>`CE_COMPILE_ATLAS_REGION_PAGE_MISSING` | “region "&lt;value&gt;" sits on page "&lt;value&gt;" of &lt;value&gt;, which is not on disk at &lt;value&gt;” | Supply the PNG page named by this region at the atlas-relative path. |
 | <a id="CE_COMPILE_ATLAS_REGION_OUTSIDE_PAGE"></a>`CE_COMPILE_ATLAS_REGION_OUTSIDE_PAGE` | “region "&lt;value&gt;" is at &lt;value&gt;,&lt;value&gt; sized &lt;value&gt;x&lt;value&gt; on a &lt;value&gt;x&lt;value&gt; page in &lt;value&gt;; the rectangle runs off the page, so its UVs would leave the texture” | Correct the atlas bounds so this region's rectangle stays on its page. |
-
+| <a id="CE_RUN_STAMP_PACKAGE"></a>`CE_RUN_STAMP_PACKAGE` | “RUN_STAMP_PACKAGE: package.json must supply a non-empty name and version” | Restore the running package's own non-empty name and version before building. |
+| <a id="CE_RUN_STAMP_INPUT_CHANGED"></a>`CE_RUN_STAMP_INPUT_CHANGED` | “RUN_STAMP_INPUT_CHANGED: &lt;value&gt; input changed during build; rerun with fixed inputs” | Freeze the named recipe input for the whole build and rerun. |
 
 #### 5.1.3 Manifest, setup and animation targets
 
@@ -8075,7 +8076,7 @@ Fix A00 and run it again.
 `both ◑` marks a mixed assertion: its validity half always runs and its policy
 clauses are gated by profile.
 
-#### Producer run stamp (`run.json`, `rigc-run/1`)
+**Producer run stamp (`run.json`, `rigc-run/1`)**
 
 Both CLI entries write `run.json` beside a successful `build` after every gate
 and output write finishes. The fixed top-level key order is `spec`, `package`,
@@ -8101,8 +8102,8 @@ in that order, sorted by path in UTF-16 code-unit order. The inventory comes
 from the files the build writes, including copied or packed pages. Earlier or
 stray files in the output directory are excluded. SHA-256 binds file bytes.
 Inputs are captured before compilation and checked again before publication.
-`RUN_STAMP_INPUT_CHANGED` refuses a recipe changed during the build and asks
-for a rerun with fixed inputs. `RUN_STAMP_PACKAGE` refuses a missing or empty
+`CE_RUN_STAMP_INPUT_CHANGED` (message label `RUN_STAMP_INPUT_CHANGED`) refuses a recipe changed during the build and asks
+for a rerun with fixed inputs. `CE_RUN_STAMP_PACKAGE` (message label `RUN_STAMP_PACKAGE`) refuses a missing or empty
 package name or version.
 
 An earlier stamp is removed before compilation. A refused build leaves no
@@ -8114,7 +8115,7 @@ bytes keep their existing determinism contract.
 **Stability promise.** The keys, key order and meanings of `rigc-run/1` are
 fixed. Adding, removing or redefining a key requires a new spec version.
 
-## 5.3 The report as a document — `--report <file>`
+### 5.3 The report as a document — `--report <file>`
 
 The lines above are written for an agent to read. A program that acts on a build —
 take it or refuse it, read where the packer put the pages — should not read them with

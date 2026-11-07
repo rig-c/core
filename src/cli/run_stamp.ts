@@ -12,7 +12,7 @@ export interface RunInput { role: RunInputRole; path: string; sha256: string }
 export function runStampPackage(): { name: string; version: string } {
   const meta = readPackageMeta();
   if (typeof meta?.name !== 'string' || meta.name.trim() === '' || typeof meta.version !== 'string' || meta.version.trim() === '') {
-    throw new CompileError('RUN_STAMP_PACKAGE: package.json must supply a non-empty name and version');
+    throw new CompileError('RUN_STAMP_PACKAGE: package.json must supply a non-empty name and version', 'CE_RUN_STAMP_PACKAGE');
   }
   return { name: meta.name, version: meta.version };
 }
@@ -31,7 +31,7 @@ export function readRunInputs(files: readonly { role: RunInputRole; path: string
 export function writeRunStamp(out: string, inputs: readonly RunInput[], outputs: readonly string[], pkg: { name: string; version: string }, startedAt: string, now: () => string): void {
   const pathOf = (file: string): string => relative(resolve(out), resolve(file)).split(sep).join('/');
   for (const input of inputs) {
-    if (sha256(input.path) !== input.sha256) throw new CompileError(`RUN_STAMP_INPUT_CHANGED: ${input.role} input changed during build; rerun with fixed inputs`);
+    if (sha256(input.path) !== input.sha256) throw new CompileError(`RUN_STAMP_INPUT_CHANGED: ${input.role} input changed during build; rerun with fixed inputs`, 'CE_RUN_STAMP_INPUT_CHANGED');
   }
   const rows = [...new Set(outputs)].map((file) => ({ path: pathOf(file), sha256: sha256(file) }))
     .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);

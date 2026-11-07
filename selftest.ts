@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { RUN_STAMP_FILE } from './src/cli/run_stamp.ts';
 import { runPhysicsOffSuite } from './selftest_physics_off.ts';
 import { runParallaxSuite } from './selftest_parallax.ts';
 import * as poseSearch from './src/pose.ts';
@@ -67874,12 +67875,154 @@ function firstLineApartOf(a: string, b: string): string {
   return 'equal';
 }
 
+/** Producer stamps are measured through both real executable entries. */
+function runStampControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-run-stamp-'));
+  const fixture = join(work, 'fixture');
+  cpSync(join(import.meta.dir, 'gallery', 'nod'), fixture, { recursive: true });
+  const rig = join(fixture, 'rig.json');
+  const motion = join(fixture, 'motion.json');
+  const digest = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex');
+  interface Stamp {
+    spec: string; package: { name: string; version: string }; command: string;
+    started_at: string; finished_at: string;
+    inputs: Array<{ role: string; path: string; sha256: string }>;
+    outputs: Array<{ path: string; sha256: string }>;
+  }
+  const version = (JSON.parse(readFileSync(join(import.meta.dir, 'package.json'), 'utf8')) as { version: string }).version;
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const mode of ['plain', 'copy', 'pack', 'cut']) {
+      const out = join(fixture, `${entry}-${mode}`);
+      mkdirSync(out);
+      writeFileSync(join(out, 'stray.txt'), 'not a stage output');
+      const cuts = join(fixture, 'cuts.json');
+      writeFileSync(cuts, JSON.stringify({ probe: { rig: 'rig.json', motion: 'motion.json', out: `${entry}-${mode}` } }));
+      const args = mode === 'cut' ? ['--cut', 'probe', '--cuts', cuts] : ['--rig', rig, '--motion', motion, '--out', out];
+      if (mode === 'copy') args.push('--copy-images');
+      if (mode === 'pack') args.push('--pack');
+      const run = (): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [entry, 'build', ...args], { cwd: import.meta.dir, encoding: 'utf8' });
+      const first = run();
+      const stampPath = join(out, RUN_STAMP_FILE);
+      const read = (): Stamp | null => existsSync(stampPath) ? JSON.parse(readFileSync(stampPath, 'utf8')) as Stamp : null;
+      const audit = (stamp: Stamp | null, status: number | null): string[] => {
+        if (status !== 0) return stamp === null ? [] : ['stamp on refusal'];
+        if (stamp === null) return ['stamp missing on green'];
+        const faults: string[] = [];
+        if (stamp.spec !== 'rigc-run/1' || stamp.package.name !== 'rig-c' || stamp.package.version !== version || stamp.command !== 'build') faults.push('identity');
+        if (Object.keys(stamp).join(',') !== 'spec,package,command,started_at,finished_at,inputs,outputs') faults.push('key order');
+        if (!/^\d{4}-.*Z$/.test(stamp.started_at) || !/^\d{4}-.*Z$/.test(stamp.finished_at) || stamp.finished_at < stamp.started_at) faults.push('time');
+        const roles = mode === 'cut' ? 'rig,motion,cuts' : 'rig,motion';
+        if (stamp.inputs.map((row) => row.role).join(',') !== roles) faults.push('input roles');
+        for (const row of [...stamp.inputs, ...stamp.outputs]) {
+          if (isAbsolute(row.path) || row.path.includes('\\') || digest(join(out, row.path)) !== row.sha256) faults.push('path/hash');
+        }
+        const files = readdirSync(out).filter((file) => file !== RUN_STAMP_FILE && file !== 'stray.txt').sort();
+        if (JSON.stringify(stamp.outputs.map((row) => row.path)) !== JSON.stringify(files)) faults.push('output inventory');
+        return faults;
+      };
+      const original = read();
+      const faults = audit(original, first.status);
+      say('RS01_BOTH_ENTRIES_WRITE_THE_RETURNED_OUTPUTS_AND_INPUTS', faults.length === 0 && first.status === 0,
+        `${entry} ${mode}: exit=${String(first.status)}, ${original?.outputs.length ?? 0} outputs, faults=${faults.join(',')}`, 'a successful producer names its inputs and actual output bytes');
+      if (original === null) continue;
+      const wrongVersion = structuredClone(original); wrongVersion.package.version += '-plant';
+      const wrongHash = structuredClone(original); wrongHash.outputs[0].sha256 = '0'.repeat(64);
+      say('RS02_THE_STAMP_READER_REJECTS_PLANTED_FAILURES',
+        audit(null, 0).includes('stamp missing on green') && audit(original, 1).includes('stamp on refusal') && audit(wrongVersion, 0).includes('identity') && audit(wrongHash, 0).includes('path/hash'),
+        `${entry} ${mode}: missing, refused, version and hash plants`, 'a reader must be observed refusing every claimed failure');
+      const usage = spawnSync(process.execPath, [entry, 'build', ...args.filter((arg) => arg !== '--pack'), '--page-size', 'bad', '--pack'], { cwd: import.meta.dir, encoding: 'utf8' });
+      say('RS07_USAGE_ERRORS_PRESERVE_THE_EARLIER_STAMP', usage.status === 2 && readFileSync(stampPath, 'utf8') === JSON.stringify(original, null, 2) + '\n',
+        `${entry} ${mode}: exit=${String(usage.status)}`, 'usage errors must stop before touching the output directory');
+      const previousMotion = readFileSync(motion, 'utf8');
+      writeFileSync(motion, previousMotion + '\n');
+      const second = run();
+      const changed = read();
+      say('RS03_MOTION_CHANGES_ARE_BOUND_AND_OTHER_OUTPUT_BYTES_STAY_IDENTICAL',
+        second.status === 0 && audit(changed, second.status).length === 0 && changed?.inputs.find((row) => row.role === 'motion')?.sha256 !== original.inputs.find((row) => row.role === 'motion')?.sha256 && JSON.stringify(changed?.outputs) === JSON.stringify(original.outputs),
+        `${entry} ${mode}: exit=${String(second.status)}, motion whitespace changed, output hashes compared`, 'a changed input replaces the earlier receipt while deterministic artifacts remain equal');
+      writeFileSync(motion, '{');
+      const refused = run();
+      say('RS04_REFUSAL_REMOVES_AN_EARLIER_STAMP', refused.status !== 0 && !existsSync(stampPath),
+        `${entry} ${mode}: exit=${String(refused.status)}, stamp exists=${existsSync(stampPath)}`, 'a reused output directory must not retain an earlier success receipt');
+      writeFileSync(motion, previousMotion);
+    }
+  }
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    const out = join(fixture, `${entry}-report`);
+    const report = join(fixture, `${entry}.report.json`);
+    const built = spawnSync(process.execPath, [entry, 'build', '--rig', rig, '--motion', motion, '--out', out, '--report', report], { cwd: import.meta.dir, encoding: 'utf8' });
+    const stampPath = join(out, RUN_STAMP_FILE);
+    const outputs = existsSync(stampPath)
+      ? (JSON.parse(readFileSync(stampPath, 'utf8')) as Stamp).outputs : [];
+    const reportPath = relative(out, report).split(sep).join('/');
+    const row = outputs.find((output) => output.path === reportPath);
+    const matched = existsSync(report) && row?.sha256 === digest(report);
+    say('RS08_THE_REQUESTED_REPORT_IS_IN_THE_OUTPUT_INVENTORY', built.status === 0 && matched,
+      `${entry}: exit=${String(built.status)}, report path=${reportPath}, disk hash matched=${matched}`,
+      'the receipt must bind the optional file this same build wrote outside its output directory');
+    if (matched) {
+      writeFileSync(report, 'planted report difference');
+      say('RS09_A_CHANGED_REPORT_NO_LONGER_MATCHES_THE_STAMP', row?.sha256 !== digest(report),
+        `${entry}: altered report bytes differ from the recorded hash`, 'the report row must measure the bytes on disk');
+    }
+  }
+
+  // Plant only in an isolated source copy, then exercise the normal CLI entry points.
+  const volumeTree = absentTree(join(work, 'volume-tree'));
+  rmSync(join(volumeTree, 'node_modules'), { recursive: true });
+  symlinkSync(join(import.meta.dir, 'node_modules'), join(volumeTree, 'node_modules'), 'dir');
+  const modulePath = join(volumeTree, 'src', 'cli', 'run_stamp.ts');
+  const source = readFileSync(modulePath, 'utf8');
+  const relativeLine = '  const path = relative(resolve(out), resolve(file));';
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const target of ['rig', 'report']) {
+      const out = join(fixture, `${entry}-${target}-volume`);
+      const report = join(fixture, `${entry}-${target}-volume.report.json`);
+      writeFileSync(report, 'earlier report');
+      const file = target === 'rig' ? rig : report;
+      const planted = `  const path = file === ${JSON.stringify(file)} ? resolve('planted-other-volume') : relative(resolve(out), resolve(file));`;
+      const applied = source.split(relativeLine).length === 2;
+      writeFileSync(modulePath, source.replace(relativeLine, planted));
+      const refused = runEntryIn(volumeTree, entry, ['build', '--rig', rig, '--motion', motion, '--out', out, '--report', report], import.meta.dir);
+      const untouched = !existsSync(out) && readFileSync(report, 'utf8') === 'earlier report';
+      say('RS10_AN_ABSOLUTE_RELATIVE_PATH_REFUSES_BEFORE_OUTPUT_IO', applied && refused.status === 1 && refused.stderr.includes('CE_RUN_STAMP_PATH_VOLUME') && untouched,
+        `${entry} ${target}: exit=${String(refused.status)}, output absent and earlier report preserved=${untouched}`,
+        'a simulated other-volume relative result must be refused on every OS before the first output write or removal');
+    }
+  }
+
+  // A minimal copy of the receipt module gives metadata plants their own package.
+  const root = join(work, 'package');
+  mkdirSync(join(root, 'src', 'cli'), { recursive: true });
+  for (const file of ['src/cli/run_stamp.ts', 'src/errors.ts', 'src/package_meta.ts']) cpSync(join(import.meta.dir, file), join(root, file));
+  for (const metadata of [{ name: 'rig-c' }, { name: '', version }, { name: 'rig-c', version: '' }]) {
+    writeFileSync(join(root, 'package.json'), JSON.stringify(metadata));
+    const planted = spawnSync(process.execPath, ['-e', "import {runStampPackage} from './src/cli/run_stamp.ts'; runStampPackage();"], { cwd: root, encoding: 'utf8' });
+    say('RS05_INVALID_PACKAGE_METADATA_IS_REFUSED', planted.status !== 0 && planted.stderr.includes('RUN_STAMP_PACKAGE'),
+      `metadata=${JSON.stringify(metadata)}, exit=${String(planted.status)}`, 'missing or empty metadata cannot identify a producer');
+  }
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'rig-c', version }));
+  writeFileSync(join(root, 'motion.json'), '{}');
+  const changedInput = spawnSync(process.execPath, ['-e', `
+    import {readRunInputs, writeRunStamp, runStampPackage} from './src/cli/run_stamp.ts';
+    import {writeFileSync} from 'node:fs';
+    const inputs = readRunInputs([{role: 'motion', path: 'motion.json'}]);
+    writeFileSync('motion.json', '{}\\n');
+    writeRunStamp('.', inputs, [], runStampPackage(), '2026-01-01T00:00:00.000Z', () => '2026-01-01T00:00:01.000Z');
+  `], { cwd: root, encoding: 'utf8' });
+  say('RS06_AN_INPUT_CHANGED_DURING_BUILD_REFUSES_PUBLICATION', changedInput.status !== 0 && changedInput.stderr.includes('RUN_STAMP_INPUT_CHANGED') && !existsSync(join(root, RUN_STAMP_FILE)),
+    `exit=${String(changedInput.status)}, stamp exists=${existsSync(join(root, RUN_STAMP_FILE))}`, 'the receipt cannot bind a recipe changed while the stage ran');
+  rmSync(work, { recursive: true, force: true });
+}
+
 function runCliSuite(): number {
   console.log('\n── cli ergonomics (subprocess: bun cli.ts …) ──');
   let bad = 0;
   const say = (name: string, ok: boolean, detail: string, why: string): void => {
     bad += reportCase(name, ok, detail, why);
   };
+
+  runStampControls(say);
 
   {
     const { status, stderr } = runCli(['init']);
@@ -115788,11 +115931,15 @@ function runRenderHashesSuite(): number | null {
           const rb = runEntryIn(tree, 'cli_core.ts', buildArgs(b, v.extra), work);
           const da = dirDigests(a);
           const db = dirDigests(b);
+          const namesMatch = JSON.stringify([...da.keys()].sort()) === JSON.stringify([...db.keys()].sort());
+          const stampsPresent = da.has(RUN_STAMP_FILE) && db.has(RUN_STAMP_FILE);
+          da.delete(RUN_STAMP_FILE);
+          db.delete(RUN_STAMP_FILE);
           const differ = digestDifferences(db, da);
           if (ra.status !== 0 || rb.status !== 0) probes.RC29.push(`${v.label}: cli.ts exited ${ra.status} and cli_core.ts ${rb.status} — ${JSON.stringify(firstErr(rb).slice(0, 200))}`);
-          else if (differ.length > 0 || da.size !== db.size || !db.has('skeleton.json') || !db.has('skeleton.atlas') || !db.has(MODEL_DOCUMENT_FILE)) probes.RC29.push(`${v.label}: cli_core.ts wrote other files than cli.ts: ${differ.join(', ') || `${db.size} against ${da.size}`}`);
+          else if (!namesMatch || !stampsPresent || differ.length > 0 || da.size !== db.size || !db.has('skeleton.json') || !db.has('skeleton.atlas') || !db.has(MODEL_DOCUMENT_FILE)) probes.RC29.push(`${v.label}: cli_core.ts wrote other files than cli.ts: ${differ.join(', ') || `${db.size} against ${da.size}`}`);
           else if (!rb.stdout.includes(`  SKIP  A00_ROUNDTRIP_PARSE: ${SKIP_NO_ROUND_TRIP}`) || /^ {2}PASS {2}A00_ROUNDTRIP_PARSE$/m.test(rb.stdout) || !rb.stdout.includes('not run: A00_ROUNDTRIP_PARSE')) probes.RC29.push(`${v.label}: the second entry's report does not name A00 as not run here`);
-          else same29.push(`${v.label} ${db.size} file(s)`);
+          else same29.push(`${v.label} ${db.size} deterministic file(s), both stamps present`);
         }
         figures.RC29 = `${row1060.name}, cli_core.ts build with the package absent against cli.ts build, the same flags: ${same29.join(', ')} to the byte; its report says A00_ROUNDTRIP_PARSE did not run here and SKIPs it naming spine-core`;
 
@@ -119228,7 +119375,7 @@ function runModelDocumentSuite(): { failures: number; gateHole: boolean } {
       runs.forEach((run, i) => {
         if (run.status !== 0) probes.push(`build ${i + 1} exited ${run.status}: ${run.stderr.trim().split('\n').slice(-2).join(' | ')}`);
         const written = existsSync(outs[i]) ? readdirSync(outs[i]).sort() : [];
-        if (JSON.stringify(written) !== JSON.stringify(['skeleton.atlas', 'skeleton.json', MODEL_DOCUMENT_FILE])) probes.push(`build ${i + 1} wrote [${written.join(', ')}]`);
+        if (JSON.stringify(written) !== JSON.stringify([RUN_STAMP_FILE, 'skeleton.atlas', 'skeleton.json', MODEL_DOCUMENT_FILE].sort())) probes.push(`build ${i + 1} wrote [${written.join(', ')}]`);
         if (!run.stdout.includes(`wrote ${join(outs[i], MODEL_DOCUMENT_FILE)}`)) probes.push(`build ${i + 1} did not say it wrote the document`);
       });
       const texts = outs.map((out) => (existsSync(join(out, MODEL_DOCUMENT_FILE)) ? readFileSync(join(out, MODEL_DOCUMENT_FILE), 'utf8') : ''));
@@ -119246,7 +119393,7 @@ function runModelDocumentSuite(): { failures: number; gateHole: boolean } {
     say(
       'MD05_BUILD_WRITES_THE_DOCUMENT_BESIDE_THE_PAIR_BYTE_IDENTICAL_ACROSS_TWO_RUNS',
       ok,
-      probeDetail(ok, probes, `${detail}; two \`rigc build\` runs into sibling --out directories each wrote exactly skeleton.atlas, skeleton.json and ${MODEL_DOCUMENT_FILE}, said so, and wrote byte-identical documents equal to modelDocument of an in-process compile, whose bones are the model's in order`),
+      probeDetail(ok, probes, `${detail}; two \`rigc build\` runs into sibling --out directories each wrote exactly ${RUN_STAMP_FILE}, skeleton.atlas, skeleton.json and ${MODEL_DOCUMENT_FILE}, said so, and wrote byte-identical documents equal to modelDocument of an in-process compile, whose bones are the model's in order`),
       'issue #922: the document is an artifact like the pair — written by `build`, after the gate, and determinate through the CLI, not only inside one process',
     );
   }
@@ -141700,9 +141847,9 @@ function bareBuildCopy(from: string, to: string): string {
   return to;
 }
 
-/** Every file of a directory, by name, as bytes — what two builds are compared by. */
+/** Every deterministic build file, excluding only the clock receipt, by name and bytes. */
 function buildBytes(dir: string): Map<string, Buffer> {
-  return new Map(readdirSync(dir).sort().map((name) => [name, readFileSync(join(dir, name))] as const));
+  return new Map(readdirSync(dir).filter((name) => name !== RUN_STAMP_FILE).sort().map((name) => [name, readFileSync(join(dir, name))] as const));
 }
 
 /** The names two `buildBytes` maps disagree on. */
@@ -141811,6 +141958,24 @@ function runRepackSuite(): number {
     return bad;
   }
   const nodRegions = parseAtlasText(readFileSync(join(nodIn, 'skeleton.atlas'), 'utf8')).regions.map((r) => r.name.trim());
+
+  {
+    const twin = join(work, 'stamp-comparison');
+    const builtTwin = build('nod', twin);
+    const differentStamps = builtTwin.status === 0 &&
+      !readFileSync(join(nodIn, RUN_STAMP_FILE)).equals(readFileSync(join(twin, RUN_STAMP_FILE)));
+    const expected = buildBytes(nodIn);
+    const equal = builtTwin.status === 0 && bytesApart(expected, buildBytes(twin)).length === 0;
+    const caught: string[] = [];
+    for (const [name, bytes] of expected) {
+      writeFileSync(join(twin, name), Buffer.concat([bytes, Buffer.from('planted difference')]));
+      if (JSON.stringify(bytesApart(expected, buildBytes(twin))) === JSON.stringify([name])) caught.push(name);
+      writeFileSync(join(twin, name), bytes);
+    }
+    say('RPK25_ONLY_THE_STAMP_IS_EXCLUDED_FROM_BUILD_BYTE_COMPARISONS', differentStamps && equal && expected.size > 0 && caught.length === expected.size,
+      `two builds have different stamps=${differentStamps}, deterministic files compare equal=${equal}; ${caught.length}/${expected.size} other-file mutations refused by name`,
+      'the clock receipt is outside determinism, and every other emitted byte remains inside it');
+  }
 
   // --- RPK01: the round trip under the input's own settings -------------------
   {

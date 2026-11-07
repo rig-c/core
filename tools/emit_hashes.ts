@@ -16,6 +16,8 @@
  * across two commits. This tool is that instrument, and it is measurement only:
  * it changes nothing under `src/` and nothing in `cli.ts`.
  *
+ * The wall-clock producer receipt `run.json` is excluded. Every other file is compared.
+ *
  * ⚠️ It hashes what lands on disk through the CLI, not what `compile()` returns.
  * `build --pack` and `build --copy-images` write atlas text after `compile` has
  * returned (docs/COMPILED_MODEL.md §5, third bullet), so a gate on the return
@@ -171,6 +173,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { RUN_STAMP_FILE } from '../src/cli/run_stamp.ts';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { MODEL_DOCUMENT_FILE } from '../src/model.ts';
@@ -353,7 +356,7 @@ function filesUnder(dir: string): string[] {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
-      else out.push(relative(dir, full).split(sep).join('/'));
+      else if (relative(dir, full) !== RUN_STAMP_FILE) out.push(relative(dir, full).split(sep).join('/'));
     }
   };
   walk(dir);

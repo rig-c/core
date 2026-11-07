@@ -15,6 +15,7 @@
  * `./spine_commands.ts`'s, which only `cli.ts` imports.
  */
 import { type AtlasRegion, DEFAULT_PACK_SHAPE, DEFAULT_PADDING, DEFAULT_PAGE_EDGES, DEFAULT_PAGE_SIZE, PACK_SHAPES, packAtlas, type PackInput, packFootprints, type PackShape, PAGE_EDGES, type PageEdges, pageFootprint } from '../atlas.ts';
+import { RUN_STAMP_FILE, readRunInputs, type RunInput, runStampPackage, runStampPath, writeRunStamp } from './run_stamp.ts';
 import { copyAtlasPages, plannedPageCopies } from '../emit.ts';
 import {
   BUILD_REPORT_SPEC,
@@ -2751,15 +2752,45 @@ function printHeaderBox(result: CompileResult): void {
  * for its gate, which the entry hands in (`BuildGate`): both entries write
  * the Spine pair, the model document and the pages by this one body.
  */
-export function runBuild(flags: Record<string, string>, gate: BuildGate, caller: BuildReport | null = null): void {
+export function runBuild(flags: Record<string, string>, gate: BuildGate, caller: BuildReport | null = null, now?: () => string): void {
   const { label, opts, profile, packing } = readBuildInvocation(flags);
+  const packOpts = packing ? {
+      pageSize: readIntFlag(flags, 'page-size', DEFAULT_PAGE_SIZE),
+      padding: readIntFlag(flags, 'padding', DEFAULT_PADDING),
+      pageEdges: readPageEdges(flags),
+      shape: readPackShape(flags),
+      pageStem: 'skeleton',
+    } : null;
+  const inputFiles: Array<Pick<RunInput, 'role' | 'path'>> = [
+    { role: 'rig', path: opts.rigPath },
+    { role: 'motion', path: opts.motionPath },
+    ...(opts.manifestPath === undefined ? [] : [{ role: 'manifest' as const, path: opts.manifestPath }]),
+    ...(flags.cuts === undefined ? [] : [{ role: 'cuts' as const, path: resolve(flags.cuts) }]),
+  ];
+  if (now !== undefined) {
+    for (const input of inputFiles) runStampPath(opts.outDir, input.path);
+    if (flags.report !== undefined) runStampPath(opts.outDir, flags.report);
+  }
   // `--report` (issue #1213): `build`'s own, written by this body on either verdict — or the caller's
   // (`repack`'s), which this body writes on a red gate, since the exit leaves the caller no turn, and which the
   // caller writes when it has written its own output.
   const own = caller === null ? readReportFlag(flags, 'build', opts.outDir, gate.supplier) : null;
   const record = caller ?? own;
+  if (now !== undefined) rmSync(join(opts.outDir, RUN_STAMP_FILE), { force: true });
+  const startedAt = now?.();
+  const pkg = now === undefined ? undefined : runStampPackage();
+  let inputs: RunInput[] = [];
+  let inputReadError: unknown;
+  try {
+    inputs = now === undefined ? [] : readRunInputs(inputFiles);
+  } catch (error) {
+    // Preserve the compiler's named input refusals before reporting receipt I/O.
+    inputReadError = error;
+  }
+  const outputs: string[] = [];
   printBuildHeader(label, opts);
   const result = compile(opts);
+  if (inputReadError !== undefined) throw inputReadError;
   printCompiled(opts, result);
   printHeaderBox(result);
 
@@ -2803,6 +2834,7 @@ export function runBuild(flags: Record<string, string>, gate: BuildGate, caller:
     if (copied.atlasText !== writtenAtlas(result.atlasText)) {
       throw new Error(`internal: --copy-images wrote an atlas whose page names are not the ones ${MODEL_DOCUMENT_FILE} was spelled with — nothing of the pair was written`);
     }
+    outputs.push(...copied.pages.map((page) => join(opts.outDir, page.to)));
     atlasText = copied.atlasText;
     console.log(`  ..    copy-images: ${copied.pages.length} page(s) copied into ${opts.outDir}`);
     for (const p of copied.pages) {
@@ -2816,19 +2848,13 @@ export function runBuild(flags: Record<string, string>, gate: BuildGate, caller:
   // the one the gate just read — packing changes only the ARRANGEMENT of the
   // bytes, and the sizes in `result.images` are still the ones measured off the
   // loose PNGs (see src/atlas.ts's header).
-  if (packing) {
-    const packOpts = {
-      pageSize: readIntFlag(flags, 'page-size', DEFAULT_PAGE_SIZE),
-      padding: readIntFlag(flags, 'padding', DEFAULT_PADDING),
-      pageEdges: readPageEdges(flags),
-      shape: readPackShape(flags),
-      pageStem: 'skeleton',
-    };
+  if (packOpts !== null) {
     const packed = packAtlas(packInputs(result, packOpts.shape), packOpts);
     atlasText = packed.atlasText;
     if (record !== null) record.pack = [];
     for (const page of packed.pages) {
       page.plate.writePng(join(opts.outDir, page.name));
+      outputs.push(join(opts.outDir, page.name));
       const figures = packPageFigures(page, packed.placements.filter((p) => packed.pages[p.page].name === page.name).length, packed.padding, packOpts.pageEdges, packed.shape);
       record?.pack?.push(figures);
       console.log(packLine(figures));
@@ -2871,7 +2897,14 @@ export function runBuild(flags: Record<string, string>, gate: BuildGate, caller:
   console.log(`rigc: wrote ${join(opts.outDir, 'skeleton.atlas')}`);
   console.log(`rigc: wrote ${join(opts.outDir, MODEL_DOCUMENT_FILE)}`);
   // Written after the build, and printed nowhere: the lines a build prints are the same with the flag and without it.
-  if (own !== null) writeBuildReport(own);
+  if (own !== null) {
+    writeBuildReport(own);
+    outputs.push(own.path);
+  }
+  if (now !== undefined && startedAt !== undefined && pkg !== undefined) {
+    outputs.push(...['skeleton.json', 'skeleton.atlas', MODEL_DOCUMENT_FILE].map((file) => join(opts.outDir, file)));
+    writeRunStamp(opts.outDir, inputs, outputs, pkg, startedAt, now);
+  }
   // The next command is part of the message (issue #837). A green build is the
   // moment somebody wants to see what came out, and the one page rigc writes
   // for that is `preview` of exactly this directory — so the line names it,
@@ -2899,6 +2932,8 @@ export function dropLine(dropped: DroppedState): string {
 
 /** What `rigc <command> …` hands a command's body: the flags, every occurrence of a repeatable one, and the positionals. */
 export interface CommandArgs {
+  /** Wall clock supplied by the executable entry, for producer receipts. */
+  now?: () => string;
   flags: Record<string, string>;
   lists: Record<string, string[]>;
   positional: string[];
@@ -2923,6 +2958,7 @@ export interface CliRefusal {
 
 /** An entry: the bodies it registers, and what only its side of the seam knows. */
 export interface CliEntry {
+  now?: () => string;
   /** The file a source checkout runs this entry as — what the usage's first line names. */
   checkout: string;
   /**
@@ -3117,7 +3153,7 @@ export function runCli(entry: CliEntry, argv: readonly string[]): void {
       console.log(commandHelp(command, docs));
       process.exit(0);
     }
-    entry.runs[command]({ flags, lists, positional, raw: rest });
+    entry.runs[command]({ flags, lists, positional, raw: rest, now: entry.now });
   } catch (err) {
     refuse(err, command, USAGE, entry);
   }

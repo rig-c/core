@@ -97,6 +97,7 @@
  * them. Under `tools/` it would dilute a gate by a third of its subject; under
  * `scripts/` it is read by no gate whose population it can weaken.
  */
+import { RUN_STAMP_FILE } from '../src/cli/run_stamp.ts';
 import { spawnSync } from 'node:child_process';
 import { builtinModules } from 'node:module';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -2061,7 +2062,7 @@ const runsRuntimeFreeTypecheck = (plant: Plant): boolean => plant === 'none' || 
  * `cli.ts` registers its own (`cmdBuild`), so the round-tripped build, render
  * and check are untouched, and `alone` below holds that no other step went red.
  */
-const CORE_BUILD_LINE = '  build: ({ flags }) => runBuild(flags, MODEL_AND_TEXT_GATE),';
+const CORE_BUILD_LINE = '  build: ({ flags, now }) => runBuild(flags, MODEL_AND_TEXT_GATE, null, now),';
 const CORE_BUILD_MODULE = 'src/cli/core_commands.ts';
 const CORE_BUILD_PLANTS: Record<'refuse-core-build' | 'move-core-byte', string> = {
   'refuse-core-build': "  build: () => { throw new UsageError('install smoke plant: the core entry\\'s build refuses before it compiles'); },",
@@ -2069,7 +2070,7 @@ const CORE_BUILD_PLANTS: Record<'refuse-core-build' | 'move-core-byte', string> 
   // one byte appended to the atlas the core entry wrote, which only the
   // comparison against the round-tripped build can see.
   'move-core-byte':
-    "  build: ({ flags }) => { runBuild(flags, MODEL_AND_TEXT_GATE); const at = join(flags.out, 'skeleton.atlas'); writeFileSync(at, `${readFileSync(at, 'utf8')}\\n`); },",
+    "  build: ({ flags, now }) => { runBuild(flags, MODEL_AND_TEXT_GATE, null, now); const at = join(flags.out, 'skeleton.atlas'); writeFileSync(at, `${readFileSync(at, 'utf8')}\\n`); },",
 };
 
 /** What the comparison holds equal: every file each entry's build of the fixture writes, by name. */
@@ -2535,7 +2536,7 @@ interface CaseResult {
  * Every file in two build directories, compared by name and then byte for
  * byte: one line per difference, naming the file, both sizes and the first
  * byte at which they part. Empty when the two hold the same files with the
- * same bytes.
+ * same bytes. The stamp remains in the name comparison and is excluded only from bytes.
  */
 function sameBuild(core: string, full: string): { differences: string[]; files: Array<{ file: string; bytes: number }> } {
   const listed = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).filter((f) => statSync(join(dir, f)).isFile()).sort() : []);
@@ -2545,7 +2546,7 @@ function sameBuild(core: string, full: string): { differences: string[]; files: 
   const files: Array<{ file: string; bytes: number }> = [];
   for (const file of a.filter((f) => !b.includes(f))) differences.push(`${CORE_OUT}/${file} has no counterpart in ${FULL_OUT}/`);
   for (const file of b.filter((f) => !a.includes(f))) differences.push(`${FULL_OUT}/${file} has no counterpart in ${CORE_OUT}/`);
-  for (const file of a.filter((f) => b.includes(f))) {
+  for (const file of a.filter((f) => f !== RUN_STAMP_FILE && b.includes(f))) {
     const x = readFileSync(join(core, file));
     const y = readFileSync(join(full, file));
     if (x.equals(y)) {

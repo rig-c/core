@@ -52,6 +52,7 @@ export type { CutEntry, CutTable } from './src/cli/shared.ts';
 runCli(
   {
     checkout: 'cli.ts',
+    now: () => new Date().toISOString(),
     linksRuntime: true,
     runs: { ...CORE_COMMAND_RUNS, ...SPINE_COMMAND_RUNS },
     profileRules: PROFILE_RULES,

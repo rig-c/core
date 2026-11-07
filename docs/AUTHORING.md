@@ -7377,7 +7377,9 @@ retain the minimal inputs and report that code rather than inventing author data
 | <a id="CE_COMPILE_ATLAS_REGION_UNKNOWN"></a>`CE_COMPILE_ATLAS_REGION_UNKNOWN` | “image "&lt;value&gt;" resolves to region "&lt;value&gt;", which the atlas at &lt;value&gt; does not have. [Did you mean &lt;value&gt;?  / ]The atlas declares &lt;value&gt; region(s): &lt;value&gt;”<br>Also: “&lt;value&gt;.png” | Correct the image's region name or add that region to the imported atlas. |
 | <a id="CE_COMPILE_ATLAS_REGION_PAGE_MISSING"></a>`CE_COMPILE_ATLAS_REGION_PAGE_MISSING` | “region "&lt;value&gt;" sits on page "&lt;value&gt;" of &lt;value&gt;, which is not on disk at &lt;value&gt;” | Supply the PNG page named by this region at the atlas-relative path. |
 | <a id="CE_COMPILE_ATLAS_REGION_OUTSIDE_PAGE"></a>`CE_COMPILE_ATLAS_REGION_OUTSIDE_PAGE` | “region "&lt;value&gt;" is at &lt;value&gt;,&lt;value&gt; sized &lt;value&gt;x&lt;value&gt; on a &lt;value&gt;x&lt;value&gt; page in &lt;value&gt;; the rectangle runs off the page, so its UVs would leave the texture” | Correct the atlas bounds so this region's rectangle stays on its page. |
-
+| <a id="CE_RUN_STAMP_PACKAGE"></a>`CE_RUN_STAMP_PACKAGE` | “RUN_STAMP_PACKAGE: package.json must supply a non-empty name and version” | Restore the running package's own non-empty name and version before building. |
+| <a id="CE_RUN_STAMP_INPUT_CHANGED"></a>`CE_RUN_STAMP_INPUT_CHANGED` | “RUN_STAMP_INPUT_CHANGED: &lt;value&gt; input changed during build; rerun with fixed inputs” | Freeze the named recipe input for the whole build and rerun. |
+| <a id="CE_RUN_STAMP_PATH_VOLUME"></a>`CE_RUN_STAMP_PATH_VOLUME` | “run stamp file "&lt;value&gt;" relative to output "&lt;value&gt;" produced absolute path "&lt;value&gt;" — keep recipe and report files on the output volume” | Put recipe inputs and the optional report on the output directory's volume. Refused before any output is written or removed. |
 
 #### 5.1.3 Manifest, setup and animation targets
 
@@ -8074,6 +8076,49 @@ Fix A00 and run it again.
 
 `both ◑` marks a mixed assertion: its validity half always runs and its policy
 clauses are gated by profile.
+
+**Producer run stamp (`run.json`, `rigc-run/1`)**
+
+Both CLI entries write `run.json` beside a successful `build` after every gate
+and output write finishes. The fixed top-level key order is `spec`, `package`,
+`command`, `started_at`, `finished_at`, `inputs`, `outputs`.
+`package` has `name`, `version` in that order, read from the running package's
+own `package.json`. Its name is `rig-c`. `command` is `build`.
+The UTC timestamps use ISO 8601 with milliseconds and a trailing `Z`, supplied
+by the executable entry's wall clock.
+
+This follows the shared [rig-run/1 shape and rules](https://github.com/rig-c/parts/blob/15f4993e09d49b82e380ecedc772f02e4afe4032/docs/STABILITY.md#run-stamp-runjson-spec-rig-run1).
+The one schema difference is that `inputs` replaces `config` in the same
+position. Each input row has `role`, `path`, `sha256`, in that order.
+Roles sort in the fixed order `rig`, `motion`, `manifest`, `cuts`, then by
+path in UTF-16 code-unit order. Explicit builds bind the rig and motion plus
+the manifest when supplied. Named cuts additionally bind their cuts table and
+the rig, motion and manifest resolved from it. These are the build recipe
+files. Image and imported-atlas content remains governed by the existing
+compiler and gate.
+
+Every path is relative to the output directory, uses `/`, and may start with
+`../` for a file outside that directory. If `path.relative` still returns an
+absolute path, as on Windows across drives, `CE_RUN_STAMP_PATH_VOLUME` refuses
+before output writes or removals. Recipe and report paths are checked before
+compilation. Keep those files on the output directory's volume. Output rows have `path`, `sha256`,
+in that order, sorted by path in UTF-16 code-unit order. The inventory comes
+from the files the build writes, including copied or packed pages and the optional
+`--report` file. A report outside the output directory has a `../`-prefixed path. Earlier or
+stray files in the output directory are excluded. SHA-256 binds file bytes.
+Inputs are captured before compilation and checked again before publication.
+`CE_RUN_STAMP_INPUT_CHANGED` (message label `RUN_STAMP_INPUT_CHANGED`) refuses a recipe changed during the build and asks
+for a rerun with fixed inputs. `CE_RUN_STAMP_PACKAGE` (message label `RUN_STAMP_PACKAGE`) refuses a missing or empty
+package name or version.
+
+An earlier stamp is removed before compilation. A refused build leaves no
+stamp. Usage errors stop before removal. `repack` and in-process compilation
+retain their existing output contracts. `run.json` records wall-clock time
+and is excluded from A18 and `emit_hashes` byte comparisons. All other output
+bytes keep their existing determinism contract.
+
+**Stability promise.** The keys, key order and meanings of `rigc-run/1` are
+fixed. Adding, removing or redefining a key requires a new spec version.
 
 ### 5.3 The report as a document — `--report <file>`
 

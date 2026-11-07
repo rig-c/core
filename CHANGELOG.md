@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.4.2](https://github.com/rig-c/core/compare/v3.4.1...v3.4.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* adopt guarded receipt uploads in core workflows ([#1717](https://github.com/rig-c/core/issues/1717)) ([08b45c6](https://github.com/rig-c/core/commit/08b45c6fbd3664a0dc77050c04b7359d2346f7a6)), closes [#1716](https://github.com/rig-c/core/issues/1716)
+* inventory publication actions and protect the reader checkout ([#1715](https://github.com/rig-c/core/issues/1715)) ([d43f730](https://github.com/rig-c/core/commit/d43f730151d5db0b71682a1a4057145cd4a95fa8)), closes [#1709](https://github.com/rig-c/core/issues/1709)
+* skip fork receipt production with an explicit upload signal ([#1712](https://github.com/rig-c/core/issues/1712)) ([c4a4d4a](https://github.com/rig-c/core/commit/c4a4d4a85e0517a7e74adc0e4e201c61a70fd70e)), closes [#1711](https://github.com/rig-c/core/issues/1711)
+
 ## [3.4.1](https://github.com/rig-c/core/compare/v3.4.0...v3.4.1) (2026-11-05)
 
 

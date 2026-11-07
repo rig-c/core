@@ -442,6 +442,7 @@ for (const [position, producer] of [
 for (const [name, plant] of Object.entries({
   'publish always': f => { alias(f).if = '${{ always() }}'; },
   'publish always conjunction': f => { alias(f).if = "${{ always() && steps.target.outputs.publish == 'true' }}"; },
+  'publish uncancelled conjunction': f => { alias(f).if = "${{ !cancelled() && steps.target.outputs.publish == 'true' }}"; },
   'publish failure': f => { alias(f).if = '${{ failure() }}'; },
   'job always conjunction': f => { f.doc.jobs.publish.if = "${{ always() && needs.release.outputs.publish == 'true' }}"; },
   'job ignored failure': f => { f.doc.jobs.publish['continue-on-error'] = true; },

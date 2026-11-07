@@ -233,8 +233,8 @@ jobs:
       # Push uses the verified SHA; dispatch retains its tag and HEAD guard.
       ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}
 
-  # A skipped reused gate is handled here, before the publishing job's simple
-  # needs-output condition. A failed/cancelled gate grants no admission.
+  # A skipped reused gate is handled here; publish pairs its ready check with
+  # !cancelled() so Actions' implicit success() does not skip on a skipped gate.
   admit:
     needs: [plan, reuse, gate]
     if: ${{ !cancelled() }}
@@ -266,7 +266,7 @@ jobs:
 
   publish:
     needs: [plan, admit]
-    if: ${{ needs.admit.outputs.ready == 'true' }}
+    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
     # Run 42069082954: six selftest step durations sum to 2203 s, plus
     # typecheck 22 s + lint 21 s = 2246 s of observed chain work. This is a

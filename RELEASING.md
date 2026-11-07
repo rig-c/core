@@ -448,7 +448,11 @@ refusals use `TALLY_COVERAGE` in the release reader.
 `reuse` runs only for a resolved cut. `gate` runs under exactly
 `!cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true'`.
 `admit` reads the lookup result and the gate's actual result/verdict, including a
-skipped reused gate. `publish` reads only `needs.admit.outputs.ready == 'true'`.
+skipped reused gate. `publish` runs under
+`!cancelled() && needs.admit.outputs.ready == 'true'`: `admit`'s `ready` is the
+single admission decision, and `!cancelled()` removes GitHub Actions' implicit
+`success()`, which returns `false` whenever any job in the `needs` chain (`gate`,
+through `admit`) was skipped on the reuse path.
 It checks out the resolved target, retains the dispatch HEAD/provenance guard,
 looks up publish-purpose proof again, fetches the corpus and downloads a tally
 only for a fresh gate. The unconditional named reader precedes all three packs

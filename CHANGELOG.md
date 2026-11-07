@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.3](https://github.com/rig-c/core/compare/v3.4.2...v3.4.3) (2026-11-07)
+
+
+### Bug Fixes
+
+* **release:** pair publish condition with !cancelled() for skipped reused gate ([#1720](https://github.com/rig-c/core/issues/1720)) ([46d108c](https://github.com/rig-c/core/commit/46d108c781de8e06af507210e8bf9c65c1e7e40f)), closes [#1719](https://github.com/rig-c/core/issues/1719)
+
 ## [3.4.2](https://github.com/rig-c/core/compare/v3.4.1...v3.4.2) (2026-11-06)
 
 

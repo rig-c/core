@@ -67947,6 +67947,50 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
       writeFileSync(motion, previousMotion);
     }
   }
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    const out = join(fixture, `${entry}-report`);
+    const report = join(fixture, `${entry}.report.json`);
+    const built = spawnSync(process.execPath, [entry, 'build', '--rig', rig, '--motion', motion, '--out', out, '--report', report], { cwd: import.meta.dir, encoding: 'utf8' });
+    const stampPath = join(out, RUN_STAMP_FILE);
+    const outputs = existsSync(stampPath)
+      ? (JSON.parse(readFileSync(stampPath, 'utf8')) as Stamp).outputs : [];
+    const reportPath = relative(out, report).split(sep).join('/');
+    const row = outputs.find((output) => output.path === reportPath);
+    const matched = existsSync(report) && row?.sha256 === digest(report);
+    say('RS08_THE_REQUESTED_REPORT_IS_IN_THE_OUTPUT_INVENTORY', built.status === 0 && matched,
+      `${entry}: exit=${String(built.status)}, report path=${reportPath}, disk hash matched=${matched}`,
+      'the receipt must bind the optional file this same build wrote outside its output directory');
+    if (matched) {
+      writeFileSync(report, 'planted report difference');
+      say('RS09_A_CHANGED_REPORT_NO_LONGER_MATCHES_THE_STAMP', row?.sha256 !== digest(report),
+        `${entry}: altered report bytes differ from the recorded hash`, 'the report row must measure the bytes on disk');
+    }
+  }
+
+  // Plant only in an isolated source copy, then exercise the normal CLI entry points.
+  const volumeTree = absentTree(join(work, 'volume-tree'));
+  rmSync(join(volumeTree, 'node_modules'), { recursive: true });
+  symlinkSync(join(import.meta.dir, 'node_modules'), join(volumeTree, 'node_modules'), 'dir');
+  const modulePath = join(volumeTree, 'src', 'cli', 'run_stamp.ts');
+  const source = readFileSync(modulePath, 'utf8');
+  const relativeLine = '  const path = relative(resolve(out), resolve(file));';
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    for (const target of ['rig', 'report']) {
+      const out = join(fixture, `${entry}-${target}-volume`);
+      const report = join(fixture, `${entry}-${target}-volume.report.json`);
+      writeFileSync(report, 'earlier report');
+      const file = target === 'rig' ? rig : report;
+      const planted = `  const path = file === ${JSON.stringify(file)} ? resolve('planted-other-volume') : relative(resolve(out), resolve(file));`;
+      const applied = source.split(relativeLine).length === 2;
+      writeFileSync(modulePath, source.replace(relativeLine, planted));
+      const refused = runEntryIn(volumeTree, entry, ['build', '--rig', rig, '--motion', motion, '--out', out, '--report', report], import.meta.dir);
+      const untouched = !existsSync(out) && readFileSync(report, 'utf8') === 'earlier report';
+      say('RS10_AN_ABSOLUTE_RELATIVE_PATH_REFUSES_BEFORE_OUTPUT_IO', applied && refused.status === 1 && refused.stderr.includes('CE_RUN_STAMP_PATH_VOLUME') && untouched,
+        `${entry} ${target}: exit=${String(refused.status)}, output absent and earlier report preserved=${untouched}`,
+        'a simulated other-volume relative result must be refused on every OS before the first output write or removal');
+    }
+  }
+
   // A minimal copy of the receipt module gives metadata plants their own package.
   const root = join(work, 'package');
   mkdirSync(join(root, 'src', 'cli'), { recursive: true });

@@ -7379,6 +7379,7 @@ retain the minimal inputs and report that code rather than inventing author data
 | <a id="CE_COMPILE_ATLAS_REGION_OUTSIDE_PAGE"></a>`CE_COMPILE_ATLAS_REGION_OUTSIDE_PAGE` | “region "&lt;value&gt;" is at &lt;value&gt;,&lt;value&gt; sized &lt;value&gt;x&lt;value&gt; on a &lt;value&gt;x&lt;value&gt; page in &lt;value&gt;; the rectangle runs off the page, so its UVs would leave the texture” | Correct the atlas bounds so this region's rectangle stays on its page. |
 | <a id="CE_RUN_STAMP_PACKAGE"></a>`CE_RUN_STAMP_PACKAGE` | “RUN_STAMP_PACKAGE: package.json must supply a non-empty name and version” | Restore the running package's own non-empty name and version before building. |
 | <a id="CE_RUN_STAMP_INPUT_CHANGED"></a>`CE_RUN_STAMP_INPUT_CHANGED` | “RUN_STAMP_INPUT_CHANGED: &lt;value&gt; input changed during build; rerun with fixed inputs” | Freeze the named recipe input for the whole build and rerun. |
+| <a id="CE_RUN_STAMP_PATH_VOLUME"></a>`CE_RUN_STAMP_PATH_VOLUME` | “run stamp file "&lt;value&gt;" relative to output "&lt;value&gt;" produced absolute path "&lt;value&gt;" — keep recipe and report files on the output volume” | Put recipe inputs and the optional report on the output directory's volume. Refused before any output is written or removed. |
 
 #### 5.1.3 Manifest, setup and animation targets
 
@@ -8097,9 +8098,13 @@ files. Image and imported-atlas content remains governed by the existing
 compiler and gate.
 
 Every path is relative to the output directory, uses `/`, and may start with
-`../` for an input outside that directory. Output rows have `path`, `sha256`,
+`../` for a file outside that directory. If `path.relative` still returns an
+absolute path, as on Windows across drives, `CE_RUN_STAMP_PATH_VOLUME` refuses
+before output writes or removals. Recipe and report paths are checked before
+compilation. Keep those files on the output directory's volume. Output rows have `path`, `sha256`,
 in that order, sorted by path in UTF-16 code-unit order. The inventory comes
-from the files the build writes, including copied or packed pages. Earlier or
+from the files the build writes, including copied or packed pages and the optional
+`--report` file. A report outside the output directory has a `../`-prefixed path. Earlier or
 stray files in the output directory are excluded. SHA-256 binds file bytes.
 Inputs are captured before compilation and checked again before publication.
 `CE_RUN_STAMP_INPUT_CHANGED` (message label `RUN_STAMP_INPUT_CHANGED`) refuses a recipe changed during the build and asks

@@ -15,7 +15,7 @@
  * `./spine_commands.ts`'s, which only `cli.ts` imports.
  */
 import { type AtlasRegion, DEFAULT_PACK_SHAPE, DEFAULT_PADDING, DEFAULT_PAGE_EDGES, DEFAULT_PAGE_SIZE, PACK_SHAPES, packAtlas, type PackInput, packFootprints, type PackShape, PAGE_EDGES, type PageEdges, pageFootprint } from '../atlas.ts';
-import { RUN_STAMP_FILE, readRunInputs, type RunInput, runStampPackage, writeRunStamp } from './run_stamp.ts';
+import { RUN_STAMP_FILE, readRunInputs, type RunInput, runStampPackage, runStampPath, writeRunStamp } from './run_stamp.ts';
 import { copyAtlasPages, plannedPageCopies } from '../emit.ts';
 import {
   BUILD_REPORT_SPEC,
@@ -2761,6 +2761,16 @@ export function runBuild(flags: Record<string, string>, gate: BuildGate, caller:
       shape: readPackShape(flags),
       pageStem: 'skeleton',
     } : null;
+  const inputFiles: Array<Pick<RunInput, 'role' | 'path'>> = [
+    { role: 'rig', path: opts.rigPath },
+    { role: 'motion', path: opts.motionPath },
+    ...(opts.manifestPath === undefined ? [] : [{ role: 'manifest' as const, path: opts.manifestPath }]),
+    ...(flags.cuts === undefined ? [] : [{ role: 'cuts' as const, path: resolve(flags.cuts) }]),
+  ];
+  if (now !== undefined) {
+    for (const input of inputFiles) runStampPath(opts.outDir, input.path);
+    if (flags.report !== undefined) runStampPath(opts.outDir, flags.report);
+  }
   // `--report` (issue #1213): `build`'s own, written by this body on either verdict — or the caller's
   // (`repack`'s), which this body writes on a red gate, since the exit leaves the caller no turn, and which the
   // caller writes when it has written its own output.
@@ -2772,12 +2782,7 @@ export function runBuild(flags: Record<string, string>, gate: BuildGate, caller:
   let inputs: RunInput[] = [];
   let inputReadError: unknown;
   try {
-    inputs = now === undefined ? [] : readRunInputs([
-      { role: 'rig', path: opts.rigPath },
-      { role: 'motion', path: opts.motionPath },
-      ...(opts.manifestPath === undefined ? [] : [{ role: 'manifest' as const, path: opts.manifestPath }]),
-      ...(flags.cuts === undefined ? [] : [{ role: 'cuts' as const, path: resolve(flags.cuts) }]),
-    ]);
+    inputs = now === undefined ? [] : readRunInputs(inputFiles);
   } catch (error) {
     // Preserve the compiler's named input refusals before reporting receipt I/O.
     inputReadError = error;
@@ -2892,7 +2897,10 @@ export function runBuild(flags: Record<string, string>, gate: BuildGate, caller:
   console.log(`rigc: wrote ${join(opts.outDir, 'skeleton.atlas')}`);
   console.log(`rigc: wrote ${join(opts.outDir, MODEL_DOCUMENT_FILE)}`);
   // Written after the build, and printed nowhere: the lines a build prints are the same with the flag and without it.
-  if (own !== null) writeBuildReport(own);
+  if (own !== null) {
+    writeBuildReport(own);
+    outputs.push(own.path);
+  }
   if (now !== undefined && startedAt !== undefined && pkg !== undefined) {
     outputs.push(...['skeleton.json', 'skeleton.atlas', MODEL_DOCUMENT_FILE].map((file) => join(opts.outDir, file)));
     writeRunStamp(opts.outDir, inputs, outputs, pkg, startedAt, now);

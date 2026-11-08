@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.6.0](https://github.com/rig-c/core/compare/v3.5.0...v3.6.0) (2026-11-08)
+
+
+### Features
+
+* **build:** SOURCE_DATE_EPOCH fixes both run stamp times ([#1726](https://github.com/rig-c/core/issues/1726)) ([5efbd68](https://github.com/rig-c/core/commit/5efbd6846abefe0ba82174311cfa34957fd1d1f5))
+
 ## [3.5.0](https://github.com/rig-c/core/compare/v3.4.3...v3.5.0) (2026-11-07)
 
 

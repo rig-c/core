@@ -68026,12 +68026,12 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
           'the positive control beside RS14: the first and the last second the stamp\'s four-digit ISO form can hold are stamped, not refused');
       }
     }
-    for (const epoch of ['', '-1', '1.5', 'abc', ' 1', '1e3', '0x10', '253402300800', '99999999999999999999']) {
+    for (const epoch of ['', '-1', '1.5', 'abc', ' 1', '1e3', '0x10', '01', '00', '253402300800', '99999999999999999999']) {
       for (const entry of ['cli.ts', 'cli_core.ts']) {
         const out = join(fixture, `${entry}-epoch-bad`);
         rmSync(out, { recursive: true, force: true });
         const bad = epochBuild(entry, out, epoch);
-        const named = bad.stderr.includes('CE_RUN_STAMP_EPOCH') && bad.stderr.includes(`SOURCE_DATE_EPOCH is ${JSON.stringify(epoch)}`) && bad.stderr.includes('from 0 to 253402300799, written in decimal digits only');
+        const named = bad.stderr.includes('CE_RUN_STAMP_EPOCH') && bad.stderr.includes(`SOURCE_DATE_EPOCH is ${JSON.stringify(epoch)}`) && bad.stderr.includes('from 0 to 253402300799, written in decimal digits only with no leading zero');
         const untouched = !existsSync(out);
         say('RS14_A_MALFORMED_SOURCE_DATE_EPOCH_IS_REFUSED_BY_NAME_BEFORE_ANY_OUTPUT',
           bad.status === 1 && named && untouched,

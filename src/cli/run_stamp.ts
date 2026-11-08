@@ -42,9 +42,9 @@ export const LAST_SOURCE_DATE_EPOCH = 253402300799;
  */
 export function runStampClock(epoch: string | undefined, wall: () => string): () => string {
   if (epoch === undefined) return wall;
-  const seconds = /^[0-9]+$/.test(epoch) ? Number(epoch) : Number.NaN;
+  const seconds = /^(0|[1-9][0-9]*)$/.test(epoch) ? Number(epoch) : Number.NaN;
   if (!(seconds <= LAST_SOURCE_DATE_EPOCH)) {
-    throw new CompileError(`RUN_STAMP_EPOCH: ${SOURCE_DATE_EPOCH} is ${JSON.stringify(epoch)}, and it must be a whole number of seconds from 0 to ${LAST_SOURCE_DATE_EPOCH}, written in decimal digits only — set it to such a value, or unset it to stamp the wall clock`, 'CE_RUN_STAMP_EPOCH');
+    throw new CompileError(`RUN_STAMP_EPOCH: ${SOURCE_DATE_EPOCH} is ${JSON.stringify(epoch)}, and it must be a whole number of seconds from 0 to ${LAST_SOURCE_DATE_EPOCH}, written in decimal digits only with no leading zero — set it to such a value, or unset it to stamp the wall clock`, 'CE_RUN_STAMP_EPOCH');
   }
   const instant = new Date(seconds * 1000).toISOString();
   return () => instant;

@@ -15,7 +15,7 @@
  * `./spine_commands.ts`'s, which only `cli.ts` imports.
  */
 import { type AtlasRegion, DEFAULT_PACK_SHAPE, DEFAULT_PADDING, DEFAULT_PAGE_EDGES, DEFAULT_PAGE_SIZE, PACK_SHAPES, packAtlas, type PackInput, packFootprints, type PackShape, PAGE_EDGES, type PageEdges, pageFootprint } from '../atlas.ts';
-import { RUN_STAMP_FILE, readRunInputs, type RunInput, runStampPackage, runStampPath, writeRunStamp } from './run_stamp.ts';
+import { RUN_STAMP_FILE, readRunInputs, type RunInput, runStampClock, runStampPackage, runStampPath, writeRunStamp } from './run_stamp.ts';
 import { copyAtlasPages, plannedPageCopies } from '../emit.ts';
 import {
   BUILD_REPORT_SPEC,
@@ -2752,7 +2752,10 @@ function printHeaderBox(result: CompileResult): void {
  * for its gate, which the entry hands in (`BuildGate`): both entries write
  * the Spine pair, the model document and the pages by this one body.
  */
-export function runBuild(flags: Record<string, string>, gate: BuildGate, caller: BuildReport | null = null, now?: () => string): void {
+export function runBuild(flags: Record<string, string>, gate: BuildGate, caller: BuildReport | null = null, wall?: () => string, sourceDateEpoch?: string): void {
+  // The stamp's clock is settled first (issue #1725): a SOURCE_DATE_EPOCH it refuses stops the build before any read,
+  // removal or write, so a bad value leaves the output directory exactly as it was.
+  const now = wall === undefined ? undefined : runStampClock(sourceDateEpoch, wall);
   const { label, opts, profile, packing } = readBuildInvocation(flags);
   const packOpts = packing ? {
       pageSize: readIntFlag(flags, 'page-size', DEFAULT_PAGE_SIZE),
@@ -2934,6 +2937,8 @@ export function dropLine(dropped: DroppedState): string {
 export interface CommandArgs {
   /** Wall clock supplied by the executable entry, for producer receipts. */
   now?: () => string;
+  /** The raw `SOURCE_DATE_EPOCH` the executable entry read, or `undefined` when unset — `build` alone reads it (`runStampClock`). */
+  sourceDateEpoch?: string;
   flags: Record<string, string>;
   lists: Record<string, string[]>;
   positional: string[];
@@ -2959,6 +2964,8 @@ export interface CliRefusal {
 /** An entry: the bodies it registers, and what only its side of the seam knows. */
 export interface CliEntry {
   now?: () => string;
+  /** The raw `SOURCE_DATE_EPOCH` this entry read from its environment, handed to `build` unparsed (`CommandArgs`). */
+  sourceDateEpoch?: string;
   /** The file a source checkout runs this entry as — what the usage's first line names. */
   checkout: string;
   /**
@@ -3153,7 +3160,7 @@ export function runCli(entry: CliEntry, argv: readonly string[]): void {
       console.log(commandHelp(command, docs));
       process.exit(0);
     }
-    entry.runs[command]({ flags, lists, positional, raw: rest, now: entry.now });
+    entry.runs[command]({ flags, lists, positional, raw: rest, now: entry.now, sourceDateEpoch: entry.sourceDateEpoch });
   } catch (err) {
     refuse(err, command, USAGE, entry);
   }

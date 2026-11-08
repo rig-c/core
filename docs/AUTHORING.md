@@ -7380,6 +7380,7 @@ retain the minimal inputs and report that code rather than inventing author data
 | <a id="CE_RUN_STAMP_PACKAGE"></a>`CE_RUN_STAMP_PACKAGE` | “RUN_STAMP_PACKAGE: package.json must supply a non-empty name and version” | Restore the running package's own non-empty name and version before building. |
 | <a id="CE_RUN_STAMP_INPUT_CHANGED"></a>`CE_RUN_STAMP_INPUT_CHANGED` | “RUN_STAMP_INPUT_CHANGED: &lt;value&gt; input changed during build; rerun with fixed inputs” | Freeze the named recipe input for the whole build and rerun. |
 | <a id="CE_RUN_STAMP_PATH_VOLUME"></a>`CE_RUN_STAMP_PATH_VOLUME` | “run stamp file "&lt;value&gt;" relative to output "&lt;value&gt;" produced absolute path "&lt;value&gt;" — keep recipe and report files on the output volume” | Put recipe inputs and the optional report on the output directory's volume. Refused before any output is written or removed. |
+| <a id="CE_RUN_STAMP_EPOCH"></a>`CE_RUN_STAMP_EPOCH` | “RUN_STAMP_EPOCH: SOURCE_DATE_EPOCH is &lt;value&gt;, and it must be a whole number of seconds from 0 to &lt;value&gt;, written in decimal digits only — set it to such a value, or unset it to stamp the wall clock” | Set `SOURCE_DATE_EPOCH` to a whole number of seconds from 0 to 253402300799 (9999-12-31T23:59:59Z) in decimal digits only — no sign, point, exponent or space — or unset it. Refused before the build reads, removes or writes anything; the wall clock is never used in its place. |
 
 #### 5.1.3 Manifest, setup and animation targets
 
@@ -8087,6 +8088,20 @@ own `package.json`. Its name is `rig-c`. `command` is `build`.
 The UTC timestamps use ISO 8601 with milliseconds and a trailing `Z`, supplied
 by the executable entry's wall clock.
 
+To reproduce a stamp byte for byte, set `SOURCE_DATE_EPOCH`, the
+reproducible-builds convention, to a whole number of seconds since
+1970-01-01T00:00:00Z. Both `started_at` and `finished_at` then equal that
+instant, as `new Date(seconds * 1000).toISOString()` writes it, so
+`SOURCE_DATE_EPOCH=1762560000` stamps `2025-11-08T00:00:00.000Z` twice. No key
+is added and nothing else in the stamp changes. Unset, the wall clock is read
+as before. The value must be decimal digits only, from 0 to 253402300799
+(9999-12-31T23:59:59Z, the last second that keeps a four-digit year). Anything
+else, including an empty value, a sign, a point, an exponent or a space, is
+refused by `CE_RUN_STAMP_EPOCH` (message label `RUN_STAMP_EPOCH`) before the
+build reads, removes or writes anything, so an earlier stamp stays as it was.
+The wall clock is never used in its place, because a typo would quietly bring
+back the times the caller asked to fix. Only `build` reads the variable.
+
 This follows the shared [rig-run/1 shape and rules](https://github.com/rig-c/parts/blob/15f4993e09d49b82e380ecedc772f02e4afe4032/docs/STABILITY.md#run-stamp-runjson-spec-rig-run1).
 The one schema difference is that `inputs` replaces `config` in the same
 position. Each input row has `role`, `path`, `sha256`, in that order.
@@ -8113,8 +8128,9 @@ package name or version.
 
 An earlier stamp is removed before compilation. A refused build leaves no
 stamp. Usage errors stop before removal. `repack` and in-process compilation
-retain their existing output contracts. `run.json` records wall-clock time
-and is excluded from A18 and `emit_hashes` byte comparisons. All other output
+retain their existing output contracts. `run.json` records wall-clock time,
+or the `SOURCE_DATE_EPOCH` instant when set, and is excluded from A18 and
+`emit_hashes` byte comparisons. All other output
 bytes keep their existing determinism contract.
 
 **Stability promise.** The keys, key order and meanings of `rigc-run/1` are

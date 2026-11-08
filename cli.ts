@@ -53,6 +53,8 @@ runCli(
   {
     checkout: 'cli.ts',
     now: () => new Date().toISOString(),
+    // The reproducible-builds convention, read here and nowhere under src/: set, it fixes both run stamp times (issue #1725).
+    sourceDateEpoch: process.env.SOURCE_DATE_EPOCH,
     linksRuntime: true,
     runs: { ...CORE_COMMAND_RUNS, ...SPINE_COMMAND_RUNS },
     profileRules: PROFILE_RULES,

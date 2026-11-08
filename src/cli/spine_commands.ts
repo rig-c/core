@@ -66,8 +66,8 @@ const ROUND_TRIP_GATE: BuildGate = {
   look: (outDir) => `rigc: look at it: rigc preview --candidate ${outDir}`,
 };
 
-export function cmdBuild(flags: Record<string, string>, now?: () => string): void {
-  runBuild(flags, ROUND_TRIP_GATE, null, now);
+export function cmdBuild(flags: Record<string, string>, now?: () => string, sourceDateEpoch?: string): void {
+  runBuild(flags, ROUND_TRIP_GATE, null, now, sourceDateEpoch);
 }
 
 export function cmdValidate(flags: Record<string, string>, positional: string[]): void {
@@ -803,7 +803,7 @@ export function cmdBoneDist(flags: Record<string, string>): void {
  * name — what only `cli.ts` registers, beside `./core_commands.ts`'s.
  */
 export const SPINE_COMMAND_RUNS: Readonly<Record<string, CommandRun>> = {
-  build: ({ flags, now }) => cmdBuild(flags, now),
+  build: ({ flags, now, sourceDateEpoch }) => cmdBuild(flags, now, sourceDateEpoch),
   repack: (args) => cmdRepack(args, ROUND_TRIP_GATE),
   validate: ({ flags, positional }) => cmdValidate(flags, positional),
   bench: ({ flags, positional }) => cmdBench(flags, positional),

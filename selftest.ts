@@ -67890,6 +67890,9 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
     outputs: Array<{ path: string; sha256: string }>;
   }
   const version = (JSON.parse(readFileSync(join(import.meta.dir, 'package.json'), 'utf8')) as { version: string }).version;
+  // The wall-clock controls below run with SOURCE_DATE_EPOCH unset whatever the harness inherited (issue #1725).
+  const unsetEnv: Record<string, string | undefined> = { ...process.env };
+  delete unsetEnv.SOURCE_DATE_EPOCH;
   for (const entry of ['cli.ts', 'cli_core.ts']) {
     for (const mode of ['plain', 'copy', 'pack', 'cut']) {
       const out = join(fixture, `${entry}-${mode}`);
@@ -67900,7 +67903,7 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
       const args = mode === 'cut' ? ['--cut', 'probe', '--cuts', cuts] : ['--rig', rig, '--motion', motion, '--out', out];
       if (mode === 'copy') args.push('--copy-images');
       if (mode === 'pack') args.push('--pack');
-      const run = (): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [entry, 'build', ...args], { cwd: import.meta.dir, encoding: 'utf8' });
+      const run = (): ReturnType<typeof spawnSync> => spawnSync(process.execPath, [entry, 'build', ...args], { cwd: import.meta.dir, encoding: 'utf8', env: unsetEnv });
       const first = run();
       const stampPath = join(out, RUN_STAMP_FILE);
       const read = (): Stamp | null => existsSync(stampPath) ? JSON.parse(readFileSync(stampPath, 'utf8')) as Stamp : null;
@@ -67930,7 +67933,7 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
       say('RS02_THE_STAMP_READER_REJECTS_PLANTED_FAILURES',
         audit(null, 0).includes('stamp missing on green') && audit(original, 1).includes('stamp on refusal') && audit(wrongVersion, 0).includes('identity') && audit(wrongHash, 0).includes('path/hash'),
         `${entry} ${mode}: missing, refused, version and hash plants`, 'a reader must be observed refusing every claimed failure');
-      const usage = spawnSync(process.execPath, [entry, 'build', ...args.filter((arg) => arg !== '--pack'), '--page-size', 'bad', '--pack'], { cwd: import.meta.dir, encoding: 'utf8' });
+      const usage = spawnSync(process.execPath, [entry, 'build', ...args.filter((arg) => arg !== '--pack'), '--page-size', 'bad', '--pack'], { cwd: import.meta.dir, encoding: 'utf8', env: unsetEnv });
       say('RS07_USAGE_ERRORS_PRESERVE_THE_EARLIER_STAMP', usage.status === 2 && readFileSync(stampPath, 'utf8') === JSON.stringify(original, null, 2) + '\n',
         `${entry} ${mode}: exit=${String(usage.status)}`, 'usage errors must stop before touching the output directory');
       const previousMotion = readFileSync(motion, 'utf8');
@@ -67965,6 +67968,84 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
       say('RS09_A_CHANGED_REPORT_NO_LONGER_MATCHES_THE_STAMP', row?.sha256 !== digest(report),
         `${entry}: altered report bytes differ from the recorded hash`, 'the report row must measure the bytes on disk');
     }
+  }
+
+  // SOURCE_DATE_EPOCH (issue #1725): set, both times are that instant on both entries; unset, the wall clock as before; anything else refused by name.
+  {
+    const epochBuild = (entry: string, out: string, epoch: string | undefined): { status: number | null; stderr: string; text: string | null } => {
+      const env = { ...unsetEnv };
+      if (epoch !== undefined) env.SOURCE_DATE_EPOCH = epoch;
+      const r = spawnSync(process.execPath, [entry, 'build', '--rig', rig, '--motion', motion, '--out', out], { cwd: import.meta.dir, encoding: 'utf8', env });
+      const stampPath = join(out, RUN_STAMP_FILE);
+      return { status: r.status, stderr: r.stderr, text: existsSync(stampPath) ? readFileSync(stampPath, 'utf8') : null };
+    };
+    const FIXED = '1762560000';
+    const FIXED_ISO = '2025-11-08T00:00:00.000Z';
+    const timesOf = (text: string | null): string => {
+      if (text === null) return '(no stamp)';
+      const stamp = JSON.parse(text) as Stamp;
+      return `${stamp.started_at}/${stamp.finished_at}`;
+    };
+    const timeless = (text: string | null): string | null => text === null ? null
+      : text.replace(/"started_at": "[^"]*"/, '"started_at": "T"').replace(/"finished_at": "[^"]*"/, '"finished_at": "T"');
+    const fixedTexts: Array<string | null> = [];
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const a = epochBuild(entry, join(fixture, `${entry}-epoch-a`), FIXED);
+      const b = epochBuild(entry, join(fixture, `${entry}-epoch-b`), FIXED);
+      fixedTexts.push(a.text, b.text);
+      const pinned = timesOf(a.text) === `${FIXED_ISO}/${FIXED_ISO}`;
+      const planted = a.text === null ? null : a.text.replace(FIXED_ISO, '2025-11-08T00:00:00.001Z');
+      const plantSeen = planted !== null && planted !== b.text;
+      say('RS11_SOURCE_DATE_EPOCH_FIXES_BOTH_TIMES_BYTE_FOR_BYTE',
+        a.status === 0 && b.status === 0 && a.text !== null && a.text === b.text && pinned && plantSeen,
+        `${entry}: SOURCE_DATE_EPOCH=${FIXED}, exits ${String(a.status)}/${String(b.status)}, times ${timesOf(a.text)} and ${timesOf(b.text)}, stamps byte-identical=${a.text !== null && a.text === b.text}, a planted 1 ms difference read as different=${plantSeen}`,
+        'a caller binding every output byte by hash can reproduce the stamp only when both times come from the instant it named');
+    }
+    say('RS11_SOURCE_DATE_EPOCH_FIXES_BOTH_TIMES_BYTE_FOR_BYTE',
+      fixedTexts.length === 4 && fixedTexts.every((text) => text !== null && text === fixedTexts[0]),
+      `both entries: ${fixedTexts.filter((text) => text !== null && text === fixedTexts[0]).length} of ${fixedTexts.length} fixed stamps byte-identical across cli.ts and cli_core.ts`,
+      'the two entries write one stamp for one recipe at one instant');
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const before = new Date().toISOString();
+      const unset = epochBuild(entry, join(fixture, `${entry}-epoch-unset`), undefined);
+      const after = new Date().toISOString();
+      const [started, finished] = timesOf(unset.text).split('/');
+      const wall = unset.text !== null && before <= started && started <= finished && finished <= after;
+      const shaped = unset.text !== null && timeless(unset.text) === timeless(fixedTexts[0]);
+      say('RS12_UNSET_SOURCE_DATE_EPOCH_STAMPS_THE_WALL_CLOCK_IN_THE_SAME_SHAPE',
+        unset.status === 0 && wall && shaped,
+        `${entry}: unset, exit=${String(unset.status)}, times ${timesOf(unset.text)} within the harness's ${before}..${after}=${wall}, every other byte equal to the fixed stamp's=${shaped}`,
+        'opting out of the fixed clock leaves the stamp as it was before the variable existed, its two times read off the wall clock');
+    }
+    for (const [epoch, iso] of [['0', '1970-01-01T00:00:00.000Z'], ['253402300799', '9999-12-31T23:59:59.000Z']]) {
+      for (const entry of ['cli.ts', 'cli_core.ts']) {
+        const edge = epochBuild(entry, join(fixture, `${entry}-epoch-${epoch}`), epoch);
+        say('RS13_THE_ENDS_OF_THE_SOURCE_DATE_EPOCH_RANGE_ARE_ACCEPTED',
+          edge.status === 0 && timesOf(edge.text) === `${iso}/${iso}`,
+          `${entry}: SOURCE_DATE_EPOCH=${epoch}, exit=${String(edge.status)}, times ${timesOf(edge.text)}`,
+          'the positive control beside RS14: the first and the last second the stamp\'s four-digit ISO form can hold are stamped, not refused');
+      }
+    }
+    for (const epoch of ['', '-1', '1.5', 'abc', ' 1', '1e3', '0x10', '01', '00', '253402300800', '99999999999999999999']) {
+      for (const entry of ['cli.ts', 'cli_core.ts']) {
+        const out = join(fixture, `${entry}-epoch-bad`);
+        rmSync(out, { recursive: true, force: true });
+        const bad = epochBuild(entry, out, epoch);
+        const named = bad.stderr.includes('CE_RUN_STAMP_EPOCH') && bad.stderr.includes(`SOURCE_DATE_EPOCH is ${JSON.stringify(epoch)}`) && bad.stderr.includes('from 0 to 253402300799, written in decimal digits only with no leading zero');
+        const untouched = !existsSync(out);
+        say('RS14_A_MALFORMED_SOURCE_DATE_EPOCH_IS_REFUSED_BY_NAME_BEFORE_ANY_OUTPUT',
+          bad.status === 1 && named && untouched,
+          `${entry}: SOURCE_DATE_EPOCH=${JSON.stringify(epoch)}, exit=${String(bad.status)}, names the variable, value and requirement=${named}, output directory absent=${untouched}`,
+          'a typo must not quietly bring back the wall clock the caller asked to remove, and a refused value writes nothing at all');
+      }
+    }
+    const kept = join(fixture, 'cli_core.ts-epoch-a');
+    const earlier = existsSync(join(kept, RUN_STAMP_FILE)) ? readFileSync(join(kept, RUN_STAMP_FILE), 'utf8') : null;
+    const refusedOver = epochBuild('cli_core.ts', kept, 'abc');
+    say('RS14_A_MALFORMED_SOURCE_DATE_EPOCH_IS_REFUSED_BY_NAME_BEFORE_ANY_OUTPUT',
+      earlier !== null && refusedOver.status === 1 && refusedOver.text === earlier,
+      `cli_core.ts over an earlier build: exit=${String(refusedOver.status)}, earlier stamp kept byte for byte=${earlier !== null && refusedOver.text === earlier}`,
+      'like a usage error, the refusal stops before the earlier stamp is removed, so the directory still describes the build that wrote it');
   }
 
   // Plant only in an isolated source copy, then exercise the normal CLI entry points.

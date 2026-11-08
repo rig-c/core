@@ -27,6 +27,29 @@ export function readRunInputs(files: readonly { role: RunInputRole; path: string
     roles.indexOf(a.role) - roles.indexOf(b.role) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
+/** The variable a caller sets to fix both stamp times: the reproducible-builds convention, read by the entries only. */
+export const SOURCE_DATE_EPOCH = 'SOURCE_DATE_EPOCH';
+
+/** 9999-12-31T23:59:59Z: the last second whose `toISOString()` keeps the stamp's four-digit year. */
+export const LAST_SOURCE_DATE_EPOCH = 253402300799;
+
+/**
+ * The stamp's clock. Unset, it is the entry's own wall clock, untouched. Set, both `started_at` and
+ * `finished_at` are that one instant. A value that is not a whole number of seconds in decimal digits
+ * from 0 to `LAST_SOURCE_DATE_EPOCH` is refused by name, never replaced by the wall clock: a typo
+ * would quietly bring back the non-determinism the caller asked to remove. The entry reads the
+ * environment and hands the raw text here, so nothing under `src/` reads it.
+ */
+export function runStampClock(epoch: string | undefined, wall: () => string): () => string {
+  if (epoch === undefined) return wall;
+  const seconds = /^(0|[1-9][0-9]*)$/.test(epoch) ? Number(epoch) : Number.NaN;
+  if (!(seconds <= LAST_SOURCE_DATE_EPOCH)) {
+    throw new CompileError(`RUN_STAMP_EPOCH: ${SOURCE_DATE_EPOCH} is ${JSON.stringify(epoch)}, and it must be a whole number of seconds from 0 to ${LAST_SOURCE_DATE_EPOCH}, written in decimal digits only with no leading zero — set it to such a value, or unset it to stamp the wall clock`, 'CE_RUN_STAMP_EPOCH');
+  }
+  const instant = new Date(seconds * 1000).toISOString();
+  return () => instant;
+}
+
 /** Refuse a path on another volume before a build writes or removes any output. */
 export function runStampPath(out: string, file: string): string {
   const path = relative(resolve(out), resolve(file));

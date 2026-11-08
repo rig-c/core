@@ -2062,7 +2062,7 @@ const runsRuntimeFreeTypecheck = (plant: Plant): boolean => plant === 'none' || 
  * `cli.ts` registers its own (`cmdBuild`), so the round-tripped build, render
  * and check are untouched, and `alone` below holds that no other step went red.
  */
-const CORE_BUILD_LINE = '  build: ({ flags, now }) => runBuild(flags, MODEL_AND_TEXT_GATE, null, now),';
+const CORE_BUILD_LINE = '  build: ({ flags, now, sourceDateEpoch }) => runBuild(flags, MODEL_AND_TEXT_GATE, null, now, sourceDateEpoch),';
 const CORE_BUILD_MODULE = 'src/cli/core_commands.ts';
 const CORE_BUILD_PLANTS: Record<'refuse-core-build' | 'move-core-byte', string> = {
   'refuse-core-build': "  build: () => { throw new UsageError('install smoke plant: the core entry\\'s build refuses before it compiles'); },",
@@ -2070,7 +2070,7 @@ const CORE_BUILD_PLANTS: Record<'refuse-core-build' | 'move-core-byte', string> 
   // one byte appended to the atlas the core entry wrote, which only the
   // comparison against the round-tripped build can see.
   'move-core-byte':
-    "  build: ({ flags, now }) => { runBuild(flags, MODEL_AND_TEXT_GATE, null, now); const at = join(flags.out, 'skeleton.atlas'); writeFileSync(at, `${readFileSync(at, 'utf8')}\\n`); },",
+    "  build: ({ flags, now, sourceDateEpoch }) => { runBuild(flags, MODEL_AND_TEXT_GATE, null, now, sourceDateEpoch); const at = join(flags.out, 'skeleton.atlas'); writeFileSync(at, `${readFileSync(at, 'utf8')}\\n`); },",
 };
 
 /** What the comparison holds equal: every file each entry's build of the fixture writes, by name. */

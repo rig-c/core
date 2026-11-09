@@ -8084,7 +8084,7 @@ Both CLI entries write `run.json` beside a successful `build` after every gate
 and output write finishes. The fixed top-level key order is `spec`, `package`,
 `command`, `started_at`, `finished_at`, `inputs`, `outputs`.
 `package` has `name`, `version` in that order, read from the running package's
-own `package.json`. Its name is `rig-c`. `command` is `build`.
+own `package.json`. Its name is `@rig-c/core` (or the installed alias, `rig-c` or `spine-rigc`). `command` is `build`.
 The UTC timestamps use ISO 8601 with milliseconds and a trailing `Z`, supplied
 by the executable entry's wall clock.
 

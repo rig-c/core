@@ -1,16 +1,18 @@
-# Release: the cut is one click, and no credential exists to leak.
+# Release: triggered by pushing a deliberate vX.Y.Z tag on main, with no credential to leak.
 #
-# Every push to main hands the commits to release-please, which keeps a
-# "release: vX.Y.Z" pull request open — next version derived from the
-# conventional-commit subjects, CHANGELOG.md generated, package.json bumped.
-# Merging that pull request is the release: the resulting push runs this
-# workflow again, release-please tags vX.Y.Z and cuts the GitHub release, and
-# the same run publishes to npm over OIDC (trusted publishing) — no npm token,
-# no OTP. It publishes the package three times, under three names: `@rig-c/core`,
-# the name in package.json, and two aliases carrying the same files at every
-# version — `rig-c`, the convenience unscoped name (issue #1258), and
-# `spine-rigc`, the name it first shipped under (issue #1258).
-# `ALIASES` in scripts/alias_tarball.ts is the list; CUR122 holds the
+# Pushing a version tag vX.Y.Z (after merging the release commit to protected
+# main) runs this workflow. The `plan` job checks out main's history and tags,
+# requires a strict vX.Y.Z tag ref, resolves the tag to a full commit SHA via
+# the commits API, requires the run's GITHUB_SHA and the local tag commit to
+# equal that SHA, verifies the commit is reachable from origin/main, verifies
+# package.json in the tagged commit tree matches `@rig-c/core@X.Y.Z`, and
+# refuses a version the registry already serves or a tag older than
+# `@rig-c/core@latest`. The same run publishes to npm over OIDC (trusted
+# publishing) — no npm token, no OTP. It publishes the package three times,
+# under three names: `@rig-c/core`, the name in package.json, and two aliases
+# carrying the same files at every version — `rig-c`, the convenience unscoped
+# name (issue #1258), and `spine-rigc`, the name it first shipped under (issue
+# #1258). `ALIASES` in scripts/alias_tarball.ts is the list; CUR122 holds the
 # publish steps and both confirmation calls below to it.
 #
 # The cut resolves its target in plan, then reuse looks for successful CI
@@ -22,30 +24,24 @@
 # The folder prepublishOnly hook remains available for manual publication.
 # CUR119/120/131 hold this graph and its dispatch boundaries.
 #
-# A push re-run can cut a tag at a commit newer than its GITHUB_SHA. Before
-# emitting publish=true, plan resolves the tag through the commits API and
-# refuses PROVENANCE_SHA_MISMATCH with both SHAs and a tag-ref dispatch command.
-# The tag remains cut. gate and publish consume the verified full SHA on pushes;
-# dispatch keeps its existing tag resolution and checked-out HEAD guard (#1551).
+# Before emitting publish=true, plan resolves the tag through the commits API
+# and refuses PROVENANCE_SHA_MISMATCH if the run's GITHUB_SHA or local tag
+# commit does not match the resolved commit SHA. gate and publish consume the
+# verified full SHA; publish also retains its checked-out HEAD guard (#1542,
+# #1551).
 #
-# A failure after the tag leaves a version unpublished: release-please has cut
-# the tag and the GitHub release, so a re-run no longer reports
-# `release_created` and `gate` and `publish` are skipped, while the registry
-# keeps serving the previous version (issue #1504: a transient signing-service
-# 502 on `npm publish --provenance`, on another package of the toolchain). A
-# publish by hand would lose provenance, and the trusted publisher names this
-# file. Such a tag is published by a dispatch with the `tag` input
-# (`gh workflow run release.yml -f tag=vX.Y.Z --ref vX.Y.Z`, for a tag carrying
-# the guard below): `plan` skips release-please
-# and resolves the tag, then the same `gate` and the same `publish` run over
-# it, from this same filename. The trusted publisher is unchanged, but npm
-# records the dispatch's GITHUB_REF/GITHUB_SHA, not checkout's HEAD. The publish
-# job refuses a dispatch whose SHA differs from that HEAD before any name is
-# published (PROVENANCE_SHA_MISMATCH, issue #1542). The dispatched ref must
-# itself carry this guard; an older tag's workflow is not retroactively fixed.
-# There is no path to `publish` that does not pass the gate
-# (RELEASING.md, "Republishing a cut whose publish failed"). `CUR131` holds
-# that shape and names each refusal.
+# A failure after the tag is pushed leaves a version unpublished (issue #1504:
+# a transient signing-service 502 on `npm publish --provenance`). A publish by
+# hand would lose provenance, and the trusted publisher names this file. Such a
+# tag is published by a dispatch with the `tag` input
+# (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`, for a tag carrying
+# the guard below): `plan` resolves the tag through the same selector, then the
+# same `gate` and the same `publish` run over it, from this same filename. The
+# trusted publisher is unchanged, and `plan` and `publish` refuse a dispatch
+# whose ref or SHA differs from the tag's commit before any name is published
+# (RELEASE_REF_NOT_TAG, PROVENANCE_SHA_MISMATCH, issue #1542). There is no path
+# to `publish` that does not pass the gate (RELEASING.md, "Republishing a cut
+# whose publish failed"). `CUR131` holds that shape and names each refusal.
 #
 # The dispatch takes exactly one of two inputs, both optional, because GitHub
 # refuses a dispatch that omits a required input and an omitted string input
@@ -64,7 +60,7 @@ name: release
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
   # Two things on demand, one per dispatch:
   #   - `version`: re-run a confirmation that ran out of wait, publishing
   #     nothing (issue #563: the confirmation is the last step of a cut and the
@@ -73,20 +69,22 @@ on:
   #     dispatch reaches the `confirm` job and nothing else: `plan`'s `if` does
   #     not admit a dispatch with a version and no tag, and `gate` and
   #     `publish` need `plan`.
-  #   - `tag`: publish a tag release-please already cut whose publish did not
-  #     land (issue #1504). Release-please is a step held to a push, so a
-  #     dispatch cannot cut a tag or a GitHub release. `plan`'s resolve step
-  #     refuses a tag not of the form vX.Y.Z (RELEASE_TAG_FORM), a prerelease
-  #     tag (RELEASE_TAG_PRERELEASE: everything here publishes under latest,
-  #     and release-please here cuts no prerelease, so there is no dist-tag
-  #     path to send one down until a card configures one and removes this
-  #     refusal with it), a tag with no GitHub release
-  #     (RELEASE_TAG_UNRELEASED), a version the registry already serves under
-  #     @rig-c/core (RELEASE_ALREADY_PUBLISHED) and a version below the registry's
-  #     latest (RELEASE_TAG_BELOW_LATEST: npm 12.2.0's publish
+  #   - `tag`: publish an existing release tag on main whose publish did not
+  #     land (issue #1504). `plan`'s resolve step refuses a non-tag workflow
+  #     ref (RELEASE_REF_NOT_TAG), a tag not of the form vX.Y.Z
+  #     (RELEASE_TAG_FORM), a prerelease tag (RELEASE_TAG_PRERELEASE:
+  #     everything here publishes under latest, and there is no dist-tag path
+  #     to send one down until a card configures one and removes this refusal
+  #     with it), an unresolved tag commit (RELEASE_TAG_UNRESOLVED), a run or
+  #     local tag SHA mismatch (PROVENANCE_SHA_MISMATCH), a commit not
+  #     reachable from origin/main (RELEASE_TAG_NOT_ON_MAIN), a tagged commit
+  #     whose package.json is not @rig-c/core@X.Y.Z
+  #     (RELEASE_TAG_VERSION_MISMATCH), a version the registry already serves
+  #     under @rig-c/core (RELEASE_ALREADY_PUBLISHED) and a version below the
+  #     registry's latest (RELEASE_TAG_BELOW_LATEST: npm 12.2.0's publish
   #     refuses to put latest on a version below the highest one implicitly,
   #     and the publish steps below pass no `--tag`). A tag it resolves runs
-  #     the whole `gate` and then `publish`, as the push that cut it would have.
+  #     the whole `gate` and then `publish`, as the tag push would have.
   workflow_dispatch:
     inputs:
       tag:
@@ -115,88 +113,87 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 🔒 Release-please — the release commit, the tag and the GitHub release —
-  # is a step of this job held to a push, so no dispatch can cut anything. The
-  # job runs on a push and on a dispatch that is not a confirmation alone: on a
-  # `tag` dispatch it only resolves the tag, and a dispatch with both inputs or
-  # neither reaches the resolve step only to be refused there. Its outputs
-  # `publish` and `tag` are the one condition and the one tag `gate` and
-  # `publish` read, whichever event resolved them — so the dispatch path is
-  # not a second graph, and it cannot reach `publish` without `gate`.
+  # 🔒 Triggered by a v* tag push or a `tag` dispatch (not a confirmation
+  # dispatch alone). Checks out main with full history and tags, and resolves
+  # the release tag only when the workflow ref is refs/tags/vX.Y.Z, the tag's
+  # commit equals GITHUB_SHA and the local tag commit, is reachable from
+  # origin/main, carries @rig-c/core@X.Y.Z in the tagged commit's package.json,
+  # is not yet served by the registry, and is not below @rig-c/core@latest. Its
+  # outputs `publish`, `tag` and `sha` are what `reuse`, `gate` and `publish`
+  # read, whichever event resolved them.
   plan:
     if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write # release commit, tag, GitHub release; the resolve step reads the release
-      pull-requests: write # open and update the release PR
-      issues: write # release-please labels
+      contents: read # fetch main history and tags to validate the release commit
     outputs:
       publish: ${{ steps.target.outputs.publish }}
       tag: ${{ steps.target.outputs.tag }}
       sha: ${{ steps.target.outputs.sha }}
     steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        if: ${{ github.event_name == 'push' }}
+      - uses: actions/checkout@v4
         with:
-          # GITHUB_TOKEN is the intended default here. Its one limitation is
-          # that the `pull_request` run its PR starts has no permission to run
-          # until somebody approves it, so the release PR's required check is
-          # blocked rather than absent — see RELEASING.md for that approve step
-          # and how to opt into RELEASE_PLEASE_TOKEN if it ever stops being
-          # enough. The fallback below needs no edit to this file.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
 
-      # What to publish: on a push, the tag release-please just cut, if it cut
-      # one; on a dispatch, the `tag` input once it is a cut tag the registry
-      # does not serve yet and that is not below its latest. Each refusal is
-      # one `::error::` line naming its rule, and fails this job, so `gate`
-      # and `publish` never start. The inputs reach the script through the
-      # environment, never interpolated. The package name is written here
-      # rather than read from package.json because this job checks nothing
-      # out; `CUR131` holds the two `npm view` reads to package.json's name.
-      # The semver order is computed in node, not `sort -V`, which sorts
-      # 1.0.0-rc.1 after 1.0.0.
+      # What to publish: a pushed or dispatched vX.Y.Z tag whose workflow ref
+      # is refs/tags/vX.Y.Z, whose commit matches GITHUB_SHA and the local tag,
+      # is reachable from origin/main, carries matching @rig-c/core@X.Y.Z in
+      # the tagged commit's package.json, is not on the registry yet, and is not
+      # below @rig-c/core@latest. Each refusal is one `::error::` line naming
+      # its rule, and fails this job, so `gate` and `publish` never start. The
+      # inputs reach the script through the environment, never interpolated;
+      # `CUR131` and `CUR133` hold this step. The semver order is computed in
+      # node, not `sort -V`, which sorts 1.0.0-rc.1 after 1.0.0.
       - name: Resolve the tag to publish
         id: target
         env:
           EVENT: ${{ github.event_name }}
-          CREATED: ${{ steps.release.outputs.release_created }}
-          CUT_TAG: ${{ steps.release.outputs.tag_name }}
+          REF: ${{ github.ref }}
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = push ]; then
-            if [ "$CREATED" != true ]; then echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-            # The commits API peels annotated tags; the refs API returns their tag-object SHA.
-            # An explicit tag ref avoids resolving a branch with the same name.
-            if [[ ! "$CUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: \"$CUT_TAG\" is not a stable cut tag vX.Y.Z"; exit 1; fi
-            if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $CUT_TAG to a commit"; exit 1; fi
-            if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $CUT_TAG did not resolve to a full commit SHA"; exit 1; fi
-            if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $CUT_TAG's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $CUT_TAG -f tag=$CUT_TAG"; exit 1; fi
-            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+            if [ -z "$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_INPUT: neither tag nor version was given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+            release_tag="$INPUT_TAG"
+          elif [ "$EVENT" = push ]; then
+            case "$REF" in
+              refs/tags/*) release_tag="${REF#refs/tags/}" ;;
+              *) echo "::error::RELEASE_REF_NOT_TAG: workflow ref \"$REF\" is not refs/tags/vX.Y.Z"; exit 1 ;;
+            esac
+          else
+            echo "::error::RELEASE_REF_NOT_TAG: unsupported event \"$EVENT\""; exit 1
           fi
-          if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
-          if [ -z "$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_INPUT: neither tag nor version was given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
-          if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z (or vX.Y.Z-<prerelease>)"; exit 1; fi
-          case "$INPUT_TAG" in *-*) echo "::error::RELEASE_TAG_PRERELEASE: $INPUT_TAG is a prerelease; this workflow publishes under latest only — its publish steps pass no --tag and release-please here cuts no prerelease — so a prerelease dispatch would move latest onto it (RELEASING.md)"; exit 1;; esac
-          if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
-          version="${INPUT_TAG#v}"
+          if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$ ]]; then echo "::error::RELEASE_TAG_FORM: \"$release_tag\" is not vX.Y.Z (or vX.Y.Z-<prerelease>)"; exit 1; fi
+          case "$release_tag" in *-*) echo "::error::RELEASE_TAG_PRERELEASE: $release_tag is a prerelease; this workflow publishes under latest only — its publish steps pass no --tag — so a prerelease cut or dispatch would move latest onto it (RELEASING.md)"; exit 1;; esac
+          if [ "$REF" != "refs/tags/$release_tag" ]; then echo "::error::RELEASE_REF_NOT_TAG: workflow ref \"$REF\" is not refs/tags/$release_tag; dispatch with gh workflow run release.yml --ref $release_tag -f tag=$release_tag"; exit 1; fi
+          # The commits API peels annotated tags; the refs API returns their tag-object SHA.
+          # An explicit tag ref avoids resolving a branch with the same name.
+          if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$release_tag" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $release_tag to a commit"; exit 1; fi
+          if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $release_tag did not resolve to a full commit SHA"; exit 1; fi
+          if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $release_tag's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $release_tag -f tag=$release_tag"; exit 1; fi
+          if ! local_sha="$(git rev-parse --verify --quiet "refs/tags/$release_tag^{commit}")"; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: tag $release_tag does not resolve to a local commit"; exit 1; fi
+          if [ "$local_sha" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: fetched tag $release_tag ($local_sha) does not match resolved commit $tag_sha"; exit 1; fi
+          if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: origin/main was not fetched"; exit 1; fi
+          if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: $release_tag ($tag_sha) is not reachable from origin/main"; exit 1; fi
+          version="${release_tag#v}"
+          if ! pkg_json="$(git show "$tag_sha:package.json" 2>/dev/null)"; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: cannot read package.json from $release_tag ($tag_sha)"; exit 1; fi
+          if ! pkg_id="$(PKG_JSON="$pkg_json" node -e 'const p = JSON.parse(process.env.PKG_JSON); if (typeof p.name === "string" && typeof p.version === "string") process.stdout.write(p.name + "@" + p.version); else process.exit(1);' 2>/dev/null)"; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: invalid package.json in $release_tag ($tag_sha)"; exit 1; fi
+          if [ "$pkg_id" != "@rig-c/core@$version" ]; then echo "::error::RELEASE_TAG_VERSION_MISMATCH: $release_tag ($tag_sha) package.json is $pkg_id, expected @rig-c/core@$version"; exit 1; fi
           if served="$(npm view "@rig-c/core@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/core@$version; the aliases follow it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
           if latest="$(npm view "@rig-c/core" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
             const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
             const ids = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i] === undefined) return -1; if (b[i] === undefined) return 1; const na = /^[0-9]+$/.test(a[i]), nb = /^[0-9]+$/.test(b[i]); if (na && nb && Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]); if (na !== nb) return na ? -1 : 1; if (!na && a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; };
             const cmp = (x, y) => { const a = parse(x), b = parse(y); for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1; return ids(a.pre, b.pre); };
             process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
-          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest @rig-c/core@$latest; the registry will not move latest implicitly and these publication steps pass no --tag, so it is not published by this dispatch (RELEASING.md)"; exit 1; fi
-          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $release_tag is below the registry's latest @rig-c/core@$latest; the registry will not move latest implicitly and these publication steps pass no --tag, so it is not published by this dispatch (RELEASING.md)"; exit 1; fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$release_tag" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
 
   # A no-cut push starts none of the lookup/gate/publish work. Dispatch cannot
   # reuse a source verdict and follows the same fresh gate as a push miss.

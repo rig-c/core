@@ -1,154 +1,71 @@
 # Releasing
 
-The cut is one click: merge the release pull request. Everything either side of
-that click is [`.github/workflows/release.yml`](.github/workflows/release.yml),
+The cut is a deliberate tag push (`vX.Y.Z`) on a commit on `main` whose
+`package.json` already carries `X.Y.Z`. Everything after that tag push is
+[`.github/workflows/release.yml`](.github/workflows/release.yml),
 and no npm credential exists on any machine — the publish authenticates to the
 registry over OIDC (npm trusted publishing), so there is no token to leak and no
 2FA prompt to answer. See [Publishing](#publishing).
 
 ## The loop
 
-Every push to `main` runs `release.yml`, which hands the new commits to
-[release-please](https://github.com/googleapis/release-please-action):
+Releases are not opened by a bot on every push to `main`:
 
-- **Nothing releasable since the last tag** → the run does nothing. Commit types
-  release-please hides from the changelog (`docs`, `test`, `ci`, `build`,
-  `chore`, `refactor`, `style`) do not open a release pull request on their own.
-  **Visibility is what makes a type releasable**, which is why
-  `release-please-config.json` carries a `changelog-sections` array: it is the
-  default node list plus `check` → *Instrument*, so instrument work on shipped
-  sources counts and gets its own changelog line instead of riding along
-  silently ([#163](https://github.com/rig-c/core/issues/163)). Overriding the
-  array replaces the default rather than extending it, so the whole list is
-  written out — dropping a row from it hides that type.
+- **Preparing a release** → open a pull request that sets the `package.json`
+  version to `X.Y.Z` and writes the `CHANGELOG.md` entry for `vX.Y.Z`. Because it
+  is a normal pull request opened by a contributor or session rather than
+  `github-actions[bot]`, `ci.yml` starts automatically without manual workflow
+  approval.
+- **Landing the release commit** → obtain HQ's sign on the release pull request's
+  head, then squash-merge it to `main` so the commit on `main` carries `X.Y.Z` in
+  `package.json`. Pushing to `main` runs `ci.yml` and does not trigger
+  `release.yml`.
+- **Cutting the tag** → push the release tag `vX.Y.Z` pointing to that `main`
+  commit (`git tag vX.Y.Z <sha> && git push origin vX.Y.Z`) and create the GitHub
+  release for `vX.Y.Z` with the release notes. Pushing the `v*` tag triggers
+  `release.yml`, which verifies that `vX.Y.Z` resolves to the run's `GITHUB_SHA`,
+  is an ancestor of `origin/main`, and matches `"@rig-c/core"` version `X.Y.Z` in
+  `package.json`, then gates and publishes `@rig-c/core`, `rig-c` and
+  `spine-rigc`.
 
-  ⚠️ **`docs` is the one hidden type that most often changes the package, and
-  for twenty-two landings nothing noticed.** The published tree is an allowlist
-  and it includes guides:
-  `docs/AUTHORING.md`, `docs/FACE.md`, `docs/INGEST.md`, `docs/RIGGING.md`,
-  `docs/MOTION.md`, `docs/PROMPTING.md` and `docs/SPEC_COVERAGE.md` all ship, and
-  `CLAUDE.md` calls the first of them a first-class deliverable — the guide and
-  the validator's messages together are the only interface an agent that cannot
-  see the rig actually has. So a correction to a shipped guide changes what
-  `npm install @rig-c/core` hands somebody, under a type the release machinery is
-  told to ignore, and the guides stay wrong on the registry until something else
-  happens to cut a release.
+### Squash commit grammar
 
-  ⛔ The fix is **not** to un-hide `docs`: most of `docs/` does not ship
-  (`LADDER.md`, `PILOT.md`, `RELEASING.md` itself), so every note to a working
-  document would open a release pull request and the type would stop meaning
-  anything — **visibility is what makes a type releasable**, and a type that is
-  always visible carries no information.
-
-  ✅ **What does the noticing is the `ships` job in
-  [`.github/workflows/squash-text.yml`](.github/workflows/squash-text.yml)**
-  ([#516](https://github.com/rig-c/core/issues/516); in that workflow since
-  [#1359](https://github.com/rig-c/core/issues/1359), so a title edit re-runs it
-  without re-running the selftest). It runs on
-  every pull request, extracts both ends of the landing and asks **`npm pack
-  --dry-run`** what each one publishes — not the `files` array, because npm adds
-  `package.json`, `README.md` and `LICENSE` on top of it, so a literal reading of
-  the array is blind to the second most edited file in the package. If a path
-  inside the pack changes and the **subject the squash will write** carries a
-  type release-please hides, the job names the paths and refuses. That subject
-  is read by `scripts/commit_parse.ts subject`, the same assembly the `parses`
-  job judges: **a branch of one commit squashes to that commit's own subject**,
-  and only a branch of several to the pull request title — so retype the commit
-  (amend it) on a one-commit branch, and the title on a longer one.
-
-  🔒 **Its verdict is not "you used the wrong type".** A doc correction really is
-  a `docs` change; what is missing is that it also ships. Either remedy clears
-  it: land it under a type the changelog shows, or put a `Release-As:` footer in
-  a **commit message on the branch** — the squash body is made of the commits,
-  not of the pull request body.
-
-  🕳️ **What it still cannot see**, and the reason the release-time half of #516
-  is worth keeping on the table: GitHub lets the squash subject be rewritten in
-  the merge box **after** the check has reported. Over the 100 newest merged
-  pull requests (#1211–#1364, 97 of one commit) the subject the job reads is the
-  one on `main` on all 100; the pull request title is on 49. Until #1359 the
-  job read the title, and this paragraph cited
-  [#353](https://github.com/rig-c/core/pull/353) as a merge-box rewrite — it is
-  one commit, and `main` carries that commit's subject, which is the merge
-  setting working as documented rather than an edit. So when a cut looks
-  overdue, the old manual reading still settles it: **look at what changed
-  inside `files`, not at the commit types.**
-- **Something releasable** → it opens, or updates, a pull request titled
-  `release: vX.Y.Z` containing exactly three generated changes: the
-  `package.json` version, `CHANGELOG.md`, and `.release-please-manifest.json`.
-  `feat` bumps the minor, `fix`, `perf` and `check` bump the patch. A `!` or a
-  `BREAKING CHANGE:` footer bumps the **minor** while the package is pre-1.0
-  (`bump-minor-pre-major`) — 1.0.0 is a deliberate act, not the side effect of
-  one commit. To force a version, put `Release-As: 1.0.0` in a commit footer.
-- **That pull request is merged** → the merge is a push to `main`, so
-  `release.yml` runs again; this time release-please tags `vX.Y.Z`, creates the
-  GitHub release, and the same run publishes the package.
-
-Squash-merge the release pull request, so the commit on `main` keeps its
-`release: vX.Y.Z` subject.
-
-### A commit release-please cannot parse is a release that does not happen
-
-release-please hands every commit to `@conventional-commits/parser`, and a
-commit the parser throws on is logged at debug level and **counted as
-nothing** — the run concludes success. The squash of
-[#1352](https://github.com/rig-c/core/pull/1352) (1c04a03) went that way: line
-20 of its body opened with a code span holding a nested call, the parser read
-the line's start as a footer token and stopped at `20:23`, and the run opened no
-release pull request ([#1354](https://github.com/rig-c/core/issues/1354); #1353
-recovered it with an empty commit restating the subject).
-
-✅ **What catches it is
-[`.github/workflows/squash-text.yml`](.github/workflows/squash-text.yml)**,
-which runs [`scripts/commit_parse.ts`](scripts/commit_parse.ts) on every pull
-request when it is opened, pushed to, reopened or **edited**. It assembles the
-text the squash will write and parses it with the parser release-please runs —
-the version the action's lockfile pins, pinned exactly as a devDependency — and
-refuses by line, column and the line itself. Which text that is follows the
-repository's merge settings (`COMMIT_OR_PR_TITLE`, `COMMIT_MESSAGES`): **one
-commit squashes to its own subject and body**, so the pull request title is not
-read at all; **several squash to the pull request title** over every commit
-message. The pull request body never reaches `main`; it is read only for a
-`BEGIN_COMMIT_OVERRIDE` block, which release-please reads in place of the
-commit. So the fix for a refusal is in the commit message (or, for a branch of
-several commits, the title), never in the body.
+[`.github/workflows/squash-text.yml`](.github/workflows/squash-text.yml) runs
+[`scripts/commit_parse.ts`](scripts/commit_parse.ts) on every pull request when
+it is opened, pushed to, reopened or **edited**. It assembles the text the squash
+will write and parses it with `@conventional-commits/parser`, refusing by line,
+column and the line itself when a commit message or pull request title is not
+valid Conventional Commits syntax ([#1354](https://github.com/rig-c/core/issues/1354)).
+Which text that is follows the repository's merge settings
+(`COMMIT_OR_PR_TITLE`, `COMMIT_MESSAGES`): **one commit squashes to its own
+subject and body**, so the pull request title is not read at all; **several
+squash to the pull request title** over every commit message. The pull request
+body never reaches `main`; it is read only for a `BEGIN_COMMIT_OVERRIDE` block.
+So the fix for a refusal is in the commit message (or, for a branch of several
+commits, the title), never in the body.
 
 What the grammar trips on, measured on the pinned parser: a line that opens
 with a word and an open parenthesis is read as the start of a footer token, and
 it fails when another parenthesis or the end of the line comes before the
 closing one — a line opening with a code span around a nested call, or
-`name(` left open. The same text later in the line parses. Over the whole of
-`main` (`bun scripts/commit_parse.ts history 1000 main`), 7 commits are ones
-release-please skipped: three bodies of that shape, and four subjects that are
-not conventional (one of them GitHub's own `Revert "…"` title — retitle a
-revert `revert: …`).
-
-🕳️ The merge box can still rewrite the title and body after the check has run,
-and nothing a pull request check can read sees that edit.
+`name(` left open. The same text later in the line parses.
 
 ## One-time setup (owner, GitHub)
 
-**Settings → Actions → General → Workflow permissions → tick "Allow GitHub
-Actions to create and approve pull requests."** It is off by default, and while
-it is off release-please cannot open the release pull request at all — the run
-fails with *GitHub Actions is not permitted to create or approve pull requests*.
-Nothing in a workflow file can grant this; it is a repository setting.
-
-The neighbouring "Workflow permissions" radio can stay on the read-only default:
-`release.yml` declares per job the write scopes it needs.
-
-`release-please-config.json` carries a `bootstrap-sha`. It marks where
-release-please stops reading history on its very first run, so the first
-changelog covers the release and not the whole repository. It is set once, to
-the commit that introduces these files, and is not maintained afterwards.
+In **Settings → Actions → General → Workflow permissions**, the "Workflow
+permissions" radio stays on the read-only default: `release.yml` declares per
+job the permissions it needs (`contents: read` on `plan`, `gate`, `admit` and
+`confirm`, and `id-token: write` on `publish`). Because `release.yml` no longer
+opens pull requests or writes tags from Actions, "Allow GitHub Actions to create
+and approve pull requests" is not required.
 
 ## Cutting a release
 
 1. Land the work on `main` with conventional-commit subjects. CI runs on every
    push.
-2. Wait for the `release` run to open or update the `release: vX.Y.Z` pull
-   request.
-3. Read the diff — the version and the generated changelog are the whole review.
+2. Open a release pull request (`release: vX.Y.Z`) that bumps `version` in
+   `package.json` to `X.Y.Z` and adds the `vX.Y.Z` section to `CHANGELOG.md`.
+3. Read the diff — the version and the changelog are the whole review.
 4. **Read the candidate against the dependant.** A tarball of the release
    pull request's head, installed into a copy of a dependant's checkout, has
    to type-check under the dependant's own `typecheck` script and build its
@@ -197,27 +114,24 @@ the commit that introduces these files, and is not maintained afterwards.
    that renamed the package the check came back green against
    `spine-rigc@latest` (2.20.4): type check exit 0, 106 of 106 files
    byte-identical.
-5. **Approve the `ci` run.** It is already there and sitting in
-   `action_required`, so the required `test` check is blocked until you do:
-   `gh api -X POST repos/rig-c/core/actions/runs/<id>/approve`, or **Approve
-   and run** in the Actions tab. Every cut needs this — see below for why, and
-   for why the branch name is not worth memorising.
-6. **Obtain HQ's sign on the current release head, then merge it.** Its
-   parent must equal the current base tip when it is signed. If main moved,
-   wait for release-please to regenerate and obtain a sign on that head. This
-   release PR needs its own sign; an adoption PR's approval does not authorize
-   a cut. Merge the signed head explicitly. That is the cut.
-7. Watch the second `release` run: it tags `vX.Y.Z`, creates the GitHub release,
-   reuses completed CI coverage of the identical tree or runs the common six
-   shards and semantic merge (`gate`). The named reader in `publish` verifies
-   proof or exact tally coverage before packing and publishing all three
-   tarballs. Its log names the accepted source or the full fallback. Its last step confirms the published package installs and
-   builds, waiting up to 15 minutes for the registry to serve it — if that step
-   ends saying the confirmation was NOT taken, the registry was still
-   processing and nothing is wrong with the cut: re-run the confirmation
-   (Actions → release → Run workflow, with the version) rather than re-cutting
-   anything. *Whether the tarball runs*, below, has the window and the codes.
-8. Confirm every name: `npm view @rig-c/core version`, `npm view rig-c version` and
+5. **Obtain HQ's sign on the current release head, then merge it and push `vX.Y.Z`.**
+   Its parent must equal the current base tip when it is signed. This release PR
+   needs its own sign; an adoption PR's approval does not authorize a cut. Merge
+   the signed head explicitly (`--match-head-commit`), then tag the merged commit
+   on `main` as `vX.Y.Z`, push `vX.Y.Z` to `origin`, and create the GitHub release
+   for `vX.Y.Z`. Pushing the tag triggers `release.yml`.
+6. Watch the `release` run on the `vX.Y.Z` tag: `plan` verifies the tag and commit
+   against `main` and `package.json`, `reuse` reuses completed CI coverage of the
+   identical tree or `gate` runs the common six shards and semantic merge. The
+   named reader in `publish` verifies proof or exact tally coverage before packing
+   and publishing all three tarballs. Its log names the accepted source or the full
+   fallback. Its last step confirms the published package installs and builds,
+   waiting up to 15 minutes for the registry to serve it — if that step ends saying
+   the confirmation was NOT taken, the registry was still processing and nothing is
+   wrong with the cut: re-run the confirmation (Actions → release → Run workflow,
+   with the version) rather than re-cutting anything. *Whether the tarball runs*,
+   below, has the window and the codes.
+7. Confirm every name: `npm view @rig-c/core version`, `npm view rig-c version` and
    `npm view spine-rigc version` print the version just cut, and each name's npm page shows the provenance
    attestation linking its tarball to the workflow run.
 
@@ -297,7 +211,7 @@ The drafting tooling outside this tree refuses a negative-form draft without
 one since 2026-10-05.
 
 🕳️ Nothing in this repository writes or reads a release body — the notes are
-drafted over release-please's generated list — so no selftest control holds
+drafted outside this tree — so no selftest control holds
 this rule. `CUR31` and `CUR112` read this document, and each holds it to a file
 in the tree that performs what it states (`release.yml`, the smoke's
 `--help`, `ci.yml`); the release body has no such file here. The tooling that
@@ -330,9 +244,10 @@ string a program outside this tree decides on.
 
 ## Publishing
 
-**Automated, on the release push.** The second `release` run — the one that tags
-`vX.Y.Z` — resolves that tag to a full commit SHA, requires it to match the
-run's `GITHUB_SHA`, and gates and publishes that verified commit. It authenticates over OIDC (npm
+**Automated, on the release tag push.** The `release` run on a `vX.Y.Z` tag push
+resolves that tag to a full commit SHA, requires it to match the
+run's `GITHUB_SHA`, be an ancestor of `origin/main`, and match `"@rig-c/core"`
+version `X.Y.Z` in `package.json`, then gates and publishes that verified commit. It authenticates over OIDC (npm
 trusted publishing): the runner exchanges a short-lived GitHub token for a
 publish grant, so there is no `NPM_TOKEN` in this repository and no OTP to type.
 That is what `id-token: write` in the `publish` job's permissions is for, and it is also
@@ -480,19 +395,18 @@ performs no release or registry publication.
 
 ### Republishing a cut whose publish failed
 
-a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
+a failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
 
-It happens when the run that merged the release pull request gets as far as
-the tag and the GitHub release and then stops before the publish lands: a red
-`gate` (v1.6.0, above), or — on another package of the toolchain — a transient
-signing-service `502` from `npm publish --provenance` (issue
-[#1504](https://github.com/rig-c/core/issues/1504)). Re-running that run cannot
-recover it: release-please no longer reports `release_created` for a tag it has
-already cut, so `gate` and `publish` are skipped and the registry keeps serving
-the previous version. A push re-run can also cut a tag at a newer commit than
-that run's original `GITHUB_SHA`; the tag existing does not prove the run's
-provenance names its commit. A publish by hand would lose provenance, and the trusted
-publisher of every name is pinned to `release.yml`.
+It happens when the run triggered by a `vX.Y.Z` tag push stops before the
+publish lands: a red `gate` (v1.6.0, above), or — on another package of the
+toolchain — a transient signing-service `502` from `npm publish --provenance`
+(issue [#1504](https://github.com/rig-c/core/issues/1504)). A tag push or a
+`workflow_dispatch` with `tag=vX.Y.Z` runs the same `Resolve the tag to publish`
+step (`id: target` in `plan`): it fetches `main` (`fetch-depth: 0`) and
+verifies the tag against the remote commit API, `GITHUB_SHA`, `origin/main`
+ancestry, `package.json` at the tagged commit, and the npm registry before
+emitting `publish=true`, `tag`, and `sha`. A publish by hand would lose
+provenance, and the trusted publisher of every name is pinned to `release.yml`.
 
 **Source provenance has to name the checkout.** npm records `GITHUB_REF` and
 `GITHUB_SHA` from the workflow run in its provenance, not the commit that
@@ -503,33 +417,38 @@ Before any publish — `@rig-c/core` or either alias — the publish job compare
 it fails with `PROVENANCE_SHA_MISMATCH`, naming both full SHAs, and no publish
 runs. This dispatch guard is unchanged.
 
-On a push that created a release, `plan` resolves the cut tag through
-`gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha`: the commits API peels
-the observed annotated tag to its commit instead of returning its tag-object
-SHA, and the full `refs/tags/` namespace avoids a same-named branch. The shorter
-`commits/tags%2F...` spelling is insufficient: a read-only check on `git/git`'s
-annotated `v2.45.0` returned HTTP 422 there, while the full namespace resolved
-commit `786a3e4b8d754d2b14b1208b98eeb0a554ef19a8`; the lightweight core
-`v2.67.1` full ref resolved `ebf243299d5edba458726fd359e84947ded01a7b`. These
-are specific API observations; the workflow mocks model them rather than proving
-live API behavior. Lookup failure, a missing or
-invalid full SHA, or an invalid stable cut-tag spelling fails closed as
-`RELEASE_TAG_UNRESOLVED`. Before emitting `publish=true`, the plan compares
-that full SHA with `GITHUB_SHA`. A difference is `PROVENANCE_SHA_MISMATCH`,
-naming both SHAs, saying the tag remains cut and printing the exact tag-ref recovery command below with the actual tag.
-Neither `gate` nor any of the three publishes can start on that refusal. Both
-`gate` and the publish checkout use the verified full SHA, so a moved tag is
-not resolved again on a push. A matching push follows the same gate and all
-three publishes; a push with no newly created release performs no lookup and
-publishes nothing. Dispatch retains its existing refusal order and tag/HEAD
-semantics. This refuses a mismatched attestation; it
-does not rewrite the run's provenance variables or re-attest a published version
-(issues [#1542](https://github.com/rig-c/core/issues/1542) and
+On both a `v*` tag push and a `workflow_dispatch(tag)`, `plan` checks out
+`main` with `fetch-depth: 0` (`persist-credentials: false`) and resolves the
+release tag through `gh api "repos/$REPO/commits/refs%2Ftags%2F$release_tag" --jq .sha`:
+the commits API peels an annotated tag to its commit instead of returning its
+tag-object SHA, and the full `refs/tags/` namespace avoids a same-named branch.
+The shorter `commits/tags%2F...` spelling is insufficient: a read-only check on
+`git/git`'s annotated `v2.45.0` returned HTTP 422 there, while the full
+namespace resolved commit `786a3e4b8d754d2b14b1208b98eeb0a554ef19a8`; the
+lightweight core `v2.67.1` full ref resolved
+`ebf243299d5edba458726fd359e84947ded01a7b`. These are specific API observations;
+the workflow mocks model them rather than proving live API behavior. Lookup
+failure or a missing or invalid full SHA fails closed as
+`RELEASE_TAG_UNRESOLVED`. Next, `plan` compares that remote tag SHA with
+`GITHUB_SHA`, and also resolves local `refs/tags/$release_tag^{commit}` to
+confirm it equals the remote tag SHA; either difference fails closed as
+`PROVENANCE_SHA_MISMATCH`. It then verifies that the tagged commit is an
+ancestor of `refs/remotes/origin/main` (`RELEASE_TAG_NOT_ON_MAIN`) and that
+`git show "$tag_sha:package.json"` has `"name": "@rig-c/core"` and `"version"`
+equal to `${release_tag#v}` (`RELEASE_TAG_VERSION_MISMATCH`). Before emitting
+`publish=true`, it checks the npm registry for `@rig-c/core` so an already
+published version (`RELEASE_ALREADY_PUBLISHED`) or a version below `latest`
+(`RELEASE_TAG_BELOW_LATEST`) is refused before `gate` or `publish` can start.
+Both `gate` and the publish checkout use the verified full SHA, so a moved tag
+is not resolved again. This refuses a mismatched attestation; it does not
+rewrite the run's provenance variables or re-attest a published version (issues
+[#1542](https://github.com/rig-c/core/issues/1542) and
 [#1551](https://github.com/rig-c/core/issues/1551)). `CUR133` executes the
 resolve, dispatch guard and publish bodies with closed command mocks, including
-annotated tags, a mismatched re-run, failed lookups and each dispatch refusal.
-It also holds both push consumers to the verified SHA. These are mocked workflow
-readings; they do not cut a live tag or publish a package.
+annotated tags, a mismatched re-run, failed lookups, non-main tags,
+`package.json` mismatches and each dispatch refusal. It also holds both
+consumers to the verified SHA. These are mocked workflow readings; they do not
+cut a live tag or publish a package.
 
 **Only dispatched refs containing the guard can enforce it.** GitHub runs
 `release.yml` from the dispatch's selected ref. A tag whose workflow predates
@@ -549,23 +468,26 @@ this fix: leave it for the next cut or obtain a separate recovery decision.
 The guard neither changes trusted-publisher settings nor authorizes an old
 workflow to publish.
 
-`plan` then skips release-please — it is a step held to a push, so a dispatch
-never cuts a tag or a release — and its *Resolve the tag to publish* step checks
-the tag. Everything after it is the push path's own: `gate` (the six shards and
-their merge over the tag), then `publish` (checkout of the tag, the dispatch
-provenance check, the corpus, the merged tally, the publish under all three
-names, the registry confirmation),
-under the same condition — `plan`'s `publish` output — from the same file. There
-is no path from the dispatch to `publish` that does not pass `gate`. The resolve
-step refuses, each as one `::error::` line naming its rule, and the refusal
-fails `plan`, so nothing after it starts:
+`plan`'s *Resolve the tag to publish* step checks the pushed or dispatched tag,
+and everything after it is shared: `reuse` and `gate` (the six shards and their
+merge over the verified SHA), `admit`, then `publish` (checkout of the verified
+SHA, the dispatch provenance check, the corpus, the merged tally or proof, the
+publish under all three names, the registry confirmation), under the same
+condition — `plan`'s `publish` output — from the same file. There is no path
+from the tag push or dispatch to `publish` that does not pass `plan` and the
+gate/reuse chain. The resolve step refuses, each as one `::error::` line naming
+its rule, and the refusal fails `plan`, so nothing after it starts:
 
 | refusal | when |
 | --- | --- |
 | `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
+| `RELEASE_REF_NOT_TAG` | a push run's `GITHUB_REF` is not `refs/tags/v*` |
 | `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
 | `RELEASE_TAG_PRERELEASE` | the tag carries a prerelease (`vX.Y.Z-<prerelease>`): this workflow publishes under `latest` only (*Below latest*) |
-| `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
+| `RELEASE_TAG_UNRESOLVED` | `refs/tags/<tag>` did not resolve to a 40-hex commit SHA via the GitHub commits API |
+| `PROVENANCE_SHA_MISMATCH` | the tag's commit SHA does not match `GITHUB_SHA` (or local `refs/tags/<tag>^{commit}` after fetch) |
+| `RELEASE_TAG_NOT_ON_MAIN` | the tag's commit is not an ancestor of `origin/main` |
+| `RELEASE_TAG_VERSION_MISMATCH` | `package.json` at the tagged commit does not have `"name": "@rig-c/core"` and `"version": "<tag without v>"` |
 | `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/core` |
 | `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/core` (a prerelease is below its release) |
 
@@ -601,9 +523,9 @@ for the next cut, which publishes every name.
 the highest one published unless a `--tag` is given — *Cannot implicitly apply
 the "latest" tag*, read in the publish command of npm 12.2.0, the version
 `npm@latest` installs at this writing — and the publish steps here pass no
-`--tag`. So once a later version is cut, the dispatch refuses the older tag by
+`--tag`. So once a later version is cut, the workflow refuses the older tag by
 name, `RELEASE_TAG_BELOW_LATEST`, naming the tag and the `latest` served,
-before anything is checked out or published; it is never attempted silently.
+before anything is published; it is never attempted silently.
 Such a version goes out, if at all, under a dist-tag, which this workflow has
 no path for. The comparison is semver order computed in `node` (a prerelease
 below its release), not `sort -V`, which sorts `1.0.0-rc.1` after `1.0.0`.
@@ -612,13 +534,11 @@ A prerelease tag is refused outright, `RELEASE_TAG_PRERELEASE`, right after the
 form check, rather than published under a dist-tag. The form check still admits
 the `vX.Y.Z-<prerelease>` spelling so that this refusal can name the tag. Without
 it, a prerelease above the registry's `latest` would pass every other refusal
-and be published under `latest`, because the publish steps pass no `--tag`. The
-push path has never needed one: release-please here runs `release-type: node`
-with no prerelease configuration, none of this repository's tags is a
-prerelease, and the registry carries the one dist-tag `latest`. So there is no
-dist-tag variant of this dispatch. If release-please is ever configured to cut
-prereleases, the card that does so adds the `--tag` path to the publish steps
-and removes this refusal, together.
+and be published under `latest`, because the publish steps pass no `--tag`. None
+of this repository's tags is a prerelease, and the registry carries the one
+dist-tag `latest`. So there is no dist-tag variant of this workflow. If a
+prerelease is ever cut, the card that does so adds the `--tag` path to the
+publish steps and removes this refusal, together.
 
 ### The registry side (owner, npmjs.com)
 
@@ -1666,11 +1586,13 @@ exit 3 now, and the line says it was the tarball that never came.
 
 **Re-running a confirmation costs nothing and publishes nothing.** Actions →
 **release** → **Run workflow**, with the version (no leading `v`) and the tag
-left empty, or `gh workflow run release.yml -f version=X.Y.Z`. A `version`
+left empty, or `gh workflow run release.yml -f version=X.Y.Z`. For a version
+published before the rename to `@rig-c/core`, dispatch on `--ref vX.Y.Z`
+(`gh workflow run release.yml --ref vX.Y.Z -f version=X.Y.Z`) so `confirm` reads
+that tag's `package.json` name and alias list rather than `main`'s. A `version`
 dispatch runs the `confirm` job only: `plan`'s `if:` does not admit a dispatch
-with a version and no tag, and `gate` and `publish` need `plan`, so all three
-are skipped; release-please, which makes the tag and the release, is a step
-held to `github.event_name == 'push'` besides (`CUR119`). A `tag` dispatch is
+with a version and no tag, and `reuse`, `gate`, `admit` and `publish` need
+`plan`, so all are skipped (`CUR119`). A `tag` dispatch is
 the other input and the other path (*Republishing a cut whose publish
 failed*). By hand, from a checkout of the tag:
 
@@ -1713,56 +1635,6 @@ as a logged-in human with a one-time password, which "require two-factor
 authentication and disallow tokens" permits; what that setting rules out is
 doing this from a script, unattended. Reach for it when the automation is broken
 and a release cannot wait — then fix the workflow.
-
-## Why the release pull request's check has to be approved by hand
-
-⚠️ **The `ci` run does fire, and it waits for you.** A `pull_request` run is
-created on release-please's pull request like any other; what GitHub withholds
-to prevent recursive runs is not the run but its *permission to start*, so the
-run lands in **`action_required`** and the pull request's required `test` check
-reads as **blocked rather than absent**. ⇒ **Approving it is a standing step of
-every cut**, not a special case.
-
-Observed on every `pull_request` run `ci.yml` has ever had on a release branch:
-each one was started by `github-actions[bot]`, every first attempt concluded
-`action_required`, and the only ones that went green are second attempts, after
-a human approved them. The v0.4.0 cut is the worked example — pull request #169,
-one bot-authored commit and no push of anyone's own, run `32943138182` sitting
-in `action_required`, approved, green, merged a minute later.
-
-The usual way to make the run start on its own is a personal access token or a
-GitHub App, and this repository deliberately does not use one:
-
-- The base of the release pull request is a commit on `main` that `ci.yml`
-  already tested on push.
-- The pull request adds only generated version and changelog text. There is no
-  source change for a test run to have an opinion about.
-- The token would be the only long-lived credential in the repository.
-
-Two things that follow from this, both learned the hard way:
-
-- **How to approve, and why nothing else clears the check.** Every cut:
-  `gh api -X POST repos/rig-c/core/actions/runs/<id>/approve`, or **Approve
-  and run** in the Actions tab. A push of your own to the release branch —
-  merging `main` in to resolve a conflict — changes nothing about this; it
-  produces another run needing the same approval. Until one is approved and
-  green the required `test` check reads as blocked, and a green
-  `workflow_dispatch` run on the same commit does **not** satisfy it: a required
-  check is matched by the run that reported it, not by the SHA.
-- **The release branch is named after `package-name`, so do not hard-code it.**
-  release-please derives it from `release-please-config.json`; since the package
-  became `rig-c` it is
-  `release-please--branches--main--components--rig-c` (it was
-  `…--components--spine-rigc` before #1258), and it changes again with the next
-  rename. Anything scripted reads it from the pull request:
-  `gh pr view <n> --json headRefName`.
-
-If a rendered check is ever wanted anyway, it takes no edit to `release.yml`:
-create a fine-grained personal access token scoped to `rig-c/core` with
-**Contents: read and write** and **Pull requests: read and write**, store it as
-the repository secret `RELEASE_PLEASE_TOKEN`, and the workflow picks it up
-(`secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN`). The cost is a
-credential to rotate.
 
 ## Removed in 3.0.0
 

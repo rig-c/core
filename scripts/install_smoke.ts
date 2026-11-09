@@ -13,7 +13,7 @@
  * `--wait`, which says nothing about the package. See *The wait* below.
  *
  * Nothing else in this repository asks that question. `prepublishOnly` gates the
- * SOURCE TREE, the `ships` job in `squash-text.yml` reads packed PATH LISTS, `CUR16` reads
+ * SOURCE TREE, `CUR16` reads
  * the relative imports of shipped modules, and `release.yml` publishes and never
  * installs. Each of those is a fact about a list; this is the fact about a
  * program — `npm pack`, `npm install` into an empty directory, and a real build:
@@ -21,7 +21,7 @@
  *
  * 🔒 **Nothing under this repository is on the fixture's path at run time.** The
  * rig spec, the motion spec and the plate generator below are authored as text
- * into the install directory, and the generator imports `rig-c/plate`
+ * into the install directory, and the generator imports `@rig-c/core/plate`
  * as a BARE specifier, so it resolves inside the install or not at all —
  * `SMOKE_FIXTURE_CAME_FROM_THE_PACKAGE` prints the path it resolved to and
  * refuses one that is not under the install. The only thing that crosses from the
@@ -35,7 +35,7 @@
  * removed, a forbidden export pattern added, a named entry removed (one plant per entry
  * since #1212), one observed symbol renamed, the parser's error class forked
  * from the one its entry exports, the core entry's build made to refuse, one byte of that build's
- * output moved, a node builtin imported inside `rig-c/core`'s closure (#1275) — and INVERTS the verdict: such a case is green only when the smoke
+ * output moved, a node builtin imported inside `@rig-c/core/core`'s closure (#1275) — and INVERTS the verdict: such a case is green only when the smoke
  * went red at the step it was supposed to, naming what went missing. The worktree is never patched; the patch is applied to the extraction
  * and packed from there, and a plant that removed nothing is itself a fault.
  *
@@ -3208,7 +3208,7 @@ usage:
   bun run smoke -- --case clean          one case by name
   bun run smoke -- --source registry --version 0.21.0
   bun run smoke -- --source registry --version 0.21.0 --wait 15
-  bun run smoke -- --source registry --version 2.39.0 --alias spine-rigc --alias @rig-c/core
+  bun run smoke -- --source registry --version 2.39.0 --alias rig-c --alias spine-rigc
   bun run smoke -- --installer bun       install the tarball with \`bun add\` instead of \`npm install\`
   bun run smoke -- --keep                leave the install directories where they are
 

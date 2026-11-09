@@ -25,9 +25,9 @@
  *    imports, say), verified here before it is theirs to land.
  * 4. Installs each copy's dependencies with `bun install`, then this package
  *    into it, under the name the dependant declares — the package's own,
- *    `rig-c`, or one of the aliases it is also published as, `ALIASES` in
- *    `scripts/alias_tarball.ts` (`spine-rigc`, issue #1258; `@rig-c/core`,
- *    issue #1347): the candidate tarball into one (repacked under the alias by
+ *    `@rig-c/core`, or one of the aliases it is also published as, `ALIASES` in
+ *    `scripts/alias_tarball.ts` (`rig-c` and `spine-rigc`, issues #1258, #1347,
+ *    #1728): the candidate tarball into one (repacked under the alias by
  *    `scripts/alias_tarball.ts` when that is the name declared, the files
  *    unchanged), and `<name>@<baseline>` from the registry into the other. The baseline is `--baseline <version>`, or
  *    `latest` — the registry's own answer to "the last release", read at the

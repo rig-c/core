@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.7.0](https://github.com/rig-c/core/compare/v3.6.0...v3.7.0) (2026-11-09)
+
+
+### Features
+
+* make @rig-c/core the canonical package name ([#1729](https://github.com/rig-c/core/issues/1729)) ([a3018d9](https://github.com/rig-c/core/commit/a3018d9401e11d760c59109bc4ac5a9396d7e94a)), closes [#1728](https://github.com/rig-c/core/issues/1728)
+
 ## [3.6.0](https://github.com/rig-c/core/compare/v3.5.0...v3.6.0) (2026-11-08)
 
 

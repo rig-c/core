@@ -80886,7 +80886,10 @@ function runCurrencySuite(): number {
       steps?: WfStep[];
     }
     interface Workflow {
-      on?: { workflow_dispatch?: { inputs?: Record<string, { required?: boolean }> } };
+      on?: {
+        push?: { tags?: string[]; branches?: string[] };
+        workflow_dispatch?: { inputs?: Record<string, { required?: boolean }> };
+      };
       jobs?: Record<string, WfJob>;
     }
 
@@ -81446,13 +81449,16 @@ function runCurrencySuite(): number {
           faults.push('the `version` input is not required and no confirming job runs under `inputs.version != \'\'`, so a dispatch with that field left empty would confirm whatever the checked-out package.json last said');
         }
 
-        // 2. What a dispatch can reach. The guard is structural — release-please
-        //    has to be held to the push event, and the job that publishes to
-        //    the push or to the tag `plan` resolved (issue #1504: a `tag`
-        //    dispatch publishes through the same job, CUR131) — rather than a
-        //    list of step names, because a step added tomorrow is exactly what
-        //    a name list cannot see. "Held" is a top-level `&&` term: a push
-        //    term joined by `||` holds nothing.
+        // 2. What a dispatch can reach. The guard is structural — `on.push` is
+        //    held to `tags: ['v*']` (no release-please step), and the job that
+        //    publishes is held to the resolved cut output from `plan`'s `target`
+        //    step through the verified admission producer. "Held" is a top-level
+        //    `&&` term: a push term joined by `||` holds nothing.
+        const pushTags = parsed.on?.push?.tags ?? [];
+        const pushBranches = parsed.on?.push?.branches ?? [];
+        if (!pushTags.includes('v*') || pushBranches.length > 0) {
+          faults.push(`release.yml \`on.push\` is ${JSON.stringify(parsed.on?.push ?? null)}, where \`tags: ['v*']\` with no \`branches\` holds push runs to release tags`);
+        }
         const heldBy = (condition: string | undefined, term: RegExp): boolean => {
           const bare = (condition ?? '').replace(/^\s*\$\{\{\s*|\s*\}\}\s*$/g, '');
           return !bare.includes('||') && bare.split('&&').some((one) => term.test(one.trim()));
@@ -81470,7 +81476,7 @@ function runCurrencySuite(): number {
           const relay = parsed.jobs?.[relayName];
           const producerId = /^\$\{\{ steps\.([A-Za-z_][\w-]*)\.outputs\.ready \}\}$/.exec(relay?.outputs?.ready ?? '')?.[1];
           const producer = relay?.steps?.find((step) => step.id === producerId);
-          const plan = jobs.filter(([, job]) => (job.steps ?? []).some((step) => /release-please/.test(step.uses ?? '')));
+          const plan = jobs.filter(([, job]) => (job.steps ?? []).some((step) => step.id === 'target'));
           if (relay === undefined || !needsOf(publisher).includes(relayName) || producerId === undefined ||
             producer?.run === undefined || producer.if !== undefined || producer['continue-on-error'] === true ||
             relay.steps?.length !== 1 || plan.length !== 1 || !needsOf(relay).includes(plan[0][0]) ||
@@ -81519,10 +81525,8 @@ function runCurrencySuite(): number {
             );
           }
           for (const step of job.steps ?? []) {
-            if (/release-please/.test(step.uses ?? '') && !heldBy(step.if, push) && !heldBy(job.if, push)) {
-              faults.push(
-                `job "${name}" cuts a release under the step's \`if\` ${JSON.stringify(step.if ?? null)} and the job's ${JSON.stringify(job.if ?? null)}, neither of which holds it to a push — a workflow_dispatch would reach it`,
-              );
+            if (/release-please/.test(step.uses ?? '')) {
+              faults.push(`job "${name}" still invokes release-please`);
             }
           }
         }
@@ -81597,7 +81601,7 @@ function runCurrencySuite(): number {
       /** An edit that has to change the text it is given — a plant that planted nothing is a fault of its own. */
       const plantInto = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
       const plants: Array<{ what: string; yml: [string, string] | null; doc: [string, string] | null; quiet?: boolean }> = [
-        { what: 'release-please stops being held to a push', yml: ["        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'], doc: null },
+        { what: 'push trigger stops being held to v* tags', yml: ["  push:\n    tags: ['v*']\n", "  push:\n    branches: [main]\n"], doc: null },
         { what: 'the publishing job stops being held to the admission', yml: ["    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n", '    needs: [plan, admit]\n'], doc: null },
         { what: 'the publishing job condition lacks a status function', yml: ["    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n", "    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n"], doc: null },
         { what: 'the admission starts ready before checking the cut', yml: ['          ready=false\n', '          ready=true\n'], doc: null },
@@ -81948,7 +81952,7 @@ function runCurrencySuite(): number {
         }
         return found[0];
       };
-      const plan = one('run release-please', (job) => (job.steps ?? []).some((step) => /release-please/.test(step.uses ?? '')));
+      const plan = one('resolve the release tag', (job) => (job.steps ?? []).some((step) => step.id === 'target'));
       const gate = one(`call ${SHARDS_FILE}`, (job) => job.uses === SHARDS_USES);
       const publish = one('run `npm publish`', (job) => (job.steps ?? []).some((step) => /\bnpm publish\b/.test(step.run ?? '')));
       if (plan === null || gate === null || publish === null) return faults;
@@ -81957,6 +81961,17 @@ function runCurrencySuite(): number {
       const [publishName, publishJob] = publish;
       const resolved = `\${{ needs.${planName}.outputs.publish == 'true' }}`;
       const resolvedTag = `\${{ needs.${planName}.outputs.sha || needs.${planName}.outputs.tag }}`;
+
+      const onPush = (wf.on ?? {}).push as { tags?: string[]; branches?: string[] } | undefined;
+      if (!(onPush?.tags ?? []).includes('v*') || (onPush?.branches ?? []).length > 0) {
+        faults.push(`release.yml: on.push is ${JSON.stringify(onPush ?? null)}, where tags: ['v*'] with no branches is required`);
+      }
+      if (jobs.some(([, job]) => (job.steps ?? []).some((step) => /release-please/.test(step.uses ?? '')))) {
+        faults.push('release.yml: a job still invokes release-please');
+      }
+      if (typeof planJob.permissions !== 'object' || planJob.permissions === null || planJob.permissions.contents !== 'read' || Object.keys(planJob.permissions).length !== 1) {
+        faults.push(`release.yml: job "${planName}" permissions are ${JSON.stringify(planJob.permissions ?? null)}, not { contents: 'read' }`);
+      }
 
       // The order includes the reuse decision and explicit admission of a skipped gate.
       if (!needsOf(gateJob).includes(planName)) faults.push(`release.yml: job "${gateName}" does not need "${planName}", so the gate can start before a tag exists`);
@@ -81984,17 +81999,18 @@ function runCurrencySuite(): number {
         faults.push(`release.yml: publish condition ${JSON.stringify(publishJob.if ?? null)} lacks a status function (!cancelled()), so implicit success() skips publish whenever the reuse path skips "${gateName}"`);
       }
       const planSteps = planJob.steps ?? [];
-      const please = planSteps.findIndex((step) => /release-please/.test(step.uses ?? ''));
-      if (!heldToPush(planSteps[please]) && !heldToPush(planJob)) {
-        faults.push(`release.yml: the release-please step of job "${planName}" runs under \`if: ${planSteps[please].if ?? '(none)'}\` in a job under \`if: ${planJob.if ?? '(none)'}\`, which does not hold it to a push, so a dispatch could cut a tag or a release`);
+      const planCheckout = planSteps[0];
+      if (!planCheckout || planCheckout.uses !== 'actions/checkout@v4' || planCheckout.with?.ref !== 'main' ||
+        String(planCheckout.with?.['fetch-depth'] ?? '') !== '0' || String(planCheckout.with?.['persist-credentials'] ?? '') !== 'false') {
+        faults.push(`release.yml: step 1 of job "${planName}" must check out main with fetch-depth: 0 and persist-credentials: false`);
       }
       const target = planSteps.findIndex((step) => step.id === 'target');
       if (target === -1) faults.push(`release.yml: job "${planName}" has no step with id \`target\`, so nothing resolves what ${gateName} and ${publishName} read`);
       else {
-        if (target !== please + 1) faults.push(`release.yml: the resolve step is step ${target + 1} of job "${planName}", where it follows release-please (step ${please + 1}) directly`);
+        if (target !== 1) faults.push(`release.yml: the resolve step is step ${target + 1} of job "${planName}", where it follows the main checkout (step 1) directly`);
         if (planSteps[target].if !== undefined) faults.push(`release.yml: the resolve step runs under \`if: ${planSteps[target].if}\`, so a run can skip it and leave ${gateName} and ${publishName} nothing to read`);
       }
-      for (const output of ['publish', 'tag']) {
+      for (const output of ['publish', 'tag', 'sha']) {
         const want = `\${{ steps.target.outputs.${output} }}`;
         if (planJob.outputs?.[output] !== want) faults.push(`release.yml: job "${planName}" exports \`${output}\` as ${JSON.stringify(planJob.outputs?.[output] ?? null)}, not ${want}`);
       }
@@ -82195,14 +82211,14 @@ function runCurrencySuite(): number {
           { what: 'the publish is keyed on release-please again', edit: uniq(releaseText, publishIf, "    needs: [plan, admit]\n    if: ${{ github.event_name == 'push' && needs.plan.outputs.release_created == 'true' }}\n") },
           { what: 'the publish condition lacks a status function', edit: uniq(releaseText, publishIf, "    needs: [plan, admit]\n    if: ${{ needs.admit.outputs.ready == 'true' }}\n") },
           { what: 'the gate is called on the default branch rather than the tag', edit: uniq(releaseText, '\n      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n\n', "\n      ref: ''\n\n") },
-          { what: 'release-please runs on a dispatch', edit: uniq(releaseText, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n') },
+          { what: 'the plan checkout drops ref: main', edit: uniq(releaseText, '          ref: main\n', '') },
           { what: 'the resolve step is skipped on a dispatch', edit: uniq(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n") },
           { what: 'plan exports the cut tag rather than the resolved one', edit: uniq(releaseText, '      tag: ${{ steps.target.outputs.tag }}\n', '      tag: ${{ steps.release.outputs.tag_name }}\n') },
           { what: 'the confirmation runs on a tag dispatch too', edit: uniq(releaseText, " && inputs.version != '' && inputs.tag == '' }}", ' }}') },
           { what: 'the tally is downloaded after the publish', edit: moved },
           { what: 'the reader stops naming the tally', edit: once(releaseText, '          RIGC_PREPUBLISH_TALLY:', '          RIGC_UNREAD_TALLY:') },
           { what: 'the variable is set on the whole publish job', edit: once(releaseText, '    timeout-minutes: 60\n', '    timeout-minutes: 60\n    env:\n      RIGC_PREPUBLISH_TALLY: /dev/null\n') },
-          { what: 'the plan job is handed the OIDC token', edit: once(releaseText, '      issues: write # release-please labels\n', '      issues: write # release-please labels\n      id-token: write\n') },
+          { what: 'the plan job is handed the OIDC token', edit: once(releaseText, '      contents: read # fetch main history and tags to validate the release commit\n', '      contents: read # fetch main history and tags to validate the release commit\n      id-token: write\n') },
           { what: 'the download step is renamed', edit: once(releaseText, 'name: Download the merged tally the gate wrote', 'name: Tally'), quiet: true },
         ],
         check,
@@ -82284,8 +82300,8 @@ function runCurrencySuite(): number {
     if (BUN_YAML === null) {
       reportYamlHole('CUR131_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_GATE_AND_PUBLISH_AND_EACH_REFUSAL_IS_NAMED');
     } else {
-      const REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_TAG_PRERELEASE', 'RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'] as const;
-      const UNPUBLISHED_CUT_LINE = 'a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch';
+      const REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_REF_NOT_TAG', 'RELEASE_TAG_FORM', 'RELEASE_TAG_PRERELEASE', 'RELEASE_TAG_UNRESOLVED', 'PROVENANCE_SHA_MISMATCH', 'RELEASE_TAG_NOT_ON_MAIN', 'RELEASE_TAG_VERSION_MISMATCH', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'] as const;
+      const UNPUBLISHED_CUT_LINE = 'a failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.';
       const DISPATCH = 'gh workflow run release.yml --ref vX.Y.Z -f tag=';
       const PLAN_TERMS = ["github.event_name == 'push'", "inputs.tag != ''", "inputs.version == ''"];
       const CONFIRM_TERMS = ["github.event_name == 'workflow_dispatch'", "inputs.version != ''", "inputs.tag == ''"];
@@ -82315,11 +82331,11 @@ function runCurrencySuite(): number {
           }
         }
         const jobs = Object.entries(wf.jobs ?? {});
-        const planEntry = jobs.find(([, job]) => (job.steps ?? []).some((step) => /release-please/.test(step.uses ?? '')));
+        const planEntry = jobs.find(([, job]) => (job.steps ?? []).some((step) => step.id === 'target'));
         const gateEntry = jobs.find(([, job]) => job.uses === SHARDS_USES);
         const publishEntry = jobs.find(([, job]) => (job.steps ?? []).some((step) => /\bnpm publish\b/.test(step.run ?? '')));
         if (planEntry === undefined || gateEntry === undefined || publishEntry === undefined) {
-          faults.push(`release.yml: no ${planEntry === undefined ? 'release-please job' : gateEntry === undefined ? `job calling ${SHARDS_FILE}` : 'job running `npm publish`'}, so the republish path has nothing to read`);
+          faults.push(`release.yml: no ${planEntry === undefined ? 'tag-resolve job' : gateEntry === undefined ? `job calling ${SHARDS_FILE}` : 'job running `npm publish`'}, so the republish path has nothing to read`);
           return faults;
         }
         const [planName, planJob] = planEntry;
@@ -82327,13 +82343,16 @@ function runCurrencySuite(): number {
           faults.push(`release.yml: the plan job "${planName}" runs under ${JSON.stringify(planJob.if ?? null)}, where ${PLAN_TERMS.join(' || ')} admits a push and every dispatch but a confirmation alone`);
         }
         const steps = planJob.steps ?? [];
-        const please = steps.findIndex((step) => /release-please/.test(step.uses ?? ''));
-        if (steps[please].if !== "${{ github.event_name == 'push' }}") faults.push(`release.yml: release-please runs under ${JSON.stringify(steps[please].if ?? null)}, so a dispatch could cut a tag or a release`);
+        const planCheckout = steps[0];
+        if (!planCheckout || planCheckout.uses !== 'actions/checkout@v4' || planCheckout.with?.ref !== 'main' ||
+          String(planCheckout.with?.['fetch-depth'] ?? '') !== '0' || String(planCheckout.with?.['persist-credentials'] ?? '') !== 'false') {
+          faults.push(`release.yml: the plan job "${planName}" does not check out main with fetch-depth: 0 and persist-credentials: false before resolving the tag`);
+        }
         const target = steps.findIndex((step) => step.id === 'target');
         if (target === -1) faults.push(`release.yml: the plan job "${planName}" has no step with id \`target\` resolving the tag to publish`);
         else {
           const step = steps[target];
-          if (target !== please + 1) faults.push(`release.yml: the resolve step is step ${target + 1} of "${planName}", where it follows release-please directly`);
+          if (target !== 1) faults.push(`release.yml: the resolve step is step ${target + 1} of "${planName}", where it follows the main checkout directly`);
           if (step.if !== undefined) faults.push(`release.yml: the resolve step runs under ${JSON.stringify(step.if)}, so a dispatch could skip its refusals`);
           const run = step.run ?? '';
           const at = REFUSALS.map((code) => run.indexOf(`::error::${code}:`));
@@ -82342,14 +82361,14 @@ function runCurrencySuite(): number {
           });
           const found = REFUSALS.filter((_, k) => at[k] !== -1);
           const order = [...found].sort((a, b) => at[REFUSALS.indexOf(a)] - at[REFUSALS.indexOf(b)]);
-          if (order.join() !== found.join()) faults.push(`release.yml: the resolve step refuses in the order ${order.join(', ')}, out of order against ${REFUSALS.join(', ')} — prerelease after the form check, which admits the spelling so the tag can be named, and before the GitHub-release read; below-latest after already-published, so a version already served is not named as below latest`);
+          if (order.join() !== found.join()) faults.push(`release.yml: the resolve step refuses in the order ${order.join(', ')}, out of order against ${REFUSALS.join(', ')}`);
           if (!run.includes(`npm view "${packageName}" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}" version\`, so a tag below the registry's latest is not refused`);
           if (!run.includes(`npm view "${packageName}@$version" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}@$version" version\`, so a version the registry serves is not refused under the package's name`);
-          for (const [variable, source] of [['INPUT_TAG', '${{ inputs.tag }}'], ['INPUT_VERSION', '${{ inputs.version }}']] as const) {
+          for (const [variable, source] of [['EVENT', '${{ github.event_name }}'], ['REF', '${{ github.ref }}'], ['INPUT_TAG', '${{ inputs.tag }}'], ['INPUT_VERSION', '${{ inputs.version }}'], ['GH_TOKEN', '${{ github.token }}'], ['REPO', '${{ github.repository }}']] as const) {
             if (step.env?.[variable] !== source) faults.push(`release.yml: the resolve step's env does not set ${variable} to ${source}`);
           }
         }
-        for (const output of ['publish', 'tag']) {
+        for (const output of ['publish', 'tag', 'sha']) {
           if (planJob.outputs?.[output] !== `\${{ steps.target.outputs.${output} }}`) faults.push(`release.yml: the plan job exports \`${output}\` as ${JSON.stringify(planJob.outputs?.[output] ?? null)}, not the resolve step's`);
         }
         const tag = `\${{ needs.${planName}.outputs.tag }}`;
@@ -82406,7 +82425,7 @@ function runCurrencySuite(): number {
         { what: 'the tag input dropped', yml: one(releaseText, '      tag:\n        description:', '      tagged:\n        description:'), want: 'no `tag` input' },
         { what: 'the version input required again', yml: one(releaseText, '(leave tag empty)\n        required: false', '(leave tag empty)\n        required: true'), want: 'the dispatch input `version`' },
         { what: 'the plan job runs on a push only', yml: one(releaseText, "    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}\n", "    if: ${{ github.event_name == 'push' }}\n"), want: 'the plan job "plan" runs under' },
-        { what: 'release-please runs on a dispatch', yml: one(releaseText, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'), want: 'so a dispatch could cut' },
+        { what: 'the plan checkout drops fetch-depth: 0', yml: one(releaseText, '          fetch-depth: 0\n', '          fetch-depth: 1\n'), want: 'does not check out main with fetch-depth: 0' },
         { what: 'the resolve step skipped on a dispatch', yml: one(releaseText, '        id: target\n', "        id: target\n        if: ${{ github.event_name == 'push' }}\n"), want: 'could skip its refusals' },
         { what: 'the gate keyed on release-please again', yml: one(releaseText, "    needs: [plan, reuse]\n    if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.reuse.outputs.reused != 'true' }}\n", "    needs: plan\n    if: ${{ github.event_name == 'push' && needs.plan.outputs.release_created == 'true' }}\n"), want: 'job "gate" runs under' },
         { what: 'the publish admits any dispatch', yml: one(releaseText, "    needs: [plan, admit]\n    if: ${{ !cancelled() && needs.admit.outputs.ready == 'true' }}\n", "    needs: [plan, gate]\n    if: ${{ needs.plan.outputs.publish == 'true' || github.event_name == 'workflow_dispatch' }}\n"), want: 'job "publish" runs under' },
@@ -82419,15 +82438,15 @@ function runCurrencySuite(): number {
         { what: 'the form refusal unnamed', yml: one(releaseText, '::error::RELEASE_TAG_FORM:', '::error::'), want: 'RELEASE_TAG_FORM' },
         { what: 'the prerelease refusal unnamed', yml: one(releaseText, '::error::RELEASE_TAG_PRERELEASE:', '::error::'), want: 'RELEASE_TAG_PRERELEASE' },
         { what: 'the form and prerelease refusals swapped', yml: swapped('RELEASE_TAG_FORM', 'RELEASE_TAG_PRERELEASE'), want: 'out of order' },
-        { what: 'the unreleased and already-published refusals swapped', yml: swapped('RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED'), want: 'out of order' },
+        { what: 'the already-published and below-latest refusals swapped', yml: swapped('RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'), want: 'out of order' },
         { what: 'the latest read dropped', yml: one(releaseText, `npm view "${packageName}" version`, `npm view "${packageName}" dist-tags`), want: "below the registry's latest is not refused" },
         { what: 'the served read under another name', yml: one(releaseText, `npm view "${packageName}@$version" version`, 'npm view "other@$version" version'), want: "under the package's name" },
         { what: 'the tag input fed from the version', yml: one(releaseText, 'INPUT_TAG: ${{ inputs.tag }}', 'INPUT_TAG: ${{ inputs.version }}'), want: 'does not set INPUT_TAG' },
-        { what: 'an input interpolated into the script', yml: one(releaseText, 'version="${INPUT_TAG#v}"', 'version="${{ inputs.tag }}"'), want: 'interpolates an input' },
+        { what: 'an input interpolated into the script', yml: one(releaseText, 'version="${release_tag#v}"', 'version="${{ inputs.tag }}"'), want: 'interpolates an input' },
         { what: 'the confirm job runs on a tag dispatch', yml: one(releaseText, " && inputs.version != '' && inputs.tag == '' }}", ' }}'), want: 'the confirm job "confirm" runs under' },
         { what: "RELEASING.md drops the unpublished-cut line", yml: releaseText, doc: one(releasingText, UNPUBLISHED_CUT_LINE, "a failure after the tag is somebody else's"), want: 'RELEASING.md does not carry' },
         { what: 'RELEASING.md drops the dispatch command', yml: releaseText, doc: one(releasingText, `${DISPATCH}vX.Y.Z`, 'gh workflow run release.yml'), want: 'does not give the dispatch' },
-        { what: 'RELEASING.md drops a refusal', yml: releaseText, doc: releasingText.includes('RELEASE_TAG_UNRELEASED') ? releasingText.split('RELEASE_TAG_UNRELEASED').join('RELEASE_TAG_UNKNOWN') : null, want: 'does not name the refusal RELEASE_TAG_UNRELEASED' },
+        { what: 'RELEASING.md drops a refusal', yml: releaseText, doc: releasingText.includes('RELEASE_REF_NOT_TAG') ? releasingText.split('RELEASE_REF_NOT_TAG').join('RELEASE_TAG_UNKNOWN') : null, want: 'does not name the refusal RELEASE_REF_NOT_TAG' },
         { what: 'the resolve step renamed', yml: one(releaseText, '      - name: Resolve the tag to publish\n', '      - name: Pick a tag\n'), want: '', quiet: true },
       ];
       const probes: string[] = [];
@@ -82690,8 +82709,17 @@ function runCurrencySuite(): number {
         const checkedOut = '1'.repeat(40);
         const different = '2'.repeat(40);
         const bodies: Record<string, string> = {
-          git: 'printf "git %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$*" = "rev-parse HEAD" ] || exit 91\nprintf "%s\\n" "$MOCK_HEAD"\n',
-          gh: 'printf "gh %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = api ]; then\n  case "$*" in "api repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG --jq .sha") printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/commits/tags%2F$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "HTTP 422: No commit found for SHA: tags/%s\\n" "$CUT_TAG" >&2; exit 1; fi; printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/git/ref/tags/$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "%s\\n" "$MOCK_OBJECT"; else printf "%s\\n" "$MOCK_COMMIT"; fi;; *) exit 94;; esac\n  exit "$MOCK_API_EXIT"\nfi\n[ "$*" = "release view $INPUT_TAG --repo mock/core" ] || exit 95\nexit "$MOCK_RELEASE_EXIT"\n',
+          git:
+            'printf "git %s\\n" "$*" >> "$MOCK_TRACE"\n' +
+            'case "$*" in\n' +
+            '  "rev-parse HEAD") printf "%s\\n" "$MOCK_HEAD";;\n' +
+            '  "rev-parse --verify --quiet refs/tags/"*"^{commit}") [ "$MOCK_LOCAL_TAG_EXIT" = 0 ] || exit "$MOCK_LOCAL_TAG_EXIT"; printf "%s\\n" "$MOCK_LOCAL_TAG_SHA";;\n' +
+            '  "rev-parse --verify --quiet refs/remotes/origin/main") [ "$MOCK_MAIN_EXIT" = 0 ] || exit "$MOCK_MAIN_EXIT"; printf "%s\\n" "$MOCK_MAIN_SHA";;\n' +
+            '  "merge-base --is-ancestor "*" refs/remotes/origin/main") exit "$MOCK_ANCESTOR_EXIT";;\n' +
+            '  "show "*":package.json") [ "$MOCK_SHOW_EXIT" = 0 ] || exit "$MOCK_SHOW_EXIT"; printf "%s\\n" "$MOCK_PKG_JSON";;\n' +
+            '  *) exit 91;;\n' +
+            'esac\n',
+          gh: 'printf "gh %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = api ]; then\n  case "$*" in "api repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG --jq .sha") printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/commits/tags%2F$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "HTTP 422: No commit found for SHA: tags/%s\\n" "$CUT_TAG" >&2; exit 1; fi; printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/git/ref/tags/$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "%s\\n" "$MOCK_OBJECT"; else printf "%s\\n" "$MOCK_COMMIT"; fi;; *) exit 94;; esac\n  exit "$MOCK_API_EXIT"\nfi\nexit 95\n',
           npm: `printf "npm %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = publish ]; then exit 0; fi\nif [ "$1" = pack ]; then printf "mock-canonical.tgz\\n"; exit 0; fi\n[ "$1" = view ] && [ "$3" = version ] || exit 92\ncase "$2" in ${packageName}@*) [ -n "$MOCK_SERVED" ] || exit 1; printf "%s\\n" "$MOCK_SERVED";; ${packageName}) printf "%s\\n" "$MOCK_LATEST";; *) exit 96;; esac\n`,
           bun: 'printf "bun %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$1" = scripts/alias_tarball.ts ] && [ "$2" = pack ] || exit 93\nprintf "mock-alias.tgz\\n"\n',
         };
@@ -82700,6 +82728,8 @@ function runCurrencySuite(): number {
           writeFileSync(file, `#!/bin/bash\nset -euo pipefail\n${body}`);
           chmodSync(file, 0o755);
         }
+        // Distractor working-tree package.json: target.run must read $tag_sha:package.json via git show.
+        writeFileSync(join(mock, 'package.json'), '{"name":"wrong-working-tree-package","version":"0.0.0-working-tree"}\n');
         // grep and the JS runtime execute only the extracted dispatch spelling/semver
         // logic. All service commands are stubs and the child inherits no credentials.
         symlinkSync('/usr/bin/grep', join(bin, 'grep'));
@@ -82722,34 +82752,44 @@ function runCurrencySuite(): number {
           const annotated = { repo: 'git/git', cutTag: 'v2.45.0', expectedCommit: '786a3e4b8d754d2b14b1208b98eeb0a554ef19a8', object: '8be58deda2ccce7d036072ec34439f9fad88204f', refKind: 'tag' };
           const lightweight = { repo: 'rig-c/core', cutTag: 'v2.67.1', expectedCommit: 'ebf243299d5edba458726fd359e84947ded01a7b', refKind: 'commit' };
           interface Scenario {
-            name: string; event?: string; created?: string; cutTag?: string; inputTag?: string; inputVersion?: string;
-            commit?: string; sha?: string; apiExit?: string; releaseExit?: string; served?: string; latest?: string;
-            rule?: string; noRelease?: boolean; apiReads?: number; published?: number; refKind?: string;
+            name: string; event?: string; ref?: string; cutTag?: string; inputTag?: string; inputVersion?: string;
+            commit?: string; sha?: string; localTagSha?: string; localTagExit?: string;
+            mainExit?: string; ancestorExit?: string; showExit?: string; pkgJson?: string;
+            apiExit?: string; served?: string; latest?: string;
+            rule?: string; apiReads?: number; published?: number; refKind?: string;
             repo?: string; expectedCommit?: string; object?: string;
           }
           const scenarios: Scenario[] = [
             { name: 'matching lightweight push', ...lightweight },
             { name: 'matching annotated push', ...annotated },
+            { name: 'non-tag push ref refused', ref: 'refs/heads/main', rule: 'RELEASE_REF_NOT_TAG', apiReads: 0 },
+            { name: 'invalid tag form on push', ref: 'refs/tags/v1.2', cutTag: 'v1.2', rule: 'RELEASE_TAG_FORM', apiReads: 0 },
+            { name: 'prerelease tag on push', ref: 'refs/tags/v1.2.3-rc.1', cutTag: 'v1.2.3-rc.1', rule: 'RELEASE_TAG_PRERELEASE', apiReads: 0 },
             { name: 'mismatching rerun retains cut tag', sha: different, rule: rule },
+            { name: 'local tag SHA differs from remote tag SHA', localTagSha: different, rule: rule },
             { name: 'annotated object SHA is not the commit', ...annotated, sha: annotated.object, rule: rule },
             { name: 'lookup fails with plausible SHA', apiExit: '1', rule: 'RELEASE_TAG_UNRESOLVED' },
             ...['', 'null', checkedOut.slice(0, 7), 'g'.repeat(40), `${checkedOut}\n${different}`, `{"sha":"${checkedOut}"}`].map((commit) => ({ name: `invalid commit ${JSON.stringify(commit)}`, commit, rule: 'RELEASE_TAG_UNRESOLVED' })),
-            { name: 'invalid cut tag', cutTag: '../heads/main', rule: 'RELEASE_TAG_UNRESOLVED', apiReads: 0 },
-            ...['false', ''].map((created) => ({ name: `no release ${JSON.stringify(created)}`, created, cutTag: '', noRelease: true, apiReads: 0 })),
-            { name: 'matching dispatch', event: 'workflow_dispatch', apiReads: 0 },
-            { name: 'mismatched dispatch', event: 'workflow_dispatch', sha: different, rule: rule, apiReads: 0, published: 0 },
+            { name: 'invalid cut tag', ref: 'refs/tags/../heads/main', cutTag: '../heads/main', rule: 'RELEASE_TAG_FORM', apiReads: 0 },
+            { name: 'tag commit not on origin/main', ancestorExit: '1', rule: 'RELEASE_TAG_NOT_ON_MAIN' },
+            { name: 'origin/main missing', mainExit: '1', rule: 'RELEASE_TAG_NOT_ON_MAIN' },
+            { name: 'package.json missing at tag commit', showExit: '1', rule: 'RELEASE_TAG_VERSION_MISMATCH' },
+            { name: 'package.json wrong name at tag commit', pkgJson: '{"name":"rig-c","version":"1.2.3"}', rule: 'RELEASE_TAG_VERSION_MISMATCH' },
+            { name: 'package.json wrong version at tag commit', pkgJson: `{"name":"${packageName}","version":"9.9.9"}`, rule: 'RELEASE_TAG_VERSION_MISMATCH' },
+            { name: 'matching dispatch', event: 'workflow_dispatch', apiReads: 1 },
+            { name: 'mismatched dispatch', event: 'workflow_dispatch', sha: different, rule: rule, apiReads: 1, published: 0 },
             { name: 'both dispatch inputs precede form check', event: 'workflow_dispatch', inputTag: 'bad', inputVersion: '1.2.3', rule: 'RELEASE_DISPATCH_INPUT', apiReads: 0 },
             { name: 'neither dispatch input', event: 'workflow_dispatch', inputTag: '', rule: 'RELEASE_DISPATCH_INPUT', apiReads: 0 },
             { name: 'invalid dispatch form', event: 'workflow_dispatch', inputTag: 'main', rule: 'RELEASE_TAG_FORM', apiReads: 0 },
-            { name: 'prerelease precedes release lookup', event: 'workflow_dispatch', inputTag: 'v1.2.3-rc.1', releaseExit: '1', rule: 'RELEASE_TAG_PRERELEASE', apiReads: 0 },
-            { name: 'unreleased precedes registry reads', event: 'workflow_dispatch', releaseExit: '1', served: '1.2.3', rule: 'RELEASE_TAG_UNRELEASED', apiReads: 0 },
-            { name: 'already published precedes below latest', event: 'workflow_dispatch', served: '1.2.3', latest: '1.2.4', rule: 'RELEASE_ALREADY_PUBLISHED', apiReads: 0 },
-            { name: 'below latest', event: 'workflow_dispatch', latest: '1.2.4', rule: 'RELEASE_TAG_BELOW_LATEST', apiReads: 0 },
+            { name: 'prerelease precedes release lookup', event: 'workflow_dispatch', inputTag: 'v1.2.3-rc.1', rule: 'RELEASE_TAG_PRERELEASE', apiReads: 0 },
+            { name: 'already published precedes below latest', event: 'workflow_dispatch', served: '1.2.3', latest: '1.2.4', rule: 'RELEASE_ALREADY_PUBLISHED', apiReads: 1 },
+            { name: 'below latest', event: 'workflow_dispatch', latest: '1.2.4', rule: 'RELEASE_TAG_BELOW_LATEST', apiReads: 1 },
           ];
           for (const scenario of scenarios) {
             const event = scenario.event ?? 'push';
             const expectedCommit = scenario.expectedCommit ?? checkedOut;
-            const scenarioTag = scenario.cutTag ?? tag;
+            const scenarioTag = scenario.cutTag ?? (event === 'workflow_dispatch' ? (scenario.inputTag ?? tag) : tag);
+            const scenarioVersion = scenarioTag.replace(/^v/, '');
             const repo = scenario.repo ?? 'mock/core';
             const tagObject = scenario.object ?? '3'.repeat(40);
             const recovery = `gh workflow run release.yml --ref ${scenarioTag} -f tag=${scenarioTag}`;
@@ -82764,8 +82804,11 @@ function runCurrencySuite(): number {
             const env = {
               PATH: bin, MOCK_TRACE: trace, MOCK_HEAD: expectedCommit,
               MOCK_COMMIT: scenario.commit ?? expectedCommit, MOCK_API_EXIT: scenario.apiExit ?? '0', MOCK_KIND: scenario.refKind ?? 'commit', MOCK_OBJECT: tagObject,
-              MOCK_RELEASE_EXIT: scenario.releaseExit ?? '0', MOCK_SERVED: scenario.served ?? '', MOCK_LATEST: scenario.latest ?? '1.2.2',
-              EVENT: event, CREATED: scenario.created ?? 'true', CUT_TAG: scenario.cutTag ?? tag,
+              MOCK_LOCAL_TAG_SHA: scenario.localTagSha ?? expectedCommit, MOCK_LOCAL_TAG_EXIT: scenario.localTagExit ?? '0',
+              MOCK_MAIN_SHA: expectedCommit, MOCK_MAIN_EXIT: scenario.mainExit ?? '0', MOCK_ANCESTOR_EXIT: scenario.ancestorExit ?? '0',
+              MOCK_SHOW_EXIT: scenario.showExit ?? '0', MOCK_PKG_JSON: scenario.pkgJson ?? JSON.stringify({ name: packageName, version: scenarioVersion }),
+              MOCK_SERVED: scenario.served ?? '', MOCK_LATEST: scenario.latest ?? '1.2.2',
+              EVENT: event, REF: scenario.ref ?? `refs/tags/${scenarioTag}`, CUT_TAG: scenarioTag,
               INPUT_TAG: scenario.inputTag ?? tag, INPUT_VERSION: scenario.inputVersion ?? '',
               REPO: repo, GITHUB_SHA: sha, GITHUB_EVENT_NAME: event, GITHUB_OUTPUT: outputFile, RUNNER_TEMP: 'mock-runner-temp',
             };
@@ -82790,16 +82833,14 @@ function runCurrencySuite(): number {
             const published = calls.filter((line) => line.startsWith('npm publish '));
             const api = calls.filter((line) => line.startsWith('gh api '));
             const wantExit = scenario.rule === undefined ? 0 : 1;
-            const wantPublished = scenario.published ?? (wantExit === 0 && !scenario.noRelease ? 3 : 0);
+            const wantPublished = scenario.published ?? (wantExit === 0 ? 3 : 0);
             if (exit !== wantExit || published.length !== wantPublished) faults.push(`${scenario.name}: exit ${exit}, publishes ${published.length}, required ${wantExit}/${wantPublished}; ${JSON.stringify(output)}`);
             if (api.length !== (scenario.apiReads ?? 1) || calls.some((line) => line.startsWith('gh api ') && line !== `gh api repos/${repo}/commits/refs%2Ftags%2F${scenarioTag} --jq .sha`)) faults.push(`${scenario.name}: unexpected commits API reads ${JSON.stringify(api)}`);
             if (scenario.rule !== undefined && !output.includes(`::error::${scenario.rule}:`)) faults.push(`${scenario.name}: missing named refusal ${scenario.rule}`);
-            if (event === 'push' && scenario.rule !== undefined && Object.keys(outputs).length !== 0) faults.push(`${scenario.name}: plan emitted outputs before refusal ${JSON.stringify(outputs)}`);
+            if (scenario.rule !== undefined && Object.keys(outputs).length !== 0) faults.push(`${scenario.name}: plan emitted outputs before refusal ${JSON.stringify(outputs)}`);
             if (scenario.rule === rule && (!output.includes(sha) || !output.includes(expectedCommit))) faults.push(`${scenario.name}: refusal must name both full SHAs`);
-            if (event === 'push' && scenario.rule === rule && (!output.includes(recovery) || !output.includes('the tag remains cut'))) faults.push(`${scenario.name}: refusal must retain the cut and give exact recovery ${recovery}`);
-            if (event === 'push' && wantExit === 0 && !scenario.noRelease && JSON.stringify(outputs) !== JSON.stringify({ publish: 'true', tag: scenarioTag, sha: expectedCommit })) faults.push(`${scenario.name}: wrong verified outputs ${JSON.stringify(outputs)}`);
-            if (event === 'workflow_dispatch' && outputs.sha !== undefined) faults.push(`${scenario.name}: dispatch resolution changed to emit a SHA`);
-            if (scenario.noRelease && JSON.stringify(outputs) !== JSON.stringify({ publish: 'false' })) faults.push(`${scenario.name}: no-release output changed`);
+            if (event === 'push' && scenario.rule === rule && scenario.localTagSha === undefined && (!output.includes(recovery) || !output.includes('the tag remains cut'))) faults.push(`${scenario.name}: refusal must retain the cut and give exact recovery ${recovery}`);
+            if (wantExit === 0 && JSON.stringify(outputs) !== JSON.stringify({ publish: 'true', tag: scenarioTag, sha: expectedCommit })) faults.push(`${scenario.name}: wrong verified outputs ${JSON.stringify(outputs)}`);
             if (readFileSync(cutFile, 'utf8') !== `${scenarioTag}\n${expectedCommit}\n`) faults.push(`${scenario.name}: cut tag changed`);
             if (published.some((line) => !line.includes('--provenance'))) faults.push(`${scenario.name}: publish lost provenance`);
             rows.push(`${scenario.name}${scenario.refKind === 'tag' ? ` (annotated object ${tagObject}, commits API ${expectedCommit})` : ''}: exit ${exit}, publishes ${published.length}/3, outputs ${JSON.stringify(outputs)}, calls ${JSON.stringify(calls)}, output ${JSON.stringify(output.trim())}`);
@@ -82902,12 +82943,14 @@ function runCurrencySuite(): number {
             { what: 'push comparison reversed', text: changePlan('"$GITHUB_SHA" != "$tag_sha"', '"$GITHUB_SHA" = "$tag_sha"') },
             { what: 'push lookup failure ignored', text: changePlan('if ! tag_sha=', 'if tag_sha=') },
             { what: 'push accepts a short SHA', text: changePlan('^[0-9a-f]{40}$', '^[0-9a-f]{7,40}$') },
-            { what: 'push uses short commit ref that rejects the observed annotated tag', text: changePlan('commits/refs%2Ftags%2F$CUT_TAG', 'commits/tags%2F$CUT_TAG') },
-            { what: 'push compares a tag object from refs API', text: changePlan('commits/refs%2Ftags%2F$CUT_TAG', 'git/ref/tags/$CUT_TAG') },
+            { what: 'push uses short commit ref that rejects the observed annotated tag', text: changePlan('commits/refs%2Ftags%2F$release_tag', 'commits/tags%2F$release_tag') },
+            { what: 'push compares a tag object from refs API', text: changePlan('commits/refs%2Ftags%2F$release_tag', 'git/ref/tags/$release_tag') },
             { what: 'push publishes true before comparison', text: changePlan('if [ "$GITHUB_SHA" != "$tag_sha" ]; then', 'echo "publish=true" >> "$GITHUB_OUTPUT"; if [ "$GITHUB_SHA" != "$tag_sha" ]; then') },
+            { what: 'non-ancestor tag accepted', text: changePlan('if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then', 'if false; then') },
+            { what: 'working-tree package.json read instead of tagged commit', text: changePlan('git show "$tag_sha:package.json"', 'cat package.json') },
             { what: 'gate re-resolves mutable tag', text: releaseText.replace('\n      ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}\n', '\n      ref: ${{ needs.plan.outputs.tag }}\n') },
             { what: 'checkout re-resolves mutable tag', text: releaseText.replace('          # Do not resolve a push\'s mutable tag again after the plan checked it.\n          ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}', '          # Do not resolve a push\'s mutable tag again after the plan checked it.\n          ref: ${{ needs.plan.outputs.tag }}') },
-            { what: 'recovery loses tag ref', text: changePlan('release.yml --ref $CUT_TAG -f tag=$CUT_TAG', 'release.yml -f tag=$CUT_TAG') },
+            { what: 'recovery loses tag ref', text: changePlan('the tag remains cut; recover with gh workflow run release.yml --ref $release_tag -f tag=$release_tag', 'the tag remains cut; recover with gh workflow run release.yml -f tag=$release_tag') },
             { what: 'guard deleted', text: guardDeleted },
             { what: 'guard after the canonical publish', text: guardAt < 0 ? null : JSON.stringify(lateGuard) },
             { what: 'SHA comparison reversed', text: releaseText.includes('"$GITHUB_SHA" != "$checked_out_sha"') ? releaseText.replace('"$GITHUB_SHA" != "$checked_out_sha"', '"$GITHUB_SHA" = "$checked_out_sha"') : null },
@@ -83158,14 +83201,6 @@ function runCurrencySuite(): number {
       reportYamlHole('CUR126_SHIPS_JUDGES_THE_SUBJECT_THE_SQUASH_WRITES_READ_FROM_THE_ONE_ASSEMBLY_AND_RERUNS_ON_A_TITLE_EDIT');
     } else {
       const FILE = 'squash-text.yml';
-      const READ = 'bun scripts/commit_parse.ts subject';
-      const VERDICT = 'judge "$work/changed" "$subject" "$work/said" "  "';
-      const ENV_WANT: Record<string, string> = {
-        PR_TITLE: 'github.event.pull_request.title',
-        PR_NUMBER: 'github.event.pull_request.number',
-        BASE_SHA: 'github.event.pull_request.base.sha',
-        HEAD_SHA: 'github.event.pull_request.head.sha',
-      };
       const rowsFor = (reader: (input: { title: string; number: string; commits: string[] }) => string): { rows: string[]; wrong: string[] } => {
         const cases: Array<{ what: string; title: string; commits: string[]; want: string }> = [
           { what: 'one docs commit under a fix title', title: 'fix: the title', commits: ['docs: the one commit\n\nA body the subject does not carry.\n'], want: 'docs: the one commit' },
@@ -83190,42 +83225,39 @@ function runCurrencySuite(): number {
         const homes = Object.entries(all)
           .filter(([, flow]) => (flow.jobs ?? {}).ships !== undefined)
           .map(([file]) => file);
-        if (homes.length !== 1 || homes[0] !== FILE) {
-          faults.push(`a job named \`ships\` is defined in ${homes.length === 0 ? 'no workflow' : homes.join(', ')}, where it is defined once, in ${FILE}, which re-runs on \`edited\``);
+        if (homes.length > 0) {
+          faults.push(`a job named \`ships\` is still defined in ${homes.join(', ')}, where release-please and its visibility gate are retired`);
         }
-        const job = (all[FILE]?.jobs ?? {}).ships;
-        if (job === undefined) return faults;
-        const steps = job.steps ?? [];
-        const at = steps.findIndex((step) => runLines(step).some((line) => line.includes(READ)));
-        if (at < 0) return [...faults, `${FILE}: no step of \`ships\` runs \`${READ}\`, so the subject it judges is not the one the squash writes`];
-        const step = steps[at];
-        for (const [variable, field] of Object.entries(ENV_WANT)) {
-          const value = step.env?.[variable] ?? '';
-          if (!new RegExp(`^\\$\\{\\{\\s*${field.replace(/\./g, '\\.')}\\s*\\}\\}$`).test(value)) faults.push(`${FILE}: the \`ships\` step's env ${variable} is ${JSON.stringify(value)}, where it reads \${{ ${field} }}`);
+        for (const [file, text] of Object.entries(edited)) {
+          if (text.includes('release-please-config.json') || text.includes('.release-please-manifest.json')) {
+            faults.push(`${file}: references retired release-please config or manifest`);
+          }
         }
-        if (!steps.slice(0, at).some((step) => runLines(step).includes('bun install --frozen-lockfile'))) {
-          faults.push(`${FILE}: \`ships\` runs no \`bun install --frozen-lockfile\` before \`${READ}\`, and the reader imports the pinned parser at load`);
+        const flow = all[FILE];
+        for (const requiredJob of ['parses', 'removals']) {
+          if ((flow?.jobs ?? {})[requiredJob] === undefined) {
+            faults.push(`${FILE}: missing required job \`${requiredJob}\``);
+          }
         }
-        if (!runLines(step).includes(VERDICT)) faults.push(`${FILE}: the \`ships\` verdict is not \`${VERDICT}\`, so what it judges is not the subject the reader printed`);
         return faults;
       };
       const standing = shipsFaults(texts);
       const fileText = texts[FILE] ?? '';
       const ciText = texts['ci.yml'] ?? '';
       const plants: Array<{ what: string; edit: Record<string, string | null>; at?: string; quiet?: boolean }> = [
-        { what: 'the verdict judges the title again', edit: { [FILE]: once(fileText, VERDICT, 'judge "$work/changed" "$PR_TITLE" "$work/said" "  "') }, at: `${FILE}: the \`ships\` verdict` },
-        { what: 'a second ships job back in ci.yml', edit: { 'ci.yml': `${ciText.trimEnd()}\n\n  ships:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo planted\n` }, at: 'a job named `ships`' },
+        { what: 'a ships job re-added to squash-text.yml', edit: { [FILE]: `${fileText.trimEnd()}\n\n  ships:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo planted\n` }, at: 'a job named `ships`' },
+        { what: 'a ships job re-added to ci.yml', edit: { 'ci.yml': `${ciText.trimEnd()}\n\n  ships:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo planted\n` }, at: 'a job named `ships`' },
         {
-          what: 'ships stops installing what the reader imports',
-          edit: { [FILE]: once(fileText, '      - uses: oven-sh/setup-bun@v2\n      - run: bun install --frozen-lockfile\n\n      - name: A landing', '      - uses: oven-sh/setup-bun@v2\n\n      - name: A landing') },
-          at: `${FILE}: \`ships\` runs no`,
+          what: 'release-please-config.json referenced in squash-text.yml',
+          edit: { [FILE]: once(fileText, 'bun scripts/commit_parse.ts pr', 'bun scripts/commit_parse.ts pr # release-please-config.json') },
+          at: `${FILE}: references retired release-please config`,
         },
         {
-          what: 'the number left out of the env the reader reads',
-          edit: { [FILE]: once(fileText, '          PR_NUMBER: ${{ github.event.pull_request.number }}\n        run: |\n          # `sort`', '        run: |\n          # `sort`') },
-          at: `${FILE}: the \`ships\` step's env PR_NUMBER`,
+          what: 'removals job dropped from squash-text.yml',
+          edit: { [FILE]: once(fileText, '\n  removals:\n', '\n  other-job:\n') },
+          at: `${FILE}: missing required job`,
         },
-        { what: 'the ships step renamed', edit: { [FILE]: once(fileText, '- name: A landing that changes the package is visible to the release', '- name: ships') }, quiet: true },
+        { what: 'the parses step renamed', edit: { [FILE]: once(fileText, '- name: release-please parses the text the squash will write', '- name: the squash text parses') }, quiet: true },
       ];
       const probes: string[] = [...reader.wrong];
       if (titleReader.wrong.length === 0) probes.push('a reader that returns the title agreed with every fixture row, so the rows cannot tell the squash subject from the title');
@@ -83252,10 +83284,9 @@ function runCurrencySuite(): number {
           held,
           [...standing, ...probes],
           `squashSubject answers the one commit's subject for one commit and the title for several — ${reader.rows.join('; ')} — where a title-reader ` +
-            `gets ${titleReader.wrong.length} of ${reader.rows.length} row(s) wrong; \`ships\` is defined once, in ${FILE}, installs, runs \`${READ}\` with the pull request ` +
-            `through \`env:\` and judges what it printed — over ${cases.length} plant(s): ${cases.join('; ')}`,
+            `gets ${titleReader.wrong.length} of ${reader.rows.length} row(s) wrong; \`ships\` and \`release-please-config.json\` are retired from ${FILE} while \`parses\` and \`removals\` remain — over ${cases.length} plant(s): ${cases.join('; ')}`,
         ),
-        'issue #1359: under COMMIT_OR_PR_TITLE a single commit squashes to its own subject, so a check that reads the title judges a line the squash does not write',
+        'issue #1359 / #1730: squashSubject still distinguishes one-commit and multi-commit squashes, while the release-please ships job is retired',
       );
     }
 

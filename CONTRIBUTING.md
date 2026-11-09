@@ -284,25 +284,10 @@ the tarball runs* is the argument.
 
 [Conventional Commits](https://www.conventionalcommits.org/) with a scope —
 `feat(compile):`, `fix(validate):`, `test(selftest):`, `docs(authoring):`. Subject
-and body in English. The subject line is what release-please reads to decide the
-next version and what lands in the changelog, so write it for the person reading
-`CHANGELOG.md` six months from now: `feat` bumps the minor, `fix`, `perf` and
-`check` bump the patch, and everything else is invisible to the release. See
-[RELEASING.md](RELEASING.md).
-
-⚠️ **A landing that changes a file inside the published package has to be
-visible to the release.** The package is the `files` allowlist plus what npm
-always adds — `npm pack --dry-run` prints it — and it contains seven guides under
-`docs/`, so *a correction to a shipped guide changes what `npm install` hands
-somebody*. The `ships` job in CI compares what your branch changed against that
-list and refuses a landing the release cannot see. Its verdict is **not** that
-your type is wrong: a doc correction really is a `docs` change, and what is
-missing is that it also ships. Either remedy clears it — a type the changelog
-shows, in the subject the squash will write (the one commit's own subject on a
-one-commit branch, the pull request title on a longer one), or a `Release-As:` footer in a **commit message on the branch**, since the
-squash body is made of the commits and not of the pull request body. A change
-that touches nothing in the package is unaffected whatever its type
-([#516](https://github.com/rig-c/core/issues/516)).
+and body in English. Releases are deliberate tags (`vX.Y.Z`) rather than
+bot-generated pull requests, and the subject line is what lands in `CHANGELOG.md`
+when a release pull request is prepared, so write it for the person reading
+`CHANGELOG.md` six months from now. See [RELEASING.md](RELEASING.md).
 
 ⚠️ **A control that leaves has to be named by the change that removes it.** The
 `removals` job in the `squash-text` workflow reads the control names on your branch against the ones its
@@ -317,17 +302,15 @@ runs the job again, with no new push and no selftest run
 reaches `main`, since the squash body is made of the commits. A rename takes the old name
 out of the tree, so it is declared exactly like any other removal.
 
-⚠️ **The squash text has to parse, or the landing is never released.**
-release-please skips a commit its parser throws on and still reports success.
+⚠️ **The squash text has to parse.**
 The `squash-text` workflow parses the text your squash will write — one
 commit's own subject and body, or the pull request title over every commit
-message when there are several — with the parser release-please runs, and names
+message when there are several — with `@conventional-commits/parser`, and names
 the line and column it stops at. The usual cause is a body line that opens with
 a code span holding a nested call, such as a line starting
 `` `outer(inner(x))` ``: the grammar reads the start of the line as a footer
 token. Move the span off the start of the line, in the commit message — the pull
-request body does not reach the squash. RELEASING.md *A commit release-please
-cannot parse is a release that does not happen* has the measurement
+request body does not reach the squash
 ([#1354](https://github.com/rig-c/core/issues/1354)).
 
 Keep one unit of work per commit. A body that has to explain two unrelated things

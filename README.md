@@ -198,12 +198,12 @@ of them: it reads whatever frames you point it at, so it runs from the installed
 package on pictures of your own — which is what *Where to go next* below tells you
 to do with it, and it is the one instrument here that can see a wrong animation.
 
-Programmatic checked consumers can import `rig-c/render-shared`: the official
+Programmatic checked consumers can import `@rig-c/core/render-shared`: the official
 candidate chooser (`loadCandidate`, `throughPoser`), setup and animation samplers
 (`sampleSetupPose`, `sampleAnimation`) and raster reads (`pageFor`, `projector`,
 `rasterisePiece`, `renderFrame`), with their argument/result types and named
 failures. It loads without the optional Spine runtime; a Spine input requires
-explicitly loading `rig-c/render`, whose eager runtime dependency is unchanged.
+explicitly loading `@rig-c/core/render`, whose eager runtime dependency is unchanged.
 The promised scope and the first release (2.69.0) are in
 [RELEASING.md, The import surface](https://github.com/rig-c/core/blob/main/RELEASING.md#the-import-surface);
 [AUTHORING §0.5](docs/AUTHORING.md#05-reading-a-build-from-code) shows the call chain.

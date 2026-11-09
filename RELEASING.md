@@ -30,7 +30,7 @@ Every push to `main` runs `release.yml`, which hands the new commits to
   `CLAUDE.md` calls the first of them a first-class deliverable — the guide and
   the validator's messages together are the only interface an agent that cannot
   see the rig actually has. So a correction to a shipped guide changes what
-  `npm install rig-c` hands somebody, under a type the release machinery is
+  `npm install @rig-c/core` hands somebody, under a type the release machinery is
   told to ignore, and the guides stay wrong on the registry until something else
   happens to cut a release.
 
@@ -190,8 +190,8 @@ the commit that introduces these files, and is not maintained afterwards.
    dependant's own that has not landed yet to the candidate copy only, which
    is how #1212 verified the dependant's switch to the named entries before
    it was theirs to land. `<name>` is the name the dependant declares: the
-   package's own, `rig-c`, or one of the aliases it is also published as,
-   `spine-rigc` or `@rig-c/core` — in which case the candidate is repacked under that name by
+   package's own, `@rig-c/core`, or one of the aliases it is also published as,
+   `rig-c` or `spine-rigc` — in which case the candidate is repacked under that name by
    `scripts/alias_tarball.ts`, its files unchanged, so the dependant's own
    imports resolve. rig-parts 0.16.0 declares `spine-rigc`, and on the tree
    that renamed the package the check came back green against
@@ -217,8 +217,8 @@ the commit that introduces these files, and is not maintained afterwards.
    processing and nothing is wrong with the cut: re-run the confirmation
    (Actions → release → Run workflow, with the version) rather than re-cutting
    anything. *Whether the tarball runs*, below, has the window and the codes.
-8. Confirm every name: `npm view rig-c version`, `npm view spine-rigc version` and
-   `npm view @rig-c/core version` print the version just cut, and each name's npm page shows the provenance
+8. Confirm every name: `npm view @rig-c/core version`, `npm view rig-c version` and
+   `npm view spine-rigc version` print the version just cut, and each name's npm page shows the provenance
    attestation linking its tarball to the workflow run.
 
 ### What the release notes say about `build`'s bytes
@@ -339,9 +339,10 @@ That is what `id-token: write` in the `publish` job's permissions is for, and it
 what lets the publish carry `--provenance`. The registry side of it is
 configured — the fields are recorded below, and nothing there is outstanding.
 
-**The canonical npm package is `@rig-c/core`.** `rig-c` is the checkout
-manifest name the publish packs from and the convenience install name;
-`spine-rigc` is the legacy install name. Do not retry the short name `rigc`.
+**The canonical npm package is `@rig-c/core`.** `@rig-c/core` is the checkout
+manifest name in `package.json` that the publish packs from and the canonical
+install name; `rig-c` is the convenience unscoped alias and `spine-rigc` is the
+legacy install alias. Do not retry the short name `rigc`.
 The first publish of `rigc@0.2.0` was refused by the registry
 with `403 Package name too similar to existing packages rc,rfdc,bigi`, which is
 a registry-side rule no account setting or flag overrides, and npm support
@@ -354,12 +355,12 @@ needs, and no third party's product name in it. When the repository moved to
 the `rig-c` organisation as `rig-c/core`, issue
 [#1347](https://github.com/rig-c/core/issues/1347) added `@rig-c/core`: the
 same package under the toolchain's npm scope, beside `@rig-c/parts` and
-`@rig-c/play`. `@rig-c/core` is the name to install. `bin` installs the
-command as `rigc` under any of the three names.
+`@rig-c/play`. `@rig-c/core` is now the `name` in `package.json` and the name
+to install. `bin` installs the command as `rigc` under any of the three names.
 
-`spine-rigc` is **an alias, not a retirement**. The workflow also publishes
-`@rig-c/core` through its alias-packing step; that mechanism does not change
-which name is canonical. The workflow publishes each release under all three
+`rig-c` and `spine-rigc` are **aliases, not retirements**. The workflow
+publishes `@rig-c/core` from the canonical tarball and repacks `rig-c` and
+`spine-rigc` through its alias-packing steps; the workflow publishes each release under all three
 names, with the same product files. `rig-c@2.20.4` went up by hand from the
 registry's own `spine-rigc@2.20.4` tarball with the `name` line changed and
 nothing else (213 files, the same list); every version after it is the
@@ -497,7 +498,7 @@ publisher of every name is pinned to `release.yml`.
 `GITHUB_SHA` from the workflow run in its provenance, not the commit that
 `actions/checkout` later selects. Dispatching on `main` while checking out an
 older tag therefore names `main`'s commit as the source of the tag's files.
-Before any publish — `rig-c` or either alias — the publish job compares
+Before any publish — `@rig-c/core` or either alias — the publish job compares
 `GITHUB_SHA` to `git rev-parse HEAD` on a `workflow_dispatch`. If they differ,
 it fails with `PROVENANCE_SHA_MISMATCH`, naming both full SHAs, and no publish
 runs. This dispatch guard is unchanged.
@@ -565,8 +566,8 @@ fails `plan`, so nothing after it starts:
 | `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
 | `RELEASE_TAG_PRERELEASE` | the tag carries a prerelease (`vX.Y.Z-<prerelease>`): this workflow publishes under `latest` only (*Below latest*) |
 | `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
-| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `rig-c` |
-| `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `rig-c` (a prerelease is below its release) |
+| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/core` |
+| `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/core` (a prerelease is below its release) |
 
 **Two inputs, one per dispatch.** `tag` publishes a cut tag; `version` re-runs
 a confirmation (*Whether the tarball runs*). Both are optional, because GitHub
@@ -585,8 +586,8 @@ not in the group — the registry is one per package, and a dispatch may name an
 ref. `CUR132` evaluates the group over a push, a `tag` dispatch and a `version`
 dispatch, and holds the first two to one group and the third to another.
 
-**Half-published.** The aliases `spine-rigc` and `@rig-c/core` are published
-after `rig-c`, in the same job, so a failure between those steps leaves the
+**Half-published.** The aliases `rig-c` and `spine-rigc` are published
+after `@rig-c/core`, in the same job, so a failure between those steps leaves the
 version up under the package name and missing under one alias or both.
 `RELEASE_ALREADY_PUBLISHED` reads the package name only, so such a version is
 refused rather than published again: a second `npm publish` of the package's
@@ -623,9 +624,9 @@ and removes this refusal, together.
 
 It cannot be done from here, since it needs the account. Recorded so the
 settings can be checked or rebuilt: **one form per name**, because npm keys a
-trusted publisher to the package. npmjs.com → **rig-c** → **Settings** →
-**Trusted Publisher** → *GitHub Actions*, and the same under **spine-rigc**
-and **@rig-c/core**, each filled in as
+trusted publisher to the package. npmjs.com → **@rig-c/core** → **Settings** →
+**Trusted Publisher** → *GitHub Actions*, and the same under **rig-c**
+and **spine-rigc**, each filled in as
 
 - Organization or user: `rig-c`
 - Repository: `core`
@@ -663,7 +664,7 @@ Two properties of that configuration are load-bearing in the workflow:
   publishing from self-hosted runners, so this job never moves to a private
   machine.
 
-Confirm a cut afterwards: `npm view rig-c version`, `npm view spine-rigc version` and `npm view @rig-c/core version`.
+Confirm a cut afterwards: `npm view @rig-c/core version`, `npm view rig-c version` and `npm view spine-rigc version`.
 
 **The exchange is proven.** **v0.4.0** and **v0.5.0** both published automatically
 over OIDC, with provenance attestations, from release runs `32944316689` and
@@ -717,7 +718,7 @@ runtime resolves from the package's own location.
 
 | an install with | `rigc` runs | `rigc --version` prints (stdout, then stderr) |
 | --- | --- | --- |
-| no `@esotericsoftware/spine-core` (what `npm install rig-c` gives) | `cli_core.ts` — `build` and `repack` (gated without the parse, `A00_ROUNDTRIP_PARSE` a SKIP), `explain`, `ingest`, `split`, `diff`, `check`, `render`, `inspect`, `texture-scale`, `pose`, `chainfit`, `guide`, `skills`, `review`; every other command refused by name | the version, then `entry: cli_core.ts — @esotericsoftware/spine-core absent — …` |
+| no `@esotericsoftware/spine-core` (what `npm install @rig-c/core` gives) | `cli_core.ts` — `build` and `repack` (gated without the parse, `A00_ROUNDTRIP_PARSE` a SKIP), `explain`, `ingest`, `split`, `diff`, `check`, `render`, `inspect`, `texture-scale`, `pose`, `chainfit`, `guide`, `skills`, `review`; every other command refused by name | the version, then `entry: cli_core.ts — @esotericsoftware/spine-core absent — …` |
 | `@esotericsoftware/spine-core` installed beside it | `cli.ts` — every command, `build` through the round trip | the version, then `entry: cli.ts — @esotericsoftware/spine-core <version> present` |
 
 The commands in the first row are the set the command table derives — a
@@ -785,12 +786,12 @@ adoption (#1642):
 | `rigc render --extremes-only` | Same `extremes.json` and readable `extremes.png` bytes as `--extremes`, per selected set; no ordinary frames, contact sheet or `frames.json`. Existing posing, subset and viewport options apply; other diagnostic/sheet output flags are refused by name. | rigc builds use the core entry; Spine exports require the runtime as for `render` |
 
 ⚠️ **Three things are spelled `rig-c/core`, and they are different things.**
-The **import** `rig-c/core` is the row above: one entry of this package, the
-posing core, the `./core` key of `exports`. The **package** `@rig-c/core` is
-the whole of this package under the toolchain's npm scope — an alias of
-`rig-c` with the same files (*Publishing* above, issue
-[#1347](https://github.com/rig-c/core/issues/1347)) — so installed under that
-name the same entry is imported as `@rig-c/core/core`; `@rig-c/core` on its
+The **import** `rig-c/core` is the row above: one entry of this package under
+the `rig-c` alias, the posing core, the `./core` key of `exports`. The
+**package** `@rig-c/core` is the whole of this package under the toolchain's
+npm scope — the `name` in `package.json` (*Publishing* above, issue
+[#1347](https://github.com/rig-c/core/issues/1347)) — so installed under the
+canonical name the same entry is imported as `@rig-c/core/core`; `@rig-c/core` on its
 own names no entry at all, since `exports` has no `.` key. The **repository**
 [`rig-c/core`](https://github.com/rig-c/core) is where this tree lives on
 GitHub. The entry was not renamed when the other two arrived, and nothing about
@@ -1675,7 +1676,7 @@ failed*). By hand, from a checkout of the tag:
 
 ```sh
 bun run smoke -- --source registry --version <version> --case clean
-bun run smoke -- --source registry --version <version> --case clean --alias spine-rigc --alias @rig-c/core
+bun run smoke -- --source registry --version <version> --case clean --alias rig-c --alias spine-rigc
 ```
 
 The second line is the one the workflow runs: after the case, it fetches the
@@ -1702,14 +1703,12 @@ git checkout vX.Y.Z              # the tagged tree
 bun install --frozen-lockfile
 bun run fetch-examples           # the corpus the selftest in prepublishOnly reads
 npm publish                      # runs prepublishOnly, then asks for the OTP
-npm publish "$(bun scripts/alias_tarball.ts pack --name spine-rigc --out ../alias-spine-rigc)"   # each alias, from the same tree
-npm publish "$(bun scripts/alias_tarball.ts pack --name @rig-c/core --out ../alias-rig-c-core)" --access public
+npm publish "$(bun scripts/alias_tarball.ts pack --name rig-c --out ../alias-rig-c)"   # each alias, from the same tree
+npm publish "$(bun scripts/alias_tarball.ts pack --name spine-rigc --out ../alias-spine-rigc)"
 ```
 
 The package's own `npm publish` takes no flags here — `publishConfig.access`
-in `package.json` already says `public`; the scoped alias passes
-`--access public` as the workflow does, because a scoped name is the one whose
-default is restricted. This is how `spine-rigc@0.2.1` shipped. It authenticates
+in `package.json` already says `public`. This is how `spine-rigc@0.2.1` shipped. It authenticates
 as a logged-in human with a one-time password, which "require two-factor
 authentication and disallow tokens" permits; what that setting rules out is
 doing this from a script, unattended. Reach for it when the automation is broken

@@ -6,11 +6,11 @@
 # Merging that pull request is the release: the resulting push runs this
 # workflow again, release-please tags vX.Y.Z and cuts the GitHub release, and
 # the same run publishes to npm over OIDC (trusted publishing) — no npm token,
-# no OTP. It publishes the package three times, under three names: `rig-c`,
+# no OTP. It publishes the package three times, under three names: `@rig-c/core`,
 # the name in package.json, and two aliases carrying the same files at every
-# version — `spine-rigc`, the name it first shipped under (issue #1258), and
-# `@rig-c/core`, the same package under the toolchain's npm scope (issue
-# #1347). `ALIASES` in scripts/alias_tarball.ts is the list; CUR122 holds the
+# version — `rig-c`, the convenience unscoped name (issue #1258), and
+# `spine-rigc`, the name it first shipped under (issue #1258).
+# `ALIASES` in scripts/alias_tarball.ts is the list; CUR122 holds the
 # publish steps and both confirmation calls below to it.
 #
 # The cut resolves its target in plan, then reuse looks for successful CI
@@ -56,7 +56,7 @@
 #
 # Two constraints are load-bearing, do not "simplify" them away:
 #   - Every publish must stay in THIS file. npm's trusted publisher for each
-#     name — rig-c, spine-rigc and @rig-c/core, one form per package on npmjs.com — is
+#     name — @rig-c/core, rig-c and spine-rigc, one form per package on npmjs.com — is
 #     pinned to the workflow filename `release.yml`.
 #   - It must stay on a GitHub-hosted runner. npm does not support OIDC from
 #     self-hosted runners.
@@ -82,7 +82,7 @@ on:
   #     path to send one down until a card configures one and removes this
   #     refusal with it), a tag with no GitHub release
   #     (RELEASE_TAG_UNRELEASED), a version the registry already serves under
-  #     rig-c (RELEASE_ALREADY_PUBLISHED) and a version below the registry's
+  #     @rig-c/core (RELEASE_ALREADY_PUBLISHED) and a version below the registry's
   #     latest (RELEASE_TAG_BELOW_LATEST: npm 12.2.0's publish
   #     refuses to put latest on a version below the highest one implicitly,
   #     and the publish steps below pass no `--tag`). A tag it resolves runs
@@ -189,13 +189,13 @@ jobs:
           case "$INPUT_TAG" in *-*) echo "::error::RELEASE_TAG_PRERELEASE: $INPUT_TAG is a prerelease; this workflow publishes under latest only — its publish steps pass no --tag and release-please here cuts no prerelease — so a prerelease dispatch would move latest onto it (RELEASING.md)"; exit 1;; esac
           if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
           version="${INPUT_TAG#v}"
-          if served="$(npm view "rig-c@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves rig-c@$version; the aliases follow it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
-          if latest="$(npm view "rig-c" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
+          if served="$(npm view "@rig-c/core@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/core@$version; the aliases follow it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
+          if latest="$(npm view "@rig-c/core" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
             const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
             const ids = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i] === undefined) return -1; if (b[i] === undefined) return 1; const na = /^[0-9]+$/.test(a[i]), nb = /^[0-9]+$/.test(b[i]); if (na && nb && Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]); if (na !== nb) return na ? -1 : 1; if (!na && a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; };
             const cmp = (x, y) => { const a = parse(x), b = parse(y); for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1; return ids(a.pre, b.pre); };
             process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
-          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest rig-c@$latest; the registry will not move latest implicitly and these publication steps pass no --tag, so it is not published by this dispatch (RELEASING.md)"; exit 1; fi
+          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest @rig-c/core@$latest; the registry will not move latest implicitly and these publication steps pass no --tag, so it is not published by this dispatch (RELEASING.md)"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
   # A no-cut push starts none of the lookup/gate/publish work. Dispatch cannot
@@ -375,11 +375,10 @@ jobs:
           canonical_tgz="$(npm pack . --pack-destination .)"
           npm publish "$canonical_tgz" --provenance --access public
 
-      # 🪞 The aliases: the same files under the name the package first shipped
+      # 🪞 The aliases: the same files under the convenience unscoped name
+      # `rig-c` (issue #1258) and under the name the package first shipped
       # as (issue #1258), so a dependant that still names `spine-rigc` keeps
-      # receiving every version, and under the toolchain's scope as
-      # `@rig-c/core` (issue #1347) — scoped, so `--access public` is what
-      # keeps it from publishing restricted. One step per alias, each the same
+      # receiving every version. One step per alias, each the same
       # three lines: `scripts/alias_tarball.ts` packs this checkout
       # — the tagged commit the step above published from — into the runner's
       # temp directory, rewrites the one `"name"` line of the extracted
@@ -390,20 +389,20 @@ jobs:
       # Every publication consumes a tarball after the one named reader.
       # The alias helper retains its byte comparison and rewrites the name
       # only in its extraction. The checkout's tracked inputs stay fixed.
+      - name: Publish the alias rig-c
+        env:
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+        run: |
+          set -euo pipefail
+          alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-c --out "$RUNNER_TEMP/alias-rig-c")"
+          npm publish "$alias_tgz" --provenance --access public
+
       - name: Publish the alias spine-rigc
         env:
           TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
         run: |
           set -euo pipefail
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name spine-rigc --out "$RUNNER_TEMP/alias-spine-rigc")"
-          npm publish "$alias_tgz" --provenance --access public
-
-      - name: Publish the alias @rig-c/core
-        env:
-          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
-        run: |
-          set -euo pipefail
-          alias_tgz="$(bun scripts/alias_tarball.ts pack --name @rig-c/core --out "$RUNNER_TEMP/alias-rig-c-core")"
           npm publish "$alias_tgz" --provenance --access public
 
       # ROADMAP.md's fourth condition for 1.0 says "installing FROM THE REGISTRY
@@ -456,7 +455,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
-          bun run smoke -- --source registry --version "$version" --wait 15 --case clean --alias spine-rigc --alias @rig-c/core
+          bun run smoke -- --source registry --version "$version" --wait 15 --case clean --alias rig-c --alias spine-rigc
 
   # The same confirmation, on demand, for a cut whose wait ran out. It publishes
   # nothing and can publish nothing: `npm publish` exists only in the job above,
@@ -490,4 +489,4 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          bun run smoke -- --source registry --version "$VERSION" --wait 15 --case clean --alias spine-rigc --alias @rig-c/core
+          bun run smoke -- --source registry --version "$VERSION" --wait 15 --case clean --alias rig-c --alias spine-rigc

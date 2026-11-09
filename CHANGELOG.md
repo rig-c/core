@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.7.0
+
+Every file `build` writes is byte-identical to v3.6.0's.
+
+`@rig-c/core` is now the canonical package name in `package.json` and documentation. The release workflow publishes `@rig-c/core` first and then rewrites the packed tarball metadata to publish the `rig-c` unscoped compatibility alias (#1729).
+
+The release workflow now triggers on validated `vX.Y.Z` tag pushes and manual `workflow_dispatch` inputs instead of `release-please`, verifying that the selected tag matches `package.json` and maps to an ancestor of `origin/main` before running tests and publishing (#1732).
+
+### Features
+
+* make @rig-c/core the canonical package name (#1729) (a3018d9)
+
+### Bug Fixes
+
+* **release:** publish deliberate validated version tags (#1732) (a7acedf)
+
 ## [3.6.0](https://github.com/rig-c/core/compare/v3.5.0...v3.6.0) (2026-11-08)
 
 

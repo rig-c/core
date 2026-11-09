@@ -67911,7 +67911,7 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
         if (status !== 0) return stamp === null ? [] : ['stamp on refusal'];
         if (stamp === null) return ['stamp missing on green'];
         const faults: string[] = [];
-        if (stamp.spec !== 'rigc-run/1' || stamp.package.name !== 'rig-c' || stamp.package.version !== version || stamp.command !== 'build') faults.push('identity');
+        if (stamp.spec !== 'rigc-run/1' || stamp.package.name !== '@rig-c/core' || stamp.package.version !== version || stamp.command !== 'build') faults.push('identity');
         if (Object.keys(stamp).join(',') !== 'spec,package,command,started_at,finished_at,inputs,outputs') faults.push('key order');
         if (!/^\d{4}-.*Z$/.test(stamp.started_at) || !/^\d{4}-.*Z$/.test(stamp.finished_at) || stamp.finished_at < stamp.started_at) faults.push('time');
         const roles = mode === 'cut' ? 'rig,motion,cuts' : 'rig,motion';
@@ -68076,13 +68076,13 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
   const root = join(work, 'package');
   mkdirSync(join(root, 'src', 'cli'), { recursive: true });
   for (const file of ['src/cli/run_stamp.ts', 'src/errors.ts', 'src/package_meta.ts']) cpSync(join(import.meta.dir, file), join(root, file));
-  for (const metadata of [{ name: 'rig-c' }, { name: '', version }, { name: 'rig-c', version: '' }]) {
+  for (const metadata of [{ name: '@rig-c/core' }, { name: '', version }, { name: '@rig-c/core', version: '' }]) {
     writeFileSync(join(root, 'package.json'), JSON.stringify(metadata));
     const planted = spawnSync(process.execPath, ['-e', "import {runStampPackage} from './src/cli/run_stamp.ts'; runStampPackage();"], { cwd: root, encoding: 'utf8' });
     say('RS05_INVALID_PACKAGE_METADATA_IS_REFUSED', planted.status !== 0 && planted.stderr.includes('RUN_STAMP_PACKAGE'),
       `metadata=${JSON.stringify(metadata)}, exit=${String(planted.status)}`, 'missing or empty metadata cannot identify a producer');
   }
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'rig-c', version }));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@rig-c/core', version }));
   writeFileSync(join(root, 'motion.json'), '{}');
   const changedInput = spawnSync(process.execPath, ['-e', `
     import {readRunInputs, writeRunStamp, runStampPackage} from './src/cli/run_stamp.ts';
@@ -80979,7 +80979,8 @@ function runCurrencySuite(): number {
     // answers over a tarball that 404s, and over a pack that exits 0 having
     // written nothing, are both a confirmation not taken, and both say it was
     // the tarball that never came.
-    const tarballUrl = `https://registry.invalid/${packageName}/-/${packageName}-${FAKE}.tgz`;
+    const tarballFile = `${packageName.replace(/^@/, '').replace(/\//g, '-')}-${FAKE}.tgz`;
+    const tarballUrl = `https://registry.invalid/${packageName}/-/${tarballFile}`;
     const metadataOnly = (pack: string): string =>
       fakeRegistry(
         '#!/bin/sh\n' +
@@ -81064,7 +81065,7 @@ function runCurrencySuite(): number {
         '  stage=$(mktemp -d)\n' +
         '  mkdir -p "$stage/package"\n' +
         `  printf '{"name":"${packageName}","version":"${FAKE}"}\\n' > "$stage/package/package.json"\n` +
-        `  tar -czf "$dest/${packageName}-${FAKE}.tgz" -C "$stage" package\n` +
+        `  tar -czf "$dest/${tarballFile}" -C "$stage" package\n` +
         '  rm -rf "$stage"\n' +
         '  exit 0\n' +
         'fi\n' +
@@ -81106,9 +81107,9 @@ function runCurrencySuite(): number {
 
     // --- CUR121: each alias is held to the package by its files (issues #1258, #1347)
     //
-    // 🪞 The package is published under its `package.json` name and under every
-    // name in `ALIASES` — `spine-rigc`, the name every version up to 2.20.4
-    // shipped under, and `@rig-c/core`, the package under the toolchain's scope
+    // 🪞 The package is published under its `package.json` name (`@rig-c/core`)
+    // and under every name in `ALIASES` — `rig-c`, the convenience unscoped
+    // name, and `spine-rigc`, the name every version up to 2.20.4 shipped under
     // — and the promise is that each alias carries the package's files at every
     // version. The confirmation reads that off the registry: one `--alias` per
     // name fetches the same version under it and compares the unpacked
@@ -82691,7 +82692,7 @@ function runCurrencySuite(): number {
         const bodies: Record<string, string> = {
           git: 'printf "git %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$*" = "rev-parse HEAD" ] || exit 91\nprintf "%s\\n" "$MOCK_HEAD"\n',
           gh: 'printf "gh %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = api ]; then\n  case "$*" in "api repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG --jq .sha") printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/commits/tags%2F$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "HTTP 422: No commit found for SHA: tags/%s\\n" "$CUT_TAG" >&2; exit 1; fi; printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/git/ref/tags/$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "%s\\n" "$MOCK_OBJECT"; else printf "%s\\n" "$MOCK_COMMIT"; fi;; *) exit 94;; esac\n  exit "$MOCK_API_EXIT"\nfi\n[ "$*" = "release view $INPUT_TAG --repo mock/core" ] || exit 95\nexit "$MOCK_RELEASE_EXIT"\n',
-          npm: 'printf "npm %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = publish ]; then exit 0; fi\nif [ "$1" = pack ]; then printf "mock-canonical.tgz\\n"; exit 0; fi\n[ "$1" = view ] && [ "$3" = version ] || exit 92\ncase "$2" in rig-c@*) [ -n "$MOCK_SERVED" ] || exit 1; printf "%s\\n" "$MOCK_SERVED";; rig-c) printf "%s\\n" "$MOCK_LATEST";; *) exit 96;; esac\n',
+          npm: `printf "npm %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = publish ]; then exit 0; fi\nif [ "$1" = pack ]; then printf "mock-canonical.tgz\\n"; exit 0; fi\n[ "$1" = view ] && [ "$3" = version ] || exit 92\ncase "$2" in ${packageName}@*) [ -n "$MOCK_SERVED" ] || exit 1; printf "%s\\n" "$MOCK_SERVED";; ${packageName}) printf "%s\\n" "$MOCK_LATEST";; *) exit 96;; esac\n`,
           bun: 'printf "bun %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$1" = scripts/alias_tarball.ts ] && [ "$2" = pack ] || exit 93\nprintf "mock-alias.tgz\\n"\n',
         };
         for (const [name, body] of Object.entries(bodies)) {

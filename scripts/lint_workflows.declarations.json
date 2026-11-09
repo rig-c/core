@@ -70,6 +70,31 @@
         {
           "job": "publish",
           "step": {
+            "name": "Publish the alias rig-c"
+          },
+          "verdictStep": "reuse",
+          "declaration": "scripts/tree-verdict.json",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8",
+          "evidenceEnv": "TREE_VERDICT_PATH",
+          "lifecycle": "prepublishOnly",
+          "readerCommand": "bun scripts/prepublish_gate.ts",
+          "invocations": [
+            {
+              "ordinal": 0,
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish the alias rig-c"
+                },
+                "variable": "alias_tgz",
+                "command": "bun scripts/alias_tarball.ts pack --name rig-c --out \"$RUNNER_TEMP/alias-rig-c\""
+              }
+            }
+          ]
+        },
+        {
+          "job": "publish",
+          "step": {
             "name": "Publish the alias spine-rigc"
           },
           "verdictStep": "reuse",
@@ -88,31 +113,6 @@
                 },
                 "variable": "alias_tgz",
                 "command": "bun scripts/alias_tarball.ts pack --name spine-rigc --out \"$RUNNER_TEMP/alias-spine-rigc\""
-              }
-            }
-          ]
-        },
-        {
-          "job": "publish",
-          "step": {
-            "name": "Publish the alias @rig-c/core"
-          },
-          "verdictStep": "reuse",
-          "declaration": "scripts/tree-verdict.json",
-          "actionUses": "rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8",
-          "evidenceEnv": "TREE_VERDICT_PATH",
-          "lifecycle": "prepublishOnly",
-          "readerCommand": "bun scripts/prepublish_gate.ts",
-          "invocations": [
-            {
-              "ordinal": 0,
-              "kind": "tarball",
-              "producer": {
-                "step": {
-                  "name": "Publish the alias @rig-c/core"
-                },
-                "variable": "alias_tgz",
-                "command": "bun scripts/alias_tarball.ts pack --name @rig-c/core --out \"$RUNNER_TEMP/alias-rig-c-core\""
               }
             }
           ]

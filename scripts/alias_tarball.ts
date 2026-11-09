@@ -5,13 +5,13 @@
  *     bun scripts/alias_tarball.ts pack --name <alias> --out <dir> [--tarball <tgz>]
  *     bun scripts/alias_tarball.ts compare <package.tgz> <alias.tgz>
  *
- * The package is published as `name` in `package.json` and, at every version,
- * under each of its aliases, carrying the same files: `spine-rigc` (issue
- * #1258), the name the package first shipped under, kept served so nobody
- * who depends on it is stranded — the unscoped short name is refused by the
- * registry — and `@rig-c/core` (issue #1347), the same package under the
- * toolchain's scope. RELEASING.md *Publishing* says which name is which and
- * why.
+ * The package is published as `name` in `package.json` (`@rig-c/core`, under
+ * the toolchain's npm scope, issue #1347) and, at every version, under each of
+ * its aliases, carrying the same files: `rig-c` (issue #1258), the convenience
+ * unscoped install name, and `spine-rigc` (issue #1258), the name the package
+ * first shipped under, kept served so nobody who depends on it is stranded —
+ * the unscoped short name is refused by the registry. RELEASING.md *Publishing*
+ * says which name is which and why.
  *
  * `pack` writes the alias tarball into `--out` and prints its path as the last
  * line of stdout, which is what each of `release.yml`'s alias steps hands to
@@ -61,19 +61,19 @@ const ROOT = resolve(import.meta.dir, '..');
 
 /**
  * The other names the package is published under, each an alias carrying the
- * same files: `spine-rigc`, the one every version up to 2.20.4 shipped under
- * (issue #1258), and `@rig-c/core`, the package under the toolchain's npm
- * scope (issue #1347). Not in `package.json`, which names the package once;
- * this is the one place in the tree that names the aliases for a program to
- * read, and `CUR122` holds `release.yml`'s publish steps and every
- * confirmation call to exactly this list — one dropped from either is red.
+ * same files: `rig-c`, the convenience unscoped name (issue #1258), and
+ * `spine-rigc`, the one every version up to 2.20.4 shipped under (issue #1258).
+ * Not in `package.json`, which names the package once (`@rig-c/core`); this is
+ * the one place in the tree that names the aliases for a program to read, and
+ * `CUR122` holds `release.yml`'s publish steps and every confirmation call to
+ * exactly this list — one dropped from either is red.
  *
  * ⚠️ `@rig-c/core` is the whole package under the scope, not the posing-core
  * entry `rig-c/core` (an `exports` key of this package, which is
  * `@rig-c/core/core` under the scope). RELEASING.md *The import surface*
  * sets the three `rig-c/core`s side by side.
  */
-export const ALIASES: readonly string[] = ['spine-rigc', '@rig-c/core'];
+export const ALIASES: readonly string[] = ['rig-c', 'spine-rigc'];
 
 const EXIT_SAME = 0;
 const EXIT_DIFFERENT = 1;

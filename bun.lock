@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "rigc",
+      "name": "@rig-c/core",
       "devDependencies": {
         "@conventional-commits/parser": "0.4.1",
         "@esotericsoftware/spine-core": "4.3.13",

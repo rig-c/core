@@ -272,10 +272,19 @@ jobs:
 
       # npm is what packs and installs, and the `bin` shim is a Node script, so
       # the runner's own node is not incidental here — it is half of what is
-      # under test.
+      # under test. `release.yml` sets registry-url (so setup-node's .npmrc is in
+      # use) and pins npm@12.2.2; keep equal to the npm pinned in release.yml so
+      # an npm change fails before a tag, not the cut.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Use the release job's npm
+        # Keep equal to the npm pinned in release.yml.
+        run: |
+          npm install -g npm@12.2.2
+          npm --version
 
       - name: The package installs into an empty directory and builds a rig
         run: bun run smoke

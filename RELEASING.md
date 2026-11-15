@@ -521,8 +521,8 @@ for the next cut, which publishes every name.
 
 **Below latest.** `npm publish` refuses to put `latest` on a version lower than
 the highest one published unless a `--tag` is given — *Cannot implicitly apply
-the "latest" tag*, read in the publish command of npm 12.2.0, the version
-`npm@latest` installs at this writing — and the publish steps here pass no
+the "latest" tag*, read in the publish command of npm 12.2.0 (the workflow now
+pins `npm@12.2.2`, and `ci.yml`'s `installs` job runs the same) — and the publish steps here pass no
 `--tag`. So once a later version is cut, the workflow refuses the older tag by
 name, `RELEASE_TAG_BELOW_LATEST`, naming the tag and the `latest` served,
 before anything is published; it is never attempted silently.

@@ -304,10 +304,11 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Node 22 ships npm 10; OIDC exchange landed in npm 11.5.1.
+      # Node 22 ships npm 10; OIDC exchange landed in npm 11.5.1. Pinned at 12.2.2;
+      # ci.yml's `installs` job installs the same version and the two must stay equal.
       - name: Use an npm that speaks OIDC
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.2.2
           npm --version
 
       # The repository's lockfile is bun.lock — there is no package-lock.json,

@@ -81980,7 +81980,7 @@ function runCurrencySuite(): number {
       if (!reuse || !needsOf(reuse).includes(planName) || reuse.if !== resolved ||
         reuse.outputs?.reused !== '${{ steps.lookup.outputs.reused }}' ||
         !reuse.steps?.some(step => step.id === 'lookup' && step.uses ===
-          'rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8' &&
+          'rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f' &&
           step.with?.purpose === 'ci' && step.with?.declaration === 'scripts/tree-verdict.json')) {
         faults.push('release.yml: reuse does not read the pinned source under the resolved cut condition');
       }
@@ -82126,7 +82126,7 @@ function runCurrencySuite(): number {
         if (!needsOf(test).includes(caller) || !reads) faults.push(`ci.yml's \`test\` does not need "${caller}" and read its \`verdict\` output, so the required check is not the merge's verdict`);
         const lookup = ci?.jobs?.reuse;
         const proof = lookup?.steps?.find((step) => step.id === 'lookup');
-        const pinned = 'rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8';
+        const pinned = 'rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f';
         if (proof?.uses !== pinned || proof.with?.declaration !== 'scripts/tree-verdict.json' || proof.with?.purpose !== 'ci' ||
           lookup?.outputs?.reused !== '${{ steps.lookup.outputs.reused }}') faults.push('ci.yml has no pinned lookup and exact reuse output');
         const fresh = ci?.jobs?.[caller];
@@ -82236,7 +82236,7 @@ function runCurrencySuite(): number {
             `that reaches those three jobs or the confirmation on a \`version\` alone, no job of its own — over ${cases.length} plant(s): ${cases.join('; ')}`,
         ),
         'issue #1249: the publish reads a tally instead of running the selftest, which is sound only if the tally is the gate over ' +
-          'this tag, with whole-chain coverage checked before all three tarball publications; a dispatched tag follows the same resolve, fresh gate and admission path',
+          'this tag, with whole-chain coverage checked before all three tarball publications; a dispatched tag follows the same resolve, reuse, gate and admission path',
       );
     }
 

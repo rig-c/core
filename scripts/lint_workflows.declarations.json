@@ -13,7 +13,7 @@
       "guard": {
         "job": "reuse",
         "step": "lookup",
-        "uses": "rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8",
+        "uses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
         "sourceWorkflow": ".github/workflows/ci.yml",
         "declaration": "scripts/tree-verdict.json"
       },
@@ -28,7 +28,7 @@
       "guard": {
         "job": "reuse",
         "step": "lookup",
-        "uses": "rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8",
+        "uses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
         "sourceWorkflow": ".github/workflows/ci.yml",
         "declaration": "scripts/tree-verdict.json"
       },
@@ -49,7 +49,7 @@
           },
           "verdictStep": "reuse",
           "declaration": "scripts/tree-verdict.json",
-          "actionUses": "rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
           "evidenceEnv": "TREE_VERDICT_PATH",
           "lifecycle": "prepublishOnly",
           "readerCommand": "bun scripts/prepublish_gate.ts",
@@ -74,7 +74,7 @@
           },
           "verdictStep": "reuse",
           "declaration": "scripts/tree-verdict.json",
-          "actionUses": "rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
           "evidenceEnv": "TREE_VERDICT_PATH",
           "lifecycle": "prepublishOnly",
           "readerCommand": "bun scripts/prepublish_gate.ts",
@@ -99,7 +99,7 @@
           },
           "verdictStep": "reuse",
           "declaration": "scripts/tree-verdict.json",
-          "actionUses": "rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
           "evidenceEnv": "TREE_VERDICT_PATH",
           "lifecycle": "prepublishOnly",
           "readerCommand": "bun scripts/prepublish_gate.ts",

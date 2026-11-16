@@ -7,7 +7,7 @@ and tree are recorded separately. Old `tree-verdict/1` receipts are ineligible.
 
 The shared action supplies the Bun coverage compiler/collector, Node lifecycle
 reader, lint and focused controls. Core's CI/release callers use the exact
-`d43f730151d5db0b71682a1a4057145cd4a95fa8` action pin and condition their single
+`149bca5fc828c60416283de0a1aa570ed33f385f` action pin and condition their single
 receipt upload on the producer output. The required CI check reads reuse and the
 substantive selftest verdict independently of the receipt job. The source run's
 overall success remains required for reuse. Core's tally binds an exact commit,

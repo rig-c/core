@@ -195,8 +195,8 @@ jobs:
           ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $release_tag is below the registry's latest @rig-c/core@$latest; the registry will not move latest implicitly and these publication steps pass no --tag, so it is not published by this dispatch (RELEASING.md)"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$release_tag" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
 
-  # A no-cut push starts none of the lookup/gate/publish work. Dispatch cannot
-  # reuse a source verdict and follows the same fresh gate as a push miss.
+  # A no-cut push starts none of the lookup/gate/publish work. A single-segment tag push
+  # or tag-ref dispatch on a default-branch commit reuses a same-tree verdict; else gate runs.
   reuse:
     needs: plan
     if: ${{ needs.plan.outputs.publish == 'true' }}
@@ -213,7 +213,7 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha || needs.plan.outputs.tag }}
       - id: lookup
-        uses: rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
         with:
           declaration: scripts/tree-verdict.json
           purpose: ci
@@ -318,7 +318,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - id: reuse
-        uses: rig-c/core/.github/actions/tree-verdict@d43f730151d5db0b71682a1a4057145cd4a95fa8
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
         with:
           declaration: scripts/tree-verdict.json
           purpose: publish

@@ -29,6 +29,7 @@ function fixture() {
   state.api = async path => {
     state.calls.push(path);
     if (state.override) { const v = await state.override(path); if (v !== undefined) return structuredClone(v); }
+    if (path.includes('/compare/')) return { status: 'identical' };
     if (path.includes('/git/commits/')) return structuredClone(commits.get(path.split('/').at(-1)));
     if (path.endsWith('/actions/workflows/ci.yml')) return workflow;
     if (path.includes(`/commits/${c.sha}/pulls?`)) return structuredClone(state.associated);
@@ -129,9 +130,8 @@ const mutants = {
   'fork PR': s => { s.pr.head.repo = { id: 2, full_name: 'fork/core' }; },
   'pull_request_target': s => { s.run.event = 'pull_request_target'; },
   'source dispatch': s => { s.run.event = 'workflow_dispatch'; },
-  'republish dispatch': s => { s.c.event = 'workflow_dispatch'; },
+  'consumer branch dispatch': s => { s.c.event = 'workflow_dispatch'; },
   'consumer PR': s => { s.c.event = 'pull_request'; },
-  'consumer tag push': s => { s.c.ref = 'refs/tags/v1'; },
   'wrong workflow path': s => { s.workflow.path = '.github/workflows/other.yml'; },
   'wrong run workflow': s => { s.run.workflow_id = 11; },
   'short commit SHA': s => { s.c.sha = 'aaaaaaa'; },
@@ -230,4 +230,42 @@ for (const conclusion of ['success', 'failure']) test(`uncovered platform leg is
   expect(result.reused).toBe(conclusion === 'success');
   expect(Object.values(state.receipt.collector.coverage.jobs).flatMap(job => job.legs)
     .some(leg => leg.apiName === 'packed install windows-latest Bun latest')).toBe(false);
+});
+
+for (const event of ['push', 'workflow_dispatch']) {
+  for (const status of ['identical', 'behind']) test(`tag ${event} ${status}: merged PR verdict reuses`, async () => {
+    const s = fixture(); s.c.event = event; s.c.ref = 'refs/tags/v1';
+    const route = `/repos/${s.c.repository}/compare/refs%2Fheads%2Fmain...${s.c.sha}`;
+    s.override = path => path === route ? { status } : undefined;
+    expect(await drive(s)).toMatchObject({ reused: true, runId: 800, pr: 7, testedSha: h('c') });
+    expect(s.calls.filter(path => path.includes('/compare/'))).toEqual([route]);
+  });
+  for (const status of ['ahead', 'diverged', 'unknown', undefined]) test(`tag ${event} compare ${status}: named fallback`, async () => {
+    const s = fixture(); s.c.event = event; s.c.ref = 'refs/tags/v1';
+    s.override = path => path.includes('/compare/') ? { status } : undefined;
+    expect(await drive(s)).toEqual({ reused: false, reason: 'tag commit is not on the default branch' });
+    expect(s.receiptCalls).toBe(0);
+  });
+  test(`tag ${event} compare unavailable: full fallback`, async () => {
+    const s = fixture(); s.c.event = event; s.c.ref = 'refs/tags/v1';
+    s.override = path => { if (path.includes('/compare/')) throw new Error('compare unavailable'); };
+    expect(await drive(s)).toEqual({ reused: false, reason: 'compare unavailable' });
+    expect(s.receiptCalls).toBe(0);
+  });
+}
+for (const [event, ref] of [['push', 'refs/tags/a/b'], ['workflow_dispatch', 'refs/tags/a/b'],
+  ['push', 'refs/heads/feature'], ['workflow_dispatch', 'refs/heads/main'], ['push', 'refs/tags/']]) {
+  test(`consumer ${event} ${ref}: named admission fallback`, async () => {
+    const s = fixture(); Object.assign(s.c, { event, ref });
+    expect(await drive(s)).toEqual({ reused: false, reason: 'only a default-branch push or single-segment tag push/dispatch can reuse' });
+    expect(s.calls).toHaveLength(0);
+  });
+}
+test('tag consumer cannot reuse dispatch source: named fallback', async () => {
+  const s = fixture(); s.c.ref = 'refs/tags/v1'; s.run.event = 'workflow_dispatch';
+  expect(await drive(s)).toEqual({ reused: false, reason: 'no associated source run' });
+});
+test('default-branch consumer does not request tag ancestry', async () => {
+  const s = fixture(); expect((await drive(s)).reused).toBe(true);
+  expect(s.calls.some(path => path.includes('/compare/'))).toBe(false);
 });

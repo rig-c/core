@@ -329,8 +329,15 @@ The exact chain and coverage inventory live in `scripts/tree-verdict.json`.
 `bun scripts/lint_workflows.ts scripts/lint_workflows.declarations.json .` checks
 the real full CI and release files. The gate identity hashes the complete declared
 chain and coverage. A missing receipt, changed tree, failed API lookup or changed
-source coverage runs the original gate. Dispatch always follows the fresh gate;
-registry confirmation still reads the registry artifact.
+source coverage runs the original gate. Lookup still admits default-branch pushes.
+A consumer `push` or `workflow_dispatch` on a single-segment `refs/tags/<name>` is
+admitted only when GitHub's compare of `refs/heads/<default>...<consumer SHA>`
+returns status `identical` or `behind`, where `<default>` is the repository's
+default branch. Otherwise lookup reports the named miss
+`tag commit is not on the default branch` and runs the unchanged full fallback.
+Other consumer refs/events run the fresh gate. A source `workflow_dispatch` run
+remains ineligible; all receipt, exact-tree and live-job proofs remain required.
+Registry confirmation still reads the registry artifact.
 
 `prepublishOnly` runs `scripts/prepublish_gate.ts` before npm packs anything in a
 manual folder publication. It retains typecheck, lint and exact-commit tally/selftest

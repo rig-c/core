@@ -69,7 +69,10 @@ async function differences(api, root, a, b) {
 
 export async function lookup(c, api, readReceipt, log = () => {}) {
   try {
-    need(c.event === 'push' && c.ref === `refs/heads/${c.defaultBranch}`, 'only a default-branch push can reuse; dispatch runs the full gate');
+    const tag = typeof c.ref === 'string' && /^refs\/tags\/[^/]+$/.test(c.ref);
+    need((c.event === 'push' && c.ref === `refs/heads/${c.defaultBranch}`) ||
+      (tag && ['push', 'workflow_dispatch'].includes(c.event)),
+    'only a default-branch push or single-segment tag push/dispatch can reuse');
     need(typeof c.repository === 'string' && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(c.repository) &&
       sha(c.sha) && id(c.runId) && typeof c.defaultBranch === 'string' && c.defaultBranch.length > 0, 'malformed context');
     need(/^\.github\/workflows\/[A-Za-z0-9_-]+\.ya?ml$/.test(c.workflow), 'workflow must be an exact path');
@@ -78,6 +81,10 @@ export async function lookup(c, api, readReceipt, log = () => {}) {
     const workflow = await api(`${root}/actions/workflows/${encodeURIComponent(c.workflow.split('/').at(-1))}`);
     need(id(workflow?.id) && workflow.path === c.workflow && workflow.state === 'active', 'workflow unavailable or wrong path');
     const current = await commit(api, root, c.sha);
+    if (tag) {
+      const comparison = await api(`${root}/compare/${encodeURIComponent('refs/heads/' + c.defaultBranch)}...${c.sha}`);
+      need(['identical', 'behind'].includes(comparison?.status), 'tag commit is not on the default branch');
+    }
     const associated = await pages(api, `${root}/commits/${c.sha}/pulls`);
     const candidates = [{ head: c.sha, pr: 0 }];
     for (const row of associated) {

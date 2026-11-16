@@ -60,9 +60,18 @@ target tree. Ordinary merge differences are diagnosed using exact tree leaf entr
 (up to 20 paths), not GitHub's three-dot compare. Parent/base-tip equality is only
 a diagnostic, never a fresh-head signing requirement.
 
-Dispatch consumers always run the full chain. A fresh dispatch CI collector may
-record completed coverage without breaking the workflow's existing dispatch path;
-lookup will never accept dispatch as a reusable source. Fork PR collectors exit 0
+Lookup admits a consumer `push` on `refs/heads/<default>`. A consumer `push` or
+`workflow_dispatch` on a single-segment `refs/tags/<name>` is admitted only when
+GitHub's compare of `refs/heads/<default>...<consumer SHA>` returns status
+`identical` or `behind`, where `<default>` is the repository's default branch.
+Otherwise lookup reports the named miss `tag commit is not on the default branch`
+and runs the unchanged full fallback. This comparison proves ancestry only; exact
+full-tree equality and every receipt and live-job proof remain required. Other
+consumer refs/events run the full chain.
+
+A fresh dispatch CI collector may record completed coverage without breaking the
+workflow's existing dispatch path; lookup will never accept a source
+`workflow_dispatch` run as reusable evidence. Fork PR collectors exit 0
 with `TREE_VERDICT_PRODUCER_NOT_ELIGIBLE: fork pull request` and no receipt after
 validating matching base/head repository identities in the run, event and PR API.
 Lookup refuses fork PRs and fork run candidates. `pull_request_target` refuses.

@@ -317,7 +317,7 @@ retains every alias pack/comparison and both confirmation calls.
 ### Tree coverage and the publish reader
 
 On a default-branch push, `ci.yml` first calls the shared action pinned at
-`b2e5cfb5f24b8743ee2a05298a34984ee47485a3`. Reuse requires successful source
+`149bca5fc828c60416283de0a1aa570ed33f385f`. Reuse requires successful source
 coverage of the complete declared chain on the identical Git tree, including all
 six shard legs and the semantic merge. PR API head SHA and the actual tested
 synthetic checkout are separate receipt fields. The required `test` check names

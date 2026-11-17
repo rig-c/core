@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.8.0
+
+The `./seam` entry now exports `seamGridOf` and the `SeamGrid` type, so consumers can address the stock pair raster grid even when a pair has no overlap band or gap (#1741, closes #1740). The change is additive.
+
+### Features
+
+* **seam:** export the stock pair raster grid (#1741) (3cd3869)
+
+### Bug Fixes
+
+* **tree-verdict:** admit tags on default-branch commits (#1738) (149bca5)
+
+### CI
+
+* pin the publish npm to 12.2.2 and run the release path on it in CI (#1736) (f79cb3b)
+* move tree-verdict action pins to 149bca5 (#1739) (d492b78)
+
 ## 3.7.0
 
 Every file `build` writes is byte-identical to v3.6.0's.

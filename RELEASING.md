@@ -698,7 +698,7 @@ an install of an alias carries the same map, so `spine-rigc/plate` and
 | `rig-c/passthrough` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
 | `rig-c/stop` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
 | `rig-c/meshrasters` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/seam` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `rig-c/seam` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below; `seamGridOf` and `SeamGrid` (#1740) expose the exact pair raster | nothing |
 | `rig-c/folds` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
 | `rig-c/model` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
 | `rig-c/LICENSE` | retained exact document key, #1668 | read as text |
@@ -1331,7 +1331,7 @@ not justify preserving a package-subpath wildcard. Each newly named route below 
 | `/src/passthrough.ts` | `/passthrough` | parts turn coverage and overlap use `DRAWN_ALPHA` |
 | `/src/stop.ts` | `/stop` | parts check, remesh and tests use `expandStops` |
 | `/src/meshrasters.ts` | `/meshrasters` | parts policy surveys use `artRastersOf`, `stepRastersOf` |
-| `/src/seam.ts` | `/seam` | parts contact and acceptance tools use `seamsOf`, `SeamFile` |
+| `/src/seam.ts` | `/seam` | parts contact and acceptance tools use `seamsOf`, `SeamFile`; #1740 additionally promises `seamGridOf`, `SeamGrid` |
 | `/src/folds.ts` | `/folds` | parts acceptance tool uses the `FoldsFile` type |
 | `/src/model.ts` | `/model` | pose's walk-height test uses `modelDocument`; the existing serialization function is unchanged |
 | `/package.json` | `/package.json` retained | existing metadata API; consumers resolve compiler version and runtime requirements through it |

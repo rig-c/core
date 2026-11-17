@@ -9258,6 +9258,19 @@ values move it.
 
 ### 8.8 Where two slots stop meeting — `render --seam`
 
+The `rig-c/seam` entry exports `seamGridOf(pair, rest, frame, pages)` and its
+`SeamGrid` return type alongside `seamsOf`. The reading uses this same helper:
+`cell` is the coarser setup texel's world side; `viewport` contains world bounds
+(y up), `scale = 1 / cell`, and pixel `width`/`height`. The raster origin is
+`(minX, maxY)`; cell `(x,y)` has centre
+`(minX + (x + 0.5) * cell, maxY - (y + 0.5) * cell)`.
+Bounds include setup vertices and every present pair fragment, with the existing
+one-cell margin and world-origin alignment. A pair with no overlap or gap still
+has a grid. An absent partner uses the present slot's texel; neither slot drawing
+returns `null`. Missing whole attachment, rest entry or page, clipped attachment,
+and zero-area setup art retain `seamsOf`'s named refusals. This additive export
+requires a minor release; no reading format or threshold changes.
+
 A cut rig can tear in motion: two pieces painted to overlap at a joint pull apart
 and the background shows between them, or one swings clear of the piece it was
 tucked under and the overlap it carries shows where nothing was. Both pass every

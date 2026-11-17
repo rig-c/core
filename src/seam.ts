@@ -323,20 +323,20 @@ function crossAt(xy: ArrayLike<number>, a: number, b: number, qx: number, qy: nu
 }
 
 /** The world grid one frame of one pair is read on. */
-interface Grid {
+export interface SeamGrid {
   viewport: Viewport;
   cell: number;
 }
 
-const centreX = (g: Grid, px: number): number => g.viewport.minX + (px + 0.5) * g.cell;
-const centreY = (g: Grid, py: number): number => g.viewport.maxY - (py + 0.5) * g.cell;
+const centreX = (g: SeamGrid, px: number): number => g.viewport.minX + (px + 0.5) * g.cell;
+const centreY = (g: SeamGrid, py: number): number => g.viewport.maxY - (py + 0.5) * g.cell;
 
 /**
  * For every cell of `grid`, the lowest-index triangle of `triangles` over `xy`
  * holding the cell's centre (on an edge counts), or -1. A triangle with no area
  * holds nothing.
  */
-function triangleIds(triangles: readonly number[], xy: ArrayLike<number>, grid: Grid): Int32Array {
+function triangleIds(triangles: readonly number[], xy: ArrayLike<number>, grid: SeamGrid): Int32Array {
   const { width, height, minX, maxY } = grid.viewport;
   const ids = new Int32Array(width * height).fill(-1);
   for (let t = 0; 3 * t + 2 < triangles.length; t++) {
@@ -476,7 +476,7 @@ function frameAlphaCells(pieces: readonly Piece[], pages: ReadonlyMap<string, Pl
 }
 
 /** One origin-aligned texel grid, also used when only one named slot draws. */
-function gridOf(sides: readonly Side[], cell: number, extra: readonly Piece[] = []): Grid {
+function gridOf(sides: readonly Side[], cell: number, extra: readonly Piece[] = []): SeamGrid {
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
   for (const xy of [...sides.flatMap((side) => [side.rest, side.piece.world]), ...extra.map((piece) => piece.world)]) {
     for (let i = 0; i + 1 < xy.length; i += 2) {
@@ -513,7 +513,7 @@ function takeCell(into: Cells, qx: number, qy: number, cell: number): void {
  * alpha zero? It therefore excludes even faint art of any other slot, before
  * OR after the named slot. No setup comparison or seam band enters.
  */
-function slotCells(frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, slots: readonly string[]): { visible: Uint8Array; exposure: Cells }[] {
+function slotCells(frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: SeamGrid, slots: readonly string[]): { visible: Uint8Array; exposure: Cells }[] {
   const n = grid.viewport.width * grid.viewport.height;
   const masks = slots.map(() => ({ visible: new Uint8Array(n), own: new Uint8Array(n), other: new Uint8Array(n), exposure: emptyCells() }));
   const project = projector(grid.viewport);
@@ -539,7 +539,7 @@ function slotCells(frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Gr
 }
 
 /** Rasterise a convex swept cell by scanline; never fill between unrelated band cells. */
-function markHull(hull: ReadonlyArray<[number, number]>, grid: Grid, cells: Uint8Array): void {
+function markHull(hull: ReadonlyArray<[number, number]>, grid: SeamGrid, cells: Uint8Array): void {
   if (hull.length === 0) return;
   const { minX, maxY, width, height } = grid.viewport;
   const lo = Math.max(0, Math.ceil((maxY - Math.max(...hull.map((p) => p[1]))) / grid.cell - 0.5));
@@ -596,7 +596,7 @@ function contactOf(restA: Uint8Array, restB: Uint8Array, drawnA: Uint8Array, dra
 }
 
 /** One frame's counts, or `null` when the two drawings share no cell at the setup pose. See the module comment. */
-function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: Grid, visibility: readonly Uint8Array[], options: SeamOptions): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells; contact: Contact } | null {
+function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: SeamFrame, pages: ReadonlyMap<string, Plate>, grid: SeamGrid, visibility: readonly Uint8Array[], options: SeamOptions): { gap: Cells; ghost: Cells; ghostA: Cells; ghostB: Cells; gapOpen: Cells; gapCovered: Cells; contact: Contact } | null {
   const { width, height } = grid.viewport;
   const restA = restPiece(A);
   const restB = restPiece(B);
@@ -607,7 +607,7 @@ function readFrame(A: Side, B: Side, cell: number, plant: SeamPlant, frame: Seam
   const restIdsB = triangleIds(B.triangles, B.rest, grid);
   // The corner lattice is offset by half a cell. Reuse the same lowest-index
   // containing-triangle rule as centres, including overlapping setup meshes.
-  const corners: Grid = { cell, viewport: { ...grid.viewport, minX: grid.viewport.minX - cell / 2, minY: grid.viewport.minY - cell / 2, maxX: grid.viewport.maxX + cell / 2, maxY: grid.viewport.maxY + cell / 2, width: width + 1, height: height + 1 } };
+  const corners: SeamGrid = { cell, viewport: { ...grid.viewport, minX: grid.viewport.minX - cell / 2, minY: grid.viewport.minY - cell / 2, maxX: grid.viewport.maxX + cell / 2, maxY: grid.viewport.maxY + cell / 2, width: width + 1, height: height + 1 } };
   const cornerIdsA = triangleIds(A.triangles, A.rest, corners);
   const cornerIdsB = triangleIds(B.triangles, B.rest, corners);
   const carried: Array<[number, number]> = [];
@@ -720,6 +720,40 @@ function kindOf(frames: SeamHit[]): SeamKindReading {
   return { frames, spans: spansOf(frames), worst };
 }
 
+/** Resolve the same whole attachment used by the seam reading. */
+function sideOf(frame: SeamFrame, slot: string, restOf: ReadonlyMap<string, AttachmentRest>, pages: ReadonlyMap<string, Plate>): Side | null {
+  const piece = frame.pieces.find((p) => p.slot === slot);
+  if (piece === undefined) return null;
+  const pose = frame.attachments.find((p) => p.slot === slot);
+  if (pose === undefined) throw new SeamError(`frame ${frame.index}: slot "${slot}" draws, and the frame records no attachment for it`);
+  if (!sameVertices(piece.world, pose.vertices)) {
+    throw new SeamError(`frame ${frame.index}: a clip cuts slot "${slot}" (attachment "${pose.attachment}"), so its drawing is no longer its attachment's and cannot be carried back to its setup pose`);
+  }
+  const entry = restOf.get(restKey(slot, pose.attachment));
+  if (entry === undefined) throw new SeamError(`frame ${frame.index}: the rest table has no entry for slot "${slot}" attachment "${pose.attachment}"`);
+  const page = pages.get(piece.page);
+  if (page === undefined) throw new SeamError(`slot "${slot}" samples atlas page "${piece.page}", which is not among [${[...pages.keys()].join(', ')}]`);
+  return { piece, rest: entry.vertices, triangles: entry.triangles, page };
+}
+
+/**
+ * The exact origin-aligned raster grid for a pair on one frame, including its
+ * setup vertices and all present fragments. Available without a shared band;
+ * null only when neither slot draws. Missing attachment/rest/page and collapsed
+ * setup art have the same named refusals as seamsOf. viewport holds world bounds
+ * (y up), scale and pixel dimensions; its top-left is (minX, maxY). Pixel (x,y)
+ * has centre (minX + (x + .5) * cell, maxY - (y + .5) * cell).
+ */
+export function seamGridOf(pair: SeamPair, rest: readonly AttachmentRest[], frame: SeamFrame, pages: ReadonlyMap<string, Plate>): SeamGrid | null {
+  const restOf = new Map(rest.map(r => [restKey(r.slot, r.attachment), r]));
+  const sides = [sideOf(frame, pair.a, restOf, pages), sideOf(frame, pair.b, restOf, pages)].filter((side): side is Side => side !== null);
+  if (sides.length === 0) return null;
+  const sizes = sides.map(side => texelSize(side.piece, side.rest, side.page));
+  if (sizes.some(size => size === null)) throw new SeamError(`frame ${frame.index}: slot "${sides[sizes.indexOf(null)].piece.slot}" draws no area at its setup pose, so it has no texel to grid the seam by`);
+  const cell = Math.max(...sizes.filter((size): size is number => size !== null));
+  return gridOf(sides, cell, frame.pieces.filter(piece => piece.slot === pair.a || piece.slot === pair.b));
+}
+
 /**
  * Every pair's reading over one frame set: `rest` the rest table, `frames` the
  * frames as the sampler returned them (pieces in draw order, attachments whole),
@@ -736,20 +770,6 @@ export function seamsOf(
   options: SeamOptions = {},
 ): SeamPairReading[] {
   const restOf = new Map(rest.map((r) => [restKey(r.slot, r.attachment), r]));
-  const sideOf = (frame: SeamFrame, slot: string): Side | null => {
-    const piece = frame.pieces.find((p) => p.slot === slot);
-    if (piece === undefined) return null;
-    const pose = frame.attachments.find((p) => p.slot === slot);
-    if (pose === undefined) throw new SeamError(`frame ${frame.index}: slot "${slot}" draws, and the frame records no attachment for it`);
-    if (!sameVertices(piece.world, pose.vertices)) {
-      throw new SeamError(`frame ${frame.index}: a clip cuts slot "${slot}" (attachment "${pose.attachment}"), so its drawing is no longer its attachment's and cannot be carried back to its setup pose`);
-    }
-    const entry = restOf.get(restKey(slot, pose.attachment));
-    if (entry === undefined) throw new SeamError(`frame ${frame.index}: the rest table has no entry for slot "${slot}" attachment "${pose.attachment}"`);
-    const page = pages.get(piece.page);
-    if (page === undefined) throw new SeamError(`slot "${slot}" samples atlas page "${piece.page}", which is not among [${[...pages.keys()].join(', ')}]`);
-    return { piece, rest: entry.vertices, triangles: entry.triangles, page };
-  };
   return pairs.map(({ a, b }) => {
     let drawn = 0;
     let banded = 0;
@@ -762,16 +782,13 @@ export function seamsOf(
     const exposuresA: SeamHit[] = [], exposuresB: SeamHit[] = [];
     const contacts: SeamContactFrame[] = [];
     for (const frame of frames) {
-      const A = sideOf(frame, a);
-      const B = sideOf(frame, b);
+      const A = sideOf(frame, a, restOf, pages);
+      const B = sideOf(frame, b, restOf, pages);
       const contact = (reading: Contact): void => { contacts.push({ index: frame.index, time: frame.time, ...reading }); };
       if (A === null || B === null) contact(unavailableContact('both named slots must draw on this frame'));
-      const sides = [A, B].filter((side): side is Side => side !== null);
-      if (sides.length === 0) continue;
-      const sizes = sides.map((side) => texelSize(side.piece, side.rest, side.page));
-      if (sizes.some((size) => size === null)) throw new SeamError(`frame ${frame.index}: slot "${sides[sizes.indexOf(null)].piece.slot}" draws no area at its setup pose, so it has no texel to grid the seam by`);
-      const exposureCell = Math.max(...sizes.filter((size): size is number => size !== null));
-      const exposureGrid = gridOf(sides, exposureCell, frame.pieces.filter((piece) => piece.slot === a || piece.slot === b));
+      const exposureGrid = seamGridOf({ a, b }, rest, frame, pages);
+      if (exposureGrid === null) continue;
+      const exposureCell = exposureGrid.cell;
       const exposure = slotCells(frame, pages, exposureGrid, [a, b]);
       for (const [i, into] of [[0, exposuresA], [1, exposuresB]] as const) {
         const cells = exposure[i].exposure;

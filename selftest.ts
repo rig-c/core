@@ -145875,6 +145875,7 @@ function overlapLabelCaseFaults(plate: Plate, labels: readonly PlateLabel[], slo
 
 import { carry, SEAM_FILE, type SeamFile, type SeamKindReading, type SeamPair, type SeamPairReading, type SeamPlant, seamsOf } from './src/seam.ts';
 import { seamCellControls } from './fixtures/seam_controls.ts';
+import { seamGridControls } from './fixtures/seam_grid_controls.ts';
 import { seamListControls, seamListFaults } from './fixtures/seam_list_controls.ts';
 import { seamContactControls } from './fixtures/seam_contact_controls.ts';
 import { seamContactRenderControls } from './fixtures/seam_contact_render.ts';
@@ -146227,6 +146228,7 @@ function runSeamCoverageControls(work: string): number {
 function runSeamSuite(): number {
   console.log('\n── seam: where two slots that meet stop meeting (issue #1456) ──');
   let bad = 0;
+  for (const row of seamGridControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1740: exact public pair grid, including no-band readings');
   for (const row of seamListControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1695: exact opt-in cells, setup layers and unchanged default bytes');
   for (const row of seamCellControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1656: visibility, local material correspondence and whole-slot background exposure');
   for (const row of seamContactControls()) bad += reportCase(row.name, row.faults.length === 0, probeDetail(row.faults.length === 0, row.faults, row.detail), 'issue #1659: raw swept gaps do not establish material separation');

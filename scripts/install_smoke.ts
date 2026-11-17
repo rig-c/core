@@ -496,7 +496,7 @@ const OBSERVED_SYMBOLS: ObservedEntry[] = [
   {"entry": "./passthrough", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"DRAWN_ALPHA": "constant"}, "types": []},
   {"entry": "./stop", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"expandStops": "function"}, "types": []},
   {"entry": "./meshrasters", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"artRastersOf": "function", "stepRastersOf": "function"}, "types": []},
-  {"entry": "./seam", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"seamsOf": "function"}, "types": ["SeamFile"]},
+  {"entry": "./seam", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {"seamsOf": "function", "seamGridOf": "function"}, "types": ["SeamFile", "SeamGrid"]},
   {"entry": "./folds", "observed": "parts main, issue #1668", "needsRuntime": false, "values": {}, "types": ["FoldsFile"]},
   {"entry": "./model", "observed": "pose main test, issue #1668", "needsRuntime": false, "values": {"modelDocument": "function"}, "types": []},
   {"entry": "./tools/png_probe", "observed": "retained exact PNG helper, issue #1668", "needsRuntime": false, "values": {"decodePng": "function", "differs": "function"}, "types": []},

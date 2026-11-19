@@ -430,6 +430,15 @@ when every drawn slot is such a slot, the render is refused by name (§3.4). Thr
 for `vote` (default `ballot.html`). Under `render`'s `--out` each render set is a
 directory named by the rate (the `--fps` row): one per animation, `<anim>/` at the default,
 `<anim>@<fps>fps/` at any other — `--fps 24` writes `<anim>@24fps/`, and the default 12 writes `<anim>/`;
+a name a folder cannot hold is spelled as one, the mapping `@rig-c/parts` uses for its
+diagnostic folders: each UTF-16 unit outside `[A-Za-z0-9_@+.-]` (`~` included), and a
+final `.`, becomes `~` and four lowercase hex digits, and a Windows device name
+(`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, before the first dot, any case)
+has its first character escaped — `a:turn` writes `a~003aturn/`, `tail.` writes
+`tail~002e/`, and a name that needs none keeps its folder byte for byte; nothing is
+case-folded, so two names one case-insensitive filesystem would make one folder of
+(`Idle` and `idle`), an empty name and a folder longer than 255 characters are
+refused by name before anything is written;
 a rig with no animation writes one setup-pose set, `setup/` at the default and
 `setup@<fps>fps/` at any other — `--fps 24` writes `setup@24fps/` — which `frames.json`
 records with `animation: null`. The line `render` prints for

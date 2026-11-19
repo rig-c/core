@@ -116,7 +116,7 @@ import {
   type FramesSidecar,
   type FrameSet,
 } from '../src/render.ts';
-import { frameSetDir } from '../src/render_shared.ts';
+import { frameSetDir, FrameSetDirError, frameSetDirs } from '../src/render_shared.ts';
 
 /**
  * 🔓 The examples that may be rendered **local-only** — one name, and it is a set
@@ -377,6 +377,13 @@ for (const skeletonEntry of rung.skeletons) {
 
   const what = data.animations.length === 0 ? 'no animation — setup pose only' : `${sampled.size} animation(s)`;
   console.log(`  ${skeletonEntry.label}: ${viewport.width}x${viewport.height}px, ${what}`);
+  // Every set's directory refused as one scope before anything is written, as `render` refuses it (issue #1744).
+  try {
+    frameSetDirs([...sampled.keys()], fps);
+  } catch (err) {
+    if (err instanceof FrameSetDirError) usage(err.message);
+    throw err;
+  }
   mkdirSync(outRoot, { recursive: true });
   // The licence travels with the frames — or, for the one local-only example that
   // has no licence to travel, the notice that says why it does not and what that

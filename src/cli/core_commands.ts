@@ -48,7 +48,7 @@ import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError,
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText, setupCellReader } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
-import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, prerollStart, prerollWarmPoints, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
+import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, FrameSetDirError, frameSetDirs, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, prerollStart, prerollWarmPoints, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
 import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
@@ -886,6 +886,14 @@ export function cmdRender(flags: Record<string, string>): void {
     return;
   }
   const only = readAnimationFlag(flags, [...facts.animations]);
+  // Every set's directory, refused as one scope before anything is posed or written (issue #1744): a name that maps to
+  // no directory, or two that one case-insensitive filesystem would make one folder of, is named here and nowhere later.
+  try {
+    frameSetDirs(only !== undefined ? [only] : facts.animations.length > 0 ? [...facts.animations] : [SETUP_POSE_DIR], fps);
+  } catch (err) {
+    if (err instanceof FrameSetDirError) throw new UsageError(err.message);
+    throw err;
+  }
   const skin = readSkinFlag(flags, [...facts.skins]);
   const subset = readSlotSubsetFlags(flags, facts, skin);
   // The physics constraints the skeleton declares, off the Spine file both posers read (issue #1467).

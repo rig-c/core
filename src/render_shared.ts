@@ -119,14 +119,95 @@ export const SETUP_POSE_DIR = 'setup';
 export const PROTOCOL_FPS = 12;
 
 /**
+ * What a frame set's directory adds to its name for the rate: nothing at the
+ * protocol rate, and `@<fps>fps` at any other — so two rates of one animation sit
+ * side by side. The help and AUTHORING spell the rule with it over `<anim>`.
+ */
+export function frameSetSuffix(fps: number): string {
+  return fps === PROTOCOL_FPS ? '' : `@${fps}fps`;
+}
+
+/** A name no directory can be made of, or two that one filesystem would make one directory of — refused before anything is written. */
+export class FrameSetDirError extends Error {}
+
+/** The units a frame-set directory spells literally; every other UTF-16 unit is escaped. */
+const SEGMENT_LITERAL = /^[A-Za-z0-9_@+.-]$/;
+/** A Windows device basename, before the first dot, in any case — escaped by its first unit. */
+const SEGMENT_DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+/** The longest segment a common filesystem holds, in (ASCII) characters. */
+export const SEGMENT_MAX = 255;
+
+/**
+ * The one path segment `name` is written as, `suffix` appended unmapped
+ * (issue #1744). The mapping is `@rig-c/parts`'s `diagnosticSegment`
+ * (rig-c/parts#1364), rule for rule, so a render and parts' copy of it spell a
+ * name the same way: each UTF-16 code unit in `[A-Za-z0-9_@+.-]` stays literal
+ * — uppercase too, nothing is case-folded — except a final `.`, and every other
+ * unit, `~` and each half of a surrogate pair included, becomes `~` and four
+ * lowercase hex digits; then, if the mapped name before its first dot is a
+ * Windows device name, its first unit is escaped. So `idle` stays `idle`,
+ * `a:turn` becomes `a~003aturn`, `tail.` becomes `tail~002e` and `con.x`
+ * becomes `~0063on.x`. A name that is already safe maps to itself byte for
+ * byte, and a left-to-right decoder recovers every name, so two names never
+ * share a spelling. An empty name, and a segment longer than `SEGMENT_MAX` with
+ * its suffix, are refused by name: nothing is truncated or hashed.
+ */
+export function pathSegment(name: string, suffix = ''): string {
+  let encoded = '';
+  const escape = (unit: number): string => '~' + unit.toString(16).padStart(4, '0');
+  for (let i = 0; i < name.length; i++) {
+    const unit = name[i];
+    encoded += SEGMENT_LITERAL.test(unit) && !(unit === '.' && i === name.length - 1) ? unit : escape(name.charCodeAt(i));
+  }
+  if (SEGMENT_DEVICE.test(encoded)) encoded = escape(name.charCodeAt(0)) + encoded.slice(1);
+  const segment = encoded + suffix;
+  if (name.length === 0) throw new FrameSetDirError('animation "" is empty; a nonempty name is required for a frame-set directory');
+  if (segment.length > SEGMENT_MAX) {
+    throw new FrameSetDirError(
+      `animation ${JSON.stringify(name)} maps to a frame-set directory of ${segment.length} characters including ${JSON.stringify(suffix)}; ` +
+        `at most ${SEGMENT_MAX} are required — nothing is truncated, so the name has to be shorter`,
+    );
+  }
+  return segment;
+}
+
+/**
  * The directory a frame set of `animation` sampled at `fps` is written to under
- * the render root: the animation's own name at the protocol rate, and
- * `<animation>@<fps>fps` at any other — so two rates of one animation sit side by
- * side. `render` and `bench/render_reference.ts` both name their sets through
- * it, and `render --help` and AUTHORING §0 say what it does (issue #1414).
+ * the render root: the animation's name as one path segment (`pathSegment`),
+ * with `frameSetSuffix(fps)` after it — `<animation>` at the protocol rate and
+ * `<animation>@<fps>fps` at any other. `render` and `bench/render_reference.ts`
+ * both name their sets through it, `frames.json` records the result under
+ * `sets[].dir`, and `render --help` and AUTHORING §0 say what it does (issues
+ * #1414, #1744). A reader follows `sets[].dir` rather than rebuilding the folder
+ * from the animation's name.
  */
 export function frameSetDir(animation: string, fps: number): string {
-  return fps === PROTOCOL_FPS ? animation : `${animation}@${fps}fps`;
+  return pathSegment(animation, frameSetSuffix(fps));
+}
+
+/**
+ * Every set's directory, in order, after refusing the whole scope before any of
+ * it is written (issue #1744): a name `pathSegment` refuses, and two names whose
+ * directories are one folder on a case-insensitive filesystem — `Idle` and
+ * `idle` — named both, with both folders and the one they share. The mapping
+ * never renames them apart; parts' `diagnosticSiblings` refuses the same pair.
+ */
+export function frameSetDirs(animations: readonly string[], fps: number): string[] {
+  const seen = new Map<string, { name: string; dir: string }>();
+  return animations.map((name) => {
+    const dir = frameSetDir(name, fps);
+    const folded = dir.toLowerCase(); // a mapped segment is ASCII
+    const previous = seen.get(folded);
+    if (previous !== undefined) {
+      throw new FrameSetDirError(
+        `animations ${JSON.stringify(previous.name)} and ${JSON.stringify(name)} map to frame-set directories ${JSON.stringify(previous.dir)} and ${JSON.stringify(dir)}, ` +
+          `one folder ${JSON.stringify(folded)} on a case-insensitive filesystem; distinct case-folded directories are required under one render root — ` +
+          'render each with --animation <name> into its own --out',
+      );
+    }
+    seen.set(folded, { name, dir });
+    return dir;
+  });
 }
 /** The rate the framing box is measured at, whatever `--fps` writes frames at. */
 export const FRAMING_FPS = 60;

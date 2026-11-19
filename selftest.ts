@@ -87940,6 +87940,88 @@ function runCurrencySuite(): number {
       'issue #1474: the pool uploads a tree with no .git and no examples/, so the full selftest is sent through a hand that prepares both; a job the pool would refuse after the upload is refused here before it');
   }
 
+  // CUR137 — the remote command's throwaway index over an upload that leaves out a path the checkout tracks,
+  // and a failure of each of its steps, which must stop the job by name before the selftest (issue #1722).
+  {
+    const probes: string[] = [];
+    const cases: string[] = [];
+    const work = mkdtempSync(join(harnessTemp(), 'rigc-verify-nova-index-'));
+    try {
+      const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+      const bin = join(work, 'bin');
+      mkdirSync(bin, { recursive: true });
+      // `bun` records its calls and, on `run selftest`, what `git ls-files` lists, then exits 5.
+      const calls = join(work, 'bun.calls');
+      const listed = join(work, 'listed');
+      writeFileSync(join(bin, 'bun'), `#!/bin/sh\necho "$*" >> '${calls}'\nif [ "$2" = selftest ]; then git ls-files > '${listed}'; exit 5; fi\n`);
+      chmodSync(join(bin, 'bun'), 0o755);
+      const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+      const lines = (path: string): string[] => (existsSync(path) ? readFileSync(path, 'utf8').trimEnd().split('\n').filter((l) => l !== '') : []);
+      const remote = (upload: string, path: string): { status: number | null; stderr: string; calls: string[]; listed: string[] } => {
+        rmSync(calls, { force: true });
+        rmSync(listed, { force: true });
+        const r = spawnSync('bash', ['-c', VERIFY_NOVA_REMOTE], { cwd: upload, encoding: 'utf8', env: { ...gitEnv, PATH: `${path}${delimiter}${process.env.PATH ?? ''}` } });
+        return { status: r.status, stderr: r.stderr, calls: lines(calls), listed: lines(listed) };
+      };
+      if (realGit === '') probes.push('no git on PATH, so there is nothing this case can measure');
+      else {
+        // The plant: a checkout tracking `vote/drive.mjs` through a negated ignore rule beside `vote/*`, and an
+        // upload of it that leaves that path out, as the pool's upload does with the repository's own
+        // `films/two-keypose/vote/drive.mjs`.
+        const checkout = join(work, 'checkout');
+        mkdirSync(join(checkout, 'vote'), { recursive: true });
+        const ignore = '/vote/*\n!/vote/drive.mjs\n';
+        writeFileSync(join(checkout, '.gitignore'), ignore);
+        writeFileSync(join(checkout, 'kept.txt'), 'x\n');
+        writeFileSync(join(checkout, 'vote', 'drive.mjs'), 'x\n');
+        writeFileSync(join(checkout, 'vote', 'run.log'), 'x\n');
+        spawnSync('sh', ['-c', 'git init -q && git add -A && git -c user.name=t -c user.email=t@invalid commit -q -m t'], { cwd: checkout, env: gitEnv });
+        const tracked = spawnSync('git', ['ls-files'], { cwd: checkout, encoding: 'utf8', env: gitEnv }).stdout.trimEnd().split('\n');
+        const upload = join(work, 'upload');
+        mkdirSync(join(upload, 'vote'), { recursive: true });
+        writeFileSync(join(upload, '.gitignore'), ignore);
+        writeFileSync(join(upload, 'kept.txt'), 'x\n');
+        const sent = ['.gitignore', 'kept.txt'];
+        const left = tracked.filter((p) => !sent.includes(p));
+        if (left.join('\n') !== 'vote/drive.mjs') probes.push(`the plant is not the case: the checkout tracks ${JSON.stringify(tracked)}, so the upload leaves out ${JSON.stringify(left)}; required exactly ["vote/drive.mjs"]`);
+        else {
+          const r = remote(upload, bin);
+          if (r.status !== 5 || r.calls.join('\n') !== 'run fetch-examples\nrun selftest' || r.listed.join('\n') !== sent.join('\n')) {
+            probes.push(`an upload leaving out the tracked vote/drive.mjs: exit ${String(r.status)}, bun called ${JSON.stringify(r.calls)}, git ls-files listed ${JSON.stringify(r.listed)}; required exit 5 (the selftest's), fetch-examples then selftest, and ${JSON.stringify(sent)} — ${r.stderr.trim().slice(0, 200)}`);
+          } else cases.push('an upload leaving out the tracked vote/drive.mjs: the index lists the 2 paths sent and the selftest is reached');
+        }
+
+        // Each step failing in turn, planted by a `git` that refuses that one subcommand and runs the real
+        // one otherwise; then an upload with nothing in it, whose empty index fails `git commit` for real.
+        for (const step of ['init', 'add', 'commit'] as const) {
+          const planted = join(work, `git-${step}`);
+          mkdirSync(planted, { recursive: true });
+          writeFileSync(join(planted, 'git'), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = ${step} ]; then echo "planted: git ${step} refused" >&2; exit 7; fi; done\nexec '${realGit}' "$@"\n`);
+          chmodSync(join(planted, 'git'), 0o755);
+          const fresh = join(work, `upload-${step}`);
+          mkdirSync(fresh, { recursive: true });
+          writeFileSync(join(fresh, 'kept.txt'), 'x\n');
+          const name = step === 'add' ? 'git add -A' : `git ${step}`;
+          const r = remote(fresh, `${planted}${delimiter}${bin}`);
+          const said = `verify:nova: preparing the throwaway Git index: ${name} exited 7, 0 required; selftest was not started`;
+          if (r.status !== 2 || r.calls.length !== 0 || !r.stderr.includes(said)) probes.push(`${name} failing: exit ${String(r.status)}, bun called ${JSON.stringify(r.calls)}, stderr ${JSON.stringify(r.stderr.trim().slice(0, 240))}; required exit 2 before fetch-examples and selftest, saying ${JSON.stringify(said)}`);
+          else cases.push(`${name} failing: exit 2 naming the step, neither fetch-examples nor selftest run`);
+        }
+        const empty = join(work, 'upload-empty');
+        mkdirSync(empty, { recursive: true });
+        const r = remote(empty, bin);
+        const said = 'verify:nova: preparing the throwaway Git index: git commit exited 1, 0 required; selftest was not started';
+        if (r.status !== 2 || r.calls.length !== 0 || !r.stderr.includes(said)) probes.push(`an empty upload: exit ${String(r.status)}, bun called ${JSON.stringify(r.calls)}, stderr ${JSON.stringify(r.stderr.trim().slice(0, 240))}; required exit 2 before the selftest, saying ${JSON.stringify(said)}`);
+        else cases.push('an empty upload: the empty index fails git commit, exit 2 naming it, the selftest not run');
+      }
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+    say('CUR137_VERIFY_NOVA_INDEXES_WHAT_WAS_SENT_AND_STOPS_BY_NAME_BEFORE_THE_SELFTEST_WHEN_INDEXING_FAILS', probes.length === 0,
+      probeDetail(probes.length === 0, probes, `${cases.length} reading(s): ${cases.join('; ')}`),
+      'issue #1722: an index built from the paths the checkout tracks aborts on one the upload leaves out, and a failed step inside `git init && git add -A && git commit` did not stop `set -e`, so the selftest ran over an empty index and the harness fault came back as a red CLI97');
+  }
+
   // Issue #1499: exercise the actual CLI before the upload boundary. Only the
   // network is substituted, by a child preload, so an offline selftest neither
   // downloads a runtime nor depends on today's GitHub availability.

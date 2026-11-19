@@ -95,6 +95,7 @@ row; selecting a version neither raises a ceiling nor turns a missing measuremen
 | `--bun "<version>": Bun's SHASUMS256.txt must name exactly one SHA-256 …` | The official manifest has no unambiguous valid digest for that archive; choose a release whose manifest names it. Refused before upload |
 | `--bun <version>: pinned runtime preparation failed; selftest was not started` | On the pool, check the download, SHA-256, archive extraction and Linux x64 host. The pinned archive must match Bun's official manifest; do not bypass the check |
 | `--bun <version>: downloaded Bun reports <found>; selftest was not started` | The downloaded executable is not the requested runtime; retry a verified official release. No selftest ran under the wrong version |
+| `preparing the throwaway Git index: <step> exited <code>, 0 required; selftest was not started` | On the pool, the named step of the index built over the upload (`git init`, `git add -A` or `git commit`) failed; an upload with nothing to index fails at `git commit`. Check git on the pool host and what was uploaded. This is a harness fault, not a selftest result; no control ran |
 
 ## The vocabulary is Spine's
 

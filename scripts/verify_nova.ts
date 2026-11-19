@@ -13,6 +13,7 @@
  *
  *   1. where the upload has no `.git`, a throwaway repository over it — one
  *      commit, a placeholder identity — so `git ls-files` lists what was sent;
+ *      a step of it that fails stops the job there, by name, exit 2;
  *   2. `bun run fetch-examples`;
  *   3. `bun run selftest`, whose exit is the job's, and the pool runner's is this.
  *
@@ -31,10 +32,28 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
-/** What runs on the upload, in its root. */
+/**
+ * One step of the throwaway index, which stops the job by name when it fails (issue #1722). Written as
+ * `step || { … exit 2; }` because `set -e` does not stop on a command inside an `&&` list: the form this
+ * replaced, `git init && git add -A && git commit` in an `if`, went on to `bun run selftest` after any of
+ * the three failed, and the harness fault came back as a red control reading an empty index.
+ */
+const indexStep = (step: string, command: string): string =>
+  `${command} || { code=$?; echo "verify:nova: preparing the throwaway Git index: ${step} exited $code, 0 required; selftest was not started" >&2; exit 2; }; `;
+
+/**
+ * What runs on the upload, in its root. The index is `git add -A` over what was sent, never a list of
+ * the paths the checkout tracks: the upload leaves some tracked paths out (its own exclude rules, which
+ * this does not change), and naming one that is absent is a fatal pathspec. An empty index fails at
+ * `git commit`, which is that step's refusal rather than a selftest control's.
+ */
 export const VERIFY_NOVA_REMOTE =
   'set -e; ' +
-  'if [ ! -e .git ]; then git init -q && git add -A && git -c user.name=verify-nova -c user.email=verify-nova@invalid commit -q -m "verify:nova upload"; fi; ' +
+  'if [ ! -e .git ]; then ' +
+  indexStep('git init', 'git init -q') +
+  indexStep('git add -A', 'git add -A') +
+  indexStep('git commit', 'git -c user.name=verify-nova -c user.email=verify-nova@invalid commit -q -m "verify:nova upload"') +
+  'fi; ' +
   'bun run fetch-examples; ' +
   'bun run selftest';
 

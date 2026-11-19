@@ -146722,7 +146722,7 @@ function runSeamSuite(): number {
 // ---------------------------------------------------------------------------
 
 import { type OutsidePlant, type OutsideReading, outsideViewport, SIDES, type Side } from './src/viewportpin.ts';
-import { frameSetDir, SETUP_POSE_DIR } from './src/render_shared.ts';
+import { frameSetDir, FrameSetDirError, frameSetDirs, frameSetSuffix, pathSegment, SEGMENT_MAX, SETUP_POSE_DIR } from './src/render_shared.ts';
 import { indexRuns } from './src/folds.ts';
 
 /**
@@ -147408,6 +147408,12 @@ function runAngleRangeSuite(): number {
 // ---------------------------------------------------------------------------
 
 /** The guide's and `render --help`'s sentence on the set directories, as the naming function spells it — every fragment it must carry. */
+/**
+ * The rate rule as the help and the guide spell it over a placeholder: `frameSetDir` with its name left unmapped, since
+ * `<anim>` stands for a name rather than being one (issue #1744 — the mapping would spell it `~003canim~003e`).
+ */
+const frameSetSpelling = (animation: string, fps: number): string => `${animation}${frameSetSuffix(fps)}`;
+
 function fpsNamingFragments(name: (animation: string, fps: number) => string): string[] {
   const other = 24;
   return [
@@ -147579,6 +147585,123 @@ function geometryKeysFaults(stated: ReturnType<typeof geometryKeysStated>, plain
   return faults;
 }
 
+/**
+ * The probe rig with one rotation per name in `names`, keyed as the names are given (issue #1744): a name a folder
+ * cannot hold and a pair one case-insensitive filesystem would make one folder of are both legal animation names.
+ */
+function buildNamedProbe(names: readonly string[]): { outDir: string; work: string; built: string[] } {
+  const dirs = writeProbeRig();
+  const motionPath = join(dirs.dir, 'named.motion.json');
+  const animations = Object.fromEntries(
+    names.map((name, i) => [name, { duration: 0.5, loop: false, tracks: [{ bone: 'block', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [10 * (i + 1)] }] }] }]),
+  );
+  writeFileSync(motionPath, `${JSON.stringify({ ...STATIC_MOTION, animations }, null, 2)}\n`);
+  const build = runCli(['build', '--rig', dirs.rigPath, '--motion', motionPath, '--images', dirs.dir, '--out', dirs.outDir]);
+  const built = build.status === 0 ? [] : [`the named probe [${names.map((n) => JSON.stringify(n)).join(', ')}] did not build (exit ${String(build.status)}): ${(build.stdout + build.stderr).trim().slice(-400)}`];
+  return { outDir: dirs.outDir, work: dirs.dir, built };
+}
+
+/**
+ * A render root against the directory each animation is expected under (issue #1744): the directories on disk are
+ * exactly those, `frames.json`'s `sets[].dir` names each with its animation unmapped — or, for `--extremes-only`, no
+ * `frames.json` and an `extremes.json` in each. Held to `expect`, so a naming function the disk is not is named.
+ */
+function namedSetFaults(label: string, root: string, animations: readonly string[], expect: (animation: string) => string, extremesOnly: boolean): string[] {
+  const faults: string[] = [];
+  if (!existsSync(root)) return [`${label}: wrote no ${root}`];
+  const want = animations.map(expect);
+  const dirs = readdirSync(root).filter((f) => statSync(join(root, f)).isDirectory()).sort();
+  if (JSON.stringify(dirs) !== JSON.stringify([...want].sort())) faults.push(`${label}: the root holds directories [${dirs.join(', ')}], expected [${[...want].sort().join(', ')}]`);
+  const sidecarPath = join(root, FRAMES_SIDECAR);
+  if (extremesOnly) {
+    if (existsSync(sidecarPath)) faults.push(`${label}: --extremes-only wrote ${FRAMES_SIDECAR}`);
+    for (const dir of want) if (!existsSync(join(root, dir, 'extremes.json'))) faults.push(`${label}: no ${dir}/extremes.json`);
+    return faults;
+  }
+  if (!existsSync(sidecarPath)) return [...faults, `${label}: wrote no ${FRAMES_SIDECAR}`];
+  const sheet = JSON.parse(readFileSync(sidecarPath, 'utf8')) as FramesSidecar;
+  animations.forEach((animation, i) => {
+    const set = sheet.sets.find((s) => s.animation === animation);
+    if (set === undefined) faults.push(`${label}: ${FRAMES_SIDECAR} has no set for animation ${JSON.stringify(animation)}`);
+    else if (set.dir !== want[i]) faults.push(`${label}: ${FRAMES_SIDECAR} names animation ${JSON.stringify(animation)} under sets[].dir ${JSON.stringify(set.dir)}, expected ${JSON.stringify(want[i])}`);
+  });
+  return faults;
+}
+
+/** A render that must have been refused before writing (issue #1744): a nonzero exit, every word in `says` in its stderr, and no root on disk. */
+function refusedRenderFaults(label: string, run: { status: number | null; stderr: string } | null, root: string, says: readonly string[]): string[] {
+  if (run === null) return [`${label}: did not run`];
+  const faults: string[] = [];
+  if (run.status === 0) faults.push(`${label}: exited 0`);
+  for (const word of says) if (!run.stderr.includes(word)) faults.push(`${label}: stderr does not say ${JSON.stringify(word)}: ${run.stderr.trim().slice(0, 300)}`);
+  if (existsSync(root)) faults.push(`${label}: wrote ${root} although refused`);
+  return faults;
+}
+
+/**
+ * The mapping's table (issue #1744), copied from `@rig-c/parts`' statement of `diagnosticSegment` (rig-c/parts#1364)
+ * and widened: [name, suffix, the segment]. The first rows are safe names, which map to themselves byte for byte.
+ */
+const SEGMENT_TABLE: ReadonlyArray<readonly [string, string, string]> = [
+  ['idle', '', 'idle'],
+  ['idle', '@24fps', 'idle@24fps'],
+  ['VANE_HALF', '', 'VANE_HALF'],
+  ['a.b-c+d@e_0', '', 'a.b-c+d@e_0'],
+  ['console', '', 'console'],
+  ['a:turn', '', 'a~003aturn'],
+  ['a:turn', '@24fps', 'a~003aturn@24fps'],
+  ['..', '', '.~002e'],
+  ['tail.', '', 'tail~002e'],
+  ['con.txt', '', '~0063on.txt'],
+  ['con.', '', 'con~002e'],
+  ['COM1', '', '~0043OM1'],
+  ['~', '', '~007e'],
+  ['a b ', '', 'a~0020b~0020'],
+  ['a/b\\c', '', 'a~002fb~005cc'],
+  ['\u{1F600}', '', '~d83d~de00'],
+  ['é', '', '~00e9'],
+];
+
+/** `map` against the table, and against the two refusals: an empty name, and a segment one past `SEGMENT_MAX` with its suffix. */
+function segmentFaults(map: (name: string, suffix: string) => string): string[] {
+  const faults: string[] = [];
+  const attempt = (name: string, suffix: string): { got: string } | { refused: string } => {
+    try {
+      return { got: map(name, suffix) };
+    } catch (err) {
+      if (err instanceof FrameSetDirError) return { refused: err.message };
+      throw err;
+    }
+  };
+  for (const [name, suffix, want] of SEGMENT_TABLE) {
+    const read = attempt(name, suffix);
+    if ('refused' in read) faults.push(`${JSON.stringify(name)} + ${JSON.stringify(suffix)} was refused: ${read.refused}`);
+    else if (read.got !== want) faults.push(`${JSON.stringify(name)} + ${JSON.stringify(suffix)} maps to ${JSON.stringify(read.got)}, the table says ${JSON.stringify(want)}`);
+  }
+  const fits = 'x'.repeat(SEGMENT_MAX - '@24fps'.length);
+  const fitRead = attempt(fits, '@24fps');
+  if ('refused' in fitRead) faults.push(`a segment of exactly ${SEGMENT_MAX} characters was refused: ${fitRead.refused}`);
+  for (const [name, suffix, says] of [['', '', '""'], [`${fits}x`, '@24fps', String(SEGMENT_MAX + 1)]] as const) {
+    const read = attempt(name, suffix);
+    if (!('refused' in read)) faults.push(`${name.length === 0 ? 'an empty name' : `a segment of ${SEGMENT_MAX + 1} characters`} was not refused (mapped to ${JSON.stringify(read.got.slice(0, 40))})`);
+    else if (!read.refused.includes(says)) faults.push(`the refusal of ${name.length === 0 ? 'an empty name' : `a segment of ${SEGMENT_MAX + 1} characters`} does not say ${says}: ${read.refused}`);
+  }
+  return faults;
+}
+
+/** Every frame-set directory the tracked render-hash base names: a safe name already, so the mapping must leave each as it is. */
+function renderHashBaseSetDirs(): string[] | string {
+  const path = join(import.meta.dir, 'tools/render_hashes.base.json');
+  if (!existsSync(path)) return `no ${path}`;
+  const base = JSON.parse(readFileSync(path, 'utf8')) as { recipes?: Array<{ files?: Array<{ path: string }> }> };
+  const dirs = new Set<string>();
+  for (const recipe of base.recipes ?? []) for (const file of recipe.files ?? []) {
+    const parts = file.path.split('/');
+    if (parts.length > 2) dirs.add(parts[1]);
+  }
+  return dirs.size === 0 ? `${path} names no frame-set directory` : [...dirs].sort();
+}
+
 function runRenderNamingSuite(): number {
   console.log('\n── render-naming: the set directories and geometry.json\'s keys, as the code writes them (issue #1414) ──');
   let bad = 0;
@@ -147620,7 +147743,7 @@ function runRenderNamingSuite(): number {
 
   // RN01 — item 4: the sentence is in both places, held to the naming function, and the directories on disk are its.
   {
-    const probes = pre.length > 0 ? [...pre] : [...fpsNamingFaults(places, frameSetDir), ...setupNamingFaults(outPlaces, frameSetDir)];
+    const probes = pre.length > 0 ? [...pre] : [...fpsNamingFaults(places, frameSetSpelling), ...setupNamingFaults(outPlaces, frameSetDir)];
     if (pre.length === 0) {
       // The plant: each --out place with the setup-pose clause's directories cut, named by that place.
       for (const [label, text] of outPlaces) {
@@ -147635,6 +147758,7 @@ function runRenderNamingSuite(): number {
         const sheet = JSON.parse(readFileSync(join(probe.work, root, FRAMES_SIDECAR), 'utf8')) as FramesSidecar;
         for (const set of ['turn', 'spin']) {
           const want = frameSetDir(set, fps);
+          if (want !== frameSetSpelling(set, fps)) probes.push(`frameSetDir(${JSON.stringify(set)}, ${fps}) is ${JSON.stringify(want)}, and the sentence spells ${JSON.stringify(frameSetSpelling(set, fps))}`);
           if (!sheet.sets.some((s) => s.dir === want) || !existsSync(join(probe.work, root, want))) probes.push(`render at ${fps} fps wrote no "${want}" set for "${set}" (frames.json sets [${sheet.sets.map((s) => s.dir).join(', ')}])`);
         }
       }
@@ -147646,7 +147770,7 @@ function runRenderNamingSuite(): number {
       probeDetail(
         ok,
         probes,
-        `${places.map(([label]) => label).join(', ')} each say ${fpsNamingFragments(frameSetDir).join(', ')} — every fragment derived from frameSetDir — and a render at 24 fps and at the default writes the directories it names; ` +
+        `${places.map(([label]) => label).join(', ')} each say ${fpsNamingFragments(frameSetSpelling).join(', ')} — every fragment derived from frameSetSuffix, the rate rule frameSetDir appends — and a render at 24 fps and at the default writes the directories it names; ` +
           `${outPlaces.map(([label]) => label).join(' and ')} also say the setup-pose case ${setupNamingFragments(frameSetDir).join(', ')}, and with its directories dropped each is named: ${setupPlantSaid.join('; ')}`,
       ),
       'issue #1414 item 4: `--fps 24` wrote `dance@24fps/` and nothing a reader could open said so; a sentence held to the function cannot drift from it — and issue #1468: README.md described `<animation>/` at every rate, so its two places are held to the same function — and issue #1524: a rig with no animation writes `setup/`, which the --out row and paragraph described as "each animation"',
@@ -147655,7 +147779,7 @@ function runRenderNamingSuite(): number {
 
   // RN02 — a naming function the sentence does not describe is named in both places.
   {
-    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults(places, frameSetDir);
+    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults(places, frameSetSpelling);
     const faults = pre.length > 0 ? [] : fpsNamingFaults(places, planted);
     say(
       'RN02_A_NAMING_FUNCTION_THE_SENTENCE_DOES_NOT_DESCRIBE_IS_RED',
@@ -147712,12 +147836,12 @@ function runRenderNamingSuite(): number {
 
   // RN05 — issues #1468/#1648: AUTHORING.md with the sentence taken out of either place is red, by that place's name.
   {
-    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults(readmeRender.places, frameSetDir);
-    const fragment = fpsNamingFragments(frameSetDir)[0];
+    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults(readmeRender.places, frameSetSpelling);
+    const fragment = fpsNamingFragments(frameSetSpelling)[0];
     const misses: string[] = [];
     for (const [label, text] of readmeRender.places) {
       const without = text.replace(/\s+/g, ' ').split(fragment).join('');
-      const named = fpsNamingFaults([[label, without]], frameSetDir);
+      const named = fpsNamingFaults([[label, without]], frameSetSpelling);
       if (!named.some((f) => f.startsWith(label))) misses.push(`${label} with ${fragment} removed read clean`);
     }
     const cut = readmeRenderPlaces(guide.replace('**`render`** samples every animation', '**`render`** draws every animation'));
@@ -147736,10 +147860,10 @@ function runRenderNamingSuite(): number {
 
   // RN06 — issue #1505: the `--out` row with the 24-fps directory spelled another way is red, by the row's name.
   {
-    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults([['render --help --out row', outRow.row ?? '']], frameSetDir);
-    const at = frameSetDir('<anim>', 24);
+    const cleanFaults = pre.length > 0 ? pre : fpsNamingFaults([['render --help --out row', outRow.row ?? '']], frameSetSpelling);
+    const at = frameSetSpelling('<anim>', 24);
     const alteredRow = (outRow.row ?? '').split(at).join(`<anim>_24fps`);
-    const named = pre.length > 0 ? [] : fpsNamingFaults([['render --help --out row', alteredRow]], frameSetDir);
+    const named = pre.length > 0 ? [] : fpsNamingFaults([['render --help --out row', alteredRow]], frameSetSpelling);
     const fired = named.filter((f) => f.startsWith('render --help --out row'));
     say(
       'RN06_AN_OUT_ROW_THAT_MISNAMES_THE_SET_DIRECTORY_IS_RED',
@@ -147815,6 +147939,113 @@ function runRenderNamingSuite(): number {
       ok,
       probeDetail(ok, probes, `a rig with no animation rendered at the default and at 24 fps writes one directory each, ${frameSetDir(SETUP_POSE_DIR, PROTOCOL_FPS)}/ and ${frameSetDir(SETUP_POSE_DIR, 24)}/, which ${FRAMES_SIDECAR} lists alone under sets[].dir with animation null and the --out row names; the row with the 24-fps directory misspelled is named: ${said.join('; ')}`),
       'issue #1524: `sampleAll` writes one setup-pose set for a rig with no animation, and the --out row said only "each animation" — so the folder it wrote was one the help never named',
+    );
+  }
+
+  // RN09 — issue #1744: an animation named with a ':' renders, at the default and at 24 fps and under --extremes-only,
+  // into the mapped folder, and frames.json names it; a naming function that leaves the name raw is red.
+  const named = ['a:turn', 'idle'];
+  const namedProbe = buildNamedProbe(named);
+  const namedRender = (out: string, extra: string[]): ReturnType<typeof runCli> | null =>
+    namedProbe.built.length > 0 ? null : runCli(['render', '--candidate', namedProbe.outDir, '--max', '32', ...extra, '--out', join(namedProbe.work, out)]);
+  {
+    const probes = [...namedProbe.built];
+    let rawSaid: string[] = [];
+    if (probes.length === 0) {
+      for (const [root, fps, extra] of [['n_default', PROTOCOL_FPS, []], ['n_24', 24, ['--fps', '24']], ['n_extremes', PROTOCOL_FPS, ['--extremes-only']]] as const) {
+        const run = namedRender(root, [...extra]);
+        if (run === null || run.status !== 0) {
+          probes.push(`render ${extra.join(' ')} exited ${String(run?.status)}: ${(run?.stderr ?? '').trim().slice(0, 300)}`);
+          continue;
+        }
+        const rootDir = join(namedProbe.work, root);
+        const extremesOnly = root === 'n_extremes';
+        probes.push(...namedSetFaults(`render --out ${root}`, rootDir, named, (a) => frameSetDir(a, fps), extremesOnly));
+        if (!extremesOnly) probes.push(...setLineFaults(`render --out ${root}`, run.stdout, rootDir, JSON.parse(readFileSync(join(rootDir, FRAMES_SIDECAR), 'utf8')) as FramesSidecar));
+        if (root === 'n_24') rawSaid = namedSetFaults(`render --out ${root} (raw-name plant)`, rootDir, named, (a) => frameSetSpelling(a, fps), false);
+      }
+      if (frameSetDir('a:turn', PROTOCOL_FPS) !== 'a~003aturn') probes.push(`frameSetDir("a:turn", ${PROTOCOL_FPS}) is ${JSON.stringify(frameSetDir('a:turn', PROTOCOL_FPS))}, the mapping says "a~003aturn"`);
+      if (rawSaid.length === 0) probes.push('the 24-fps root read against the raw animation names read clean');
+    }
+    const ok = probes.length === 0;
+    say(
+      'RN09_A_NAME_A_FOLDER_CANNOT_HOLD_RENDERS_INTO_ITS_MAPPED_FOLDER',
+      ok,
+      probeDetail(
+        ok,
+        probes,
+        `animations ${named.map((n) => JSON.stringify(n)).join(' and ')} render at ${PROTOCOL_FPS} and 24 fps into [${named.map((n) => frameSetDir(n, 24)).join(', ')}] at 24, which ${FRAMES_SIDECAR} names under sets[].dir and each set line ends in, ` +
+          `and --extremes-only writes extremes.json into the same folders; read against the raw names the root is red: ${rawSaid[0] ?? ''}`,
+      ),
+      'issue #1744: `a:turn` was written as a folder `a:turn`, which Windows refuses — the name is mapped, never the render refused, and a reader follows sets[].dir',
+    );
+  }
+
+  // RN10 — issue #1744: two animations whose names differ only in case are refused by name, with nothing written, for
+  // frame sets and for --extremes-only alike; one of them alone renders. A refusal check that reads a written root clean is red.
+  {
+    const pair = ['Idle', 'idle'];
+    const pairProbe = buildNamedProbe(pair);
+    const probes = [...pairProbe.built];
+    let plantSaid: string[] = [];
+    if (probes.length === 0) {
+      const says = ['"Idle"', '"idle"', 'case-insensitive'];
+      for (const [root, extra] of [['c_default', []], ['c_24', ['--fps', '24']], ['c_extremes', ['--extremes-only']]] as const) {
+        const rootDir = join(pairProbe.work, root);
+        const run = runCli(['render', '--candidate', pairProbe.outDir, '--max', '32', ...extra, '--out', rootDir]);
+        probes.push(...refusedRenderFaults(`render ${extra.join(' ') || '(default)'} of [Idle, idle]`, run, rootDir, root === 'c_24' ? [...says, '"idle@24fps"'] : says));
+      }
+      const oneRoot = join(pairProbe.work, 'c_one');
+      const one = runCli(['render', '--candidate', pairProbe.outDir, '--max', '32', '--animation', 'Idle', '--out', oneRoot]);
+      if (one.status !== 0) probes.push(`render --animation Idle exited ${String(one.status)}: ${one.stderr.trim().slice(0, 300)}`);
+      else probes.push(...namedSetFaults('render --animation Idle', oneRoot, ['Idle'], (a) => frameSetDir(a, PROTOCOL_FPS), false));
+      plantSaid = refusedRenderFaults('the plant: a root that rendered', one, oneRoot, says);
+      if (plantSaid.length === 0) probes.push('a render that exited 0 and wrote its root read as refused');
+      try {
+        frameSetDirs(pair, PROTOCOL_FPS);
+        probes.push('frameSetDirs(["Idle", "idle"]) returned rather than refusing');
+      } catch (err) {
+        if (!(err instanceof FrameSetDirError)) throw err;
+      }
+    }
+    const ok = probes.length === 0;
+    say(
+      'RN10_A_CASE_ONLY_PAIR_IS_REFUSED_BY_NAME_BEFORE_ANYTHING_IS_WRITTEN',
+      ok,
+      probeDetail(ok, probes, `animations "Idle" and "idle" are refused at ${PROTOCOL_FPS} fps, at 24 and under --extremes-only, naming both and the folder they share, with no root written; --animation Idle alone renders into Idle/; a root that rendered is red against the refusal: ${plantSaid[0] ?? ''}`),
+      'issue #1744: on a case-insensitive filesystem the two shared one folder and the second set cleared the first — the mapping does not case-fold, so the pair is refused rather than renamed apart, as parts refuses it',
+    );
+  }
+
+  // RN11 — issue #1744: the mapping is parts' table, a safe name maps to itself, every folder the tracked render-hash
+  // base names is unchanged, and three planted mappings — none, case-folding, a final dot kept — are each red.
+  {
+    const probes = segmentFaults(pathSegment);
+    const baseDirs = renderHashBaseSetDirs();
+    if (typeof baseDirs === 'string') probes.push(baseDirs);
+    else for (const dir of baseDirs) if (pathSegment(dir) !== dir) probes.push(`render-hash base folder ${JSON.stringify(dir)} maps to ${JSON.stringify(pathSegment(dir))}`);
+    const plants: ReadonlyArray<readonly [string, (name: string, suffix: string) => string]> = [
+      ['no mapping', (name, suffix) => name + suffix],
+      ['case-folding', (name, suffix) => pathSegment(name.toLowerCase(), suffix)],
+      ['a final dot kept', (name, suffix) => (name.endsWith('.') ? pathSegment(name.slice(0, -1)) + '.' + suffix : pathSegment(name, suffix))],
+    ];
+    const plantSaid: string[] = [];
+    for (const [label, map] of plants) {
+      const said = segmentFaults(map);
+      if (said.length === 0) probes.push(`the ${label} plant read clean`);
+      else plantSaid.push(`${label}: ${said[0]}`);
+    }
+    const ok = probes.length === 0;
+    say(
+      'RN11_THE_MAPPING_IS_PARTS_AND_A_SAFE_NAME_IS_UNCHANGED',
+      ok,
+      probeDetail(
+        ok,
+        probes,
+        `${SEGMENT_TABLE.length} rows and both refusals (an empty name, ${SEGMENT_MAX + 1} characters) as the table says; ${typeof baseDirs === 'string' ? 0 : baseDirs.length} render-hash base folders map to themselves; ` +
+          `the plants are each red — ${plantSaid.join('; ')}`,
+      ),
+      'issue #1744: the mapping is the one @rig-c/parts ships, so the two never spell one name two ways — and a name that is already safe keeps its folder byte for byte, so no existing render moves',
     );
   }
 

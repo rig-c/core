@@ -57,6 +57,7 @@ import {
   POSER_NAMES,
   PoserChoiceError,
   frameSetDir,
+  frameSetSuffix,
   FRAMES_SIDECAR,
   type PoserName,
   PROTOCOL_FPS,
@@ -1802,12 +1803,16 @@ export const COMMANDS: CommandDoc[] = [
         value: '<dir>',
         meaning:
           'directory to write the frame series into (default `render/`). Each render set is a directory under it, named by the rate (see --fps): one per animation, ' +
-          `\`${frameSetDir('<anim>', PROTOCOL_FPS)}/\` at the default, \`${frameSetDir('<anim>', 24).split('24').join('<fps>')}/\` at any other — ` +
-          `\`--fps 24\` writes \`${frameSetDir('<anim>', 24)}/\`, and the default ${PROTOCOL_FPS} writes \`${frameSetDir('<anim>', PROTOCOL_FPS)}/\`; ` +
+          `\`<anim>${frameSetSuffix(PROTOCOL_FPS)}/\` at the default, \`<anim>${frameSetSuffix(24).split('24').join('<fps>')}/\` at any other — ` +
+          `\`--fps 24\` writes \`<anim>${frameSetSuffix(24)}/\`, and the default ${PROTOCOL_FPS} writes \`<anim>${frameSetSuffix(PROTOCOL_FPS)}/\`; ` +
+          'a name a folder cannot hold is spelled as one — each character outside `[A-Za-z0-9_@+.-]`, and a final `.`, becomes `~` and four hex digits, ' +
+          `so \`a:turn\` writes \`${frameSetDir('a:turn', PROTOCOL_FPS)}/\` — and two names one case-insensitive filesystem would make one folder of, ` +
+          'such as `Idle` and `idle`, are refused by name before anything is written; ' +
           `a rig with no animation writes one setup-pose set, \`${frameSetDir(SETUP_POSE_DIR, PROTOCOL_FPS)}/\` at the default and ` +
           `\`${frameSetDir(SETUP_POSE_DIR, 24).split('24').join('<fps>')}/\` at any other — \`--fps 24\` writes \`${frameSetDir(SETUP_POSE_DIR, 24)}/\` — ` +
           `which ${FRAMES_SIDECAR} records with \`animation: null\`. ` +
-          `The line printed for each set ends in the directory it wrote, and ${FRAMES_SIDECAR} beside the sets names each under \`sets[].dir\``,
+          `The line printed for each set ends in the directory it wrote, and ${FRAMES_SIDECAR} beside the sets names each under \`sets[].dir\` — ` +
+          'read the folder from there rather than rebuilding it from the animation\'s name',
       },
       fps: {
         meaning:

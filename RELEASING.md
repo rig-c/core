@@ -1495,6 +1495,20 @@ registry wait, temp-root creation, verdict printing and outer cleanup. Historica
 case-end notes cannot recover these phase times; a timeout's last phase marker
 now identifies its active interval (#1698).
 
+Each failed child call in a case prints a `SMOKE_CHILD[case]` line with a JSON
+record. It contains the command, arguments, working directory, raw
+`spawnSync` status and signal, error details when present, and the last 2,000
+characters of stdout and stderr in separate fields. The export probe's child
+calls include `probe: "exports_probe.mjs"`. Expected nonzero exits, such as the
+review refusal, can have a record in a green case. With `--keep`, the same
+records are saved to `child-failures.jsonl` in the printed case directory.
+On Windows, a batch shim's record describes the `cmd.exe` process the smoke
+spawned. The fields show what the runtime reported about that child.
+
+`bun test ./scripts/install_smoke.test.ts` exercises these diagnostics offline.
+The POSIX test kills the actual child with SIGKILL. The Windows test checks
+that a batch shim at a path with spaces preserves a quoted argument and exit 17.
+
 It needs `npm`, `bun` and `tar` on PATH and the network for exactly one package,
 `@esotericsoftware/spine-core`, which phase 2 installs beside the package — the
 package's own install fetches nothing. It deliberately does **not** need this repository's dev

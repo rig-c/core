@@ -98,9 +98,9 @@
  * `scripts/` it is read by no gate whose population it can weaken.
  */
 import { RUN_STAMP_FILE } from '../src/cli/run_stamp.ts';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { builtinModules } from 'node:module';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -880,7 +880,8 @@ const PRIVATE_DEEP_PATHS: Record<string, string> = {
  * `import.meta.resolve` does not look at the disk for a path with no pattern
  * match, so a Node answer here would pass a specifier nothing can load.
  */
-const EXPORTS_PROBE_SOURCE = `import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+const EXPORTS_CHILD_FAILURES_FILE = 'exports-probe-child-failures.jsonl';
+const EXPORTS_PROBE_SOURCE = `import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -890,6 +891,15 @@ const ROOT = realpathSync(join(HERE, 'node_modules', '${NAME}'));
 const plan = JSON.parse(readFileSync(join(HERE, 'exports_probe.json'), 'utf8'));
 const bad = [];
 const said = (spec, what) => bad.push(spec + ': ' + what);
+
+const childFailureJson = ${childFailureJson.toString()};
+const childExit = ${childExit.toString()};
+const runChild = (command, args, cwd) => {
+  const ran = spawnSync(command, args, { cwd, encoding: 'utf8' });
+  const failure = childFailureJson(ran, command, args, cwd ?? process.cwd(), 'exports_probe.mjs');
+  if (failure !== null) appendFileSync(join(HERE, '${EXPORTS_CHILD_FAILURES_FILE}'), failure + '\\n');
+  return ran;
+};
 
 const where = (spec) => {
   try {
@@ -1020,9 +1030,9 @@ if (pkg !== null && (pkg.default === undefined || pkg.default.name !== '${NAME}'
 for (const spec of ['${NAME}/cli']) {
   const file = where(spec);
   if (!file.startsWith(ROOT)) continue;
-  const ran = spawnSync(process.execPath, [file, '--version'], { encoding: 'utf8' });
+  const ran = runChild(process.execPath, [file, '--version']);
   const out = (ran.stdout || '').trim();
-  if (ran.status !== 0 || out !== version) said(spec, 'bun <resolved> --version exited ' + ran.status + ' printing ' + JSON.stringify(out) + ' and ' + JSON.stringify(version) + ' was required');
+  if (ran.status !== 0 || out !== version) said(spec, 'bun <resolved> --version ' + childExit(ran) + ' printing ' + JSON.stringify(out) + ' and ' + JSON.stringify(version) + ' was required');
 }
 
 // Exact document and executable entries retained by #1668: read or spawn them.
@@ -1030,8 +1040,8 @@ const licence = where('${NAME}/LICENSE');
 if (!licence.startsWith(ROOT) || !readFileSync(licence, 'utf8').includes('MIT License')) said('${NAME}/LICENSE', 'the installed MIT licence text was required');
 const launcher = where('${NAME}/bin/rigc');
 if (launcher.startsWith(ROOT)) {
-  const ran = spawnSync('node', [launcher, '--version'], { encoding: 'utf8' });
-  if (ran.status !== 0 || (ran.stdout || '').trim() !== version) said('${NAME}/bin/rigc', 'resolved launcher --version failed: ' + (ran.stderr || ''));
+  const ran = runChild('node', [launcher, '--version']);
+  if (ran.status !== 0 || (ran.stdout || '').trim() !== version) said('${NAME}/bin/rigc', 'resolved launcher --version ' + childExit(ran) + ', expected version ' + JSON.stringify(version) + ': ' + (ran.stderr || ''));
 }
 const probe = await load('${NAME}/tools/png_probe');
 if (probe !== null && plates[0]) {
@@ -1202,8 +1212,8 @@ if (meshM !== null && Plate !== null && ['buildSegmentsLattice', 'segmentDistanc
     writeFileSync(join(dir, 'motion.json'), JSON.stringify(motion));
     const launcher = join(ROOT, 'bin', 'rigc.cjs');
     // Official installed launcher, whose native Node interpreter is on PATH.
-    const built = spawnSync('node', [launcher, 'build', '--rig', 'rig.json', '--motion', 'motion.json', '--out', 'build'], { cwd: dir, encoding: 'utf8' });
-    if (built.status !== 0) throw Error('installed rigc build exited ' + built.status + ': ' + JSON.stringify({ stdout: built.stdout, stderr: built.stderr }));
+    const built = runChild('node', [launcher, 'build', '--rig', 'rig.json', '--motion', 'motion.json', '--out', 'build'], dir);
+    if (built.status !== 0) throw Error('installed rigc build ' + childExit(built) + ': ' + JSON.stringify({ stdout: built.stdout, stderr: built.stderr }));
     const model = JSON.parse(readFileSync(join(dir, 'build', 'skeleton.model.json'), 'utf8'));
     const mesh = model.skins.find((s) => s.name === 'default').attachments.probe.probe;
     const bindings = mesh.vertices.bindings;
@@ -1225,10 +1235,10 @@ if (meshM !== null && Plate !== null && ['buildSegmentsLattice', 'segmentDistanc
     const unreached = JSON.parse(JSON.stringify(rig));
     unreached.skins.default.probe.probe.generator.influence.radius = distance;
     writeFileSync(join(dir, 'unreached.json'), JSON.stringify(unreached));
-    const refused = spawnSync('node', [launcher, 'build', '--rig', 'unreached.json', '--motion', 'motion.json', '--out', 'unreached-build'], { cwd: dir, encoding: 'utf8' });
+    const refused = runChild('node', [launcher, 'build', '--rig', 'unreached.json', '--motion', 'motion.json', '--out', 'unreached-build'], dir);
     const detail = (refused.stdout || '') + (refused.stderr || '');
     const nearest = /nearest is "left" at ([0-9.]+)/.exec(detail);
-    if (distance !== 4 || refused.status === 0 || !detail.includes('CE_COMPILE_SEGMENTS_VERTEX_UNREACHED') || nearest === null || Math.abs(Number(nearest[1]) - distance) > 1e-12) said('${NAME}/mesh', 'segmentDistance=' + distance + '; expected the actual compiler refusal at the authored 4px distance: ' + detail);
+    if (distance !== 4 || refused.status === 0 || !detail.includes('CE_COMPILE_SEGMENTS_VERTEX_UNREACHED') || nearest === null || Math.abs(Number(nearest[1]) - distance) > 1e-12) said('${NAME}/mesh', 'segmentDistance=' + distance + '; expected the actual compiler refusal at the authored 4px distance, and the build ' + childExit(refused) + ': ' + detail);
     if (existsSync(join(dir, 'unreached-build', 'skeleton.model.json'))) said('${NAME}/mesh', 'unreached segments build emitted a model after refusing');
     console.log('SEGMENTS_PREFLIGHT vertices ' + lattice.points.length + ', max compiler share difference ' + maxShareError + ', nearest compiler distance ' + (nearest ? nearest[1] : 'MISSING') + ', public distance ' + distance);
   });
@@ -1688,7 +1698,7 @@ export default {
  * install, through the importer's own directory.
  */
 let bundler: { js: string; version: string; faults: string[] } | null = null;
-function bundlerOnce(timePhase: TimePhase): { js: string; version: string; faults: string[] } {
+function bundlerOnce(timePhase: TimePhase, run: RunCommand): { js: string; version: string; faults: string[] } {
   if (bundler !== null) return bundler;
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
   const lock = existsSync(join(ROOT, 'bun.lock')) ? readFileSync(join(ROOT, 'bun.lock'), 'utf8') : '';
@@ -1704,7 +1714,7 @@ function bundlerOnce(timePhase: TimePhase): { js: string; version: string; fault
   const js = join(dir, 'node_modules', 'vite', 'bin', 'vite.js');
   const pkg = join(dir, 'node_modules', 'vite', 'package.json');
   if (!existsSync(js) || !existsSync(pkg)) {
-    bundler = { js: '', version: wanted, faults: [`${CORE_BROWSER_CASE}: npm install vite@${wanted} exited ${installed.status} and left no ${js}. ${installed.out.trim().slice(0, 1500)}`] };
+    bundler = { js: '', version: wanted, faults: [`${CORE_BROWSER_CASE}: npm install vite@${wanted} ${childExit(installed)} and left no ${js}. ${installed.out.trim().slice(0, 1500)}`] };
     return bundler;
   }
   bundler = { js, version: (JSON.parse(readFileSync(pkg, 'utf8')) as { version?: string }).version ?? wanted, faults: [] };
@@ -1717,7 +1727,7 @@ function bundlerOnce(timePhase: TimePhase): { js: string; version: string; fault
  * the install stays the runtime-free install a user receives (issue #1679).
  */
 let typechecker: { js: string; typeRoots: string[]; version: string; faults: string[] } | null = null;
-function typecheckerOnce(timePhase: TimePhase): { js: string; typeRoots: string[]; version: string; faults: string[] } {
+function typecheckerOnce(timePhase: TimePhase, run: RunCommand): { js: string; typeRoots: string[]; version: string; faults: string[] } {
   if (typechecker !== null) return typechecker;
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
   const lock = existsSync(join(ROOT, 'bun.lock')) ? readFileSync(join(ROOT, 'bun.lock'), 'utf8') : '';
@@ -1744,7 +1754,7 @@ function typecheckerOnce(timePhase: TimePhase): { js: string; typeRoots: string[
       js: '',
       typeRoots: [],
       version: tsWanted,
-      faults: [`SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: npm install typescript@${tsWanted} @types/bun@${bunTypesWanted} exited ${installed.status} and left no ${js} or ${bunTypesPkg}. ${installed.out.trim().slice(0, 1500)}`],
+      faults: [`SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: npm install typescript@${tsWanted} @types/bun@${bunTypesWanted} ${childExit(installed)} and left no ${js} or ${bunTypesPkg}. ${installed.out.trim().slice(0, 1500)}`],
     };
     return typechecker;
   }
@@ -1799,8 +1809,9 @@ function caseTiming(name: string): { phase: TimePhase; finish: () => void } {
   };
 }
 
-interface Ran {
-  status: number;
+type ChildResult = Pick<SpawnSyncReturns<string>, 'status' | 'signal' | 'error' | 'stdout' | 'stderr'>;
+
+interface Ran extends ChildResult {
   /** stdout, stderr and the spawn's own error, in that order — what a step prints when it reports. */
   out: string;
   /**
@@ -1814,6 +1825,41 @@ interface Ran {
 }
 
 type Env = Record<string, string | undefined>;
+type RunCommand = typeof run;
+type RecordChild = (json: string) => void;
+
+// The generated exports probe uses these same two formatters. Keep them
+// self-contained so the printed source runs inside the install.
+function childFailureJson(ran: ChildResult, command: string, args: string[], cwd: string, probe?: string): string | null {
+  if (ran.status === 0 && ran.signal === null && ran.error === undefined) return null;
+  const error = ran.error;
+  return JSON.stringify({
+    command,
+    args,
+    cwd,
+    probe,
+    status: ran.status,
+    signal: ran.signal,
+    error: error === undefined ? null : { ...error, name: error.name, message: error.message, stack: error.stack },
+    stdoutTail: (ran.stdout ?? '').slice(-2000),
+    stderrTail: (ran.stderr ?? '').slice(-2000),
+  });
+}
+
+function childExit({ status, signal }: Pick<ChildResult, 'status' | 'signal'>): string {
+  if (status !== null) return 'exited ' + status;
+  if (signal !== null) return 'was killed by ' + signal;
+  return 'returned no exit status';
+}
+
+export function caseCommandRunner(record: RecordChild): RunCommand {
+  return (cmd, args, cwd, env) => {
+    const ran = run(cmd, args, cwd, env);
+    const failure = childFailureJson(ran, cmd, args, cwd);
+    if (failure !== null) record(failure);
+    return ran;
+  };
+}
 
 /** One argument of a cmd.exe command line: wrapped in double quotes, with a double quote inside it doubled. */
 const cmdQuoted = (arg: string): string => `"${arg.replace(/"/g, '""')}"`;
@@ -1847,7 +1893,7 @@ function run(cmd: string, args: string[], cwd: string, env?: Env): Ran {
   const stdout = typeof r.stdout === 'string' ? r.stdout : '';
   const stderr = typeof r.stderr === 'string' ? r.stderr : '';
   const failed = r.error === undefined ? '' : `\n${r.error.message}`;
-  return { status: typeof r.status === 'number' ? r.status : 1, out: `${stdout}${stderr}${failed}`, stdout, stderr };
+  return { status: r.status, signal: r.signal, error: r.error, out: `${stdout}${stderr}${failed}`, stdout, stderr };
 }
 
 /**
@@ -1858,8 +1904,15 @@ function run(cmd: string, args: string[], cwd: string, env?: Env): Ran {
  * run stopped at its first line (issue #1214). `where` is cmd's own lookup; it
  * lists every match, one per line, so the first is the one taken.
  */
-function onPath(cmd: string): string | null {
-  const r = process.platform === 'win32' ? spawnSync('where', [cmd], { encoding: 'utf8' }) : spawnSync('command', ['-v', cmd], { encoding: 'utf8', shell: true });
+function onPath(cmd: string, record?: RecordChild): string | null {
+  const windows = process.platform === 'win32';
+  const command = windows ? 'where' : 'command';
+  const args = windows ? [cmd] : ['-v', cmd];
+  const r = spawnSync(command, args, { encoding: 'utf8', shell: !windows });
+  if (record !== undefined) {
+    const failure = childFailureJson(r, command, args, process.cwd());
+    if (failure !== null) record(failure);
+  }
   const found = typeof r.stdout === 'string' ? (r.stdout.trim().split(/\r?\n/)[0] ?? '').trim() : '';
   return found === '' ? null : found;
 }
@@ -2243,6 +2296,7 @@ function tarballFor(
   work: string,
   source: Source,
   plant: Plant,
+  run: RunCommand,
 ): { tgz: string; faults: string[]; paths: string[]; evidence: string } {
   const faults: string[] = [];
   const packDir = join(work, 'pack');
@@ -2256,16 +2310,17 @@ function tarballFor(
   const packed =
     source.kind === 'tree'
       ? run('npm', ['pack', ROOT, '--pack-destination', packDir, '--silent'], work)
-      : { status: 0, out: '', stdout: '', stderr: '' };
+      : null;
   const tarballs = existsSync(packDir) ? readdirSync(packDir).filter((f) => f.endsWith('.tgz')) : [];
-  if (packed.status !== 0 || tarballs.length !== 1) {
+  if ((packed !== null && packed.status !== 0) || tarballs.length !== 1) {
+    const result = packed === null ? 'copying the registry tarball' : `\`npm pack\` ${childExit(packed)}`;
     faults.push(
-      `SMOKE_PACK_WROTE_A_TARBALL: \`npm pack\` exited ${packed.status} and left ${tarballs.length} tarball(s) in ${packDir}; one was required. ${packed.out.trim()}`,
+      `SMOKE_PACK_WROTE_A_TARBALL: ${result} left ${tarballs.length} tarball(s) in ${packDir}; one was required. ${packed?.out.trim() ?? ''}`,
     );
     return { tgz: '', faults, paths: [], evidence: '' };
   }
   const first = join(packDir, tarballs[0]);
-  const paths = tarPaths(first, work);
+  const paths = tarPaths(first, work, run);
   if (plant === 'none') return { tgz: first, faults, paths, evidence: '' };
 
   // Extract, patch, pack again. `npm pack <dir>` reads that directory's own
@@ -2377,7 +2432,7 @@ function tarballFor(
   const repacked = run('npm', ['pack', pkgDir, '--pack-destination', repackDir, '--silent'], work);
   const again = readdirSync(repackDir).filter((f) => f.endsWith('.tgz'));
   if (repacked.status !== 0 || again.length !== 1) {
-    faults.push(`SMOKE_PLANT_APPLIED: re-packing the patched copy exited ${repacked.status} with ${again.length} tarball(s). ${repacked.out.trim()}`);
+    faults.push(`SMOKE_PLANT_APPLIED: re-packing the patched copy ${childExit(repacked)} with ${again.length} tarball(s). ${repacked.out.trim()}`);
     return { tgz: '', faults, paths: [], evidence: '' };
   }
   const second = join(repackDir, again[0]);
@@ -2394,7 +2449,7 @@ function tarballFor(
   // plants edit one shipped module, and a clause written only for the first
   // kind would pass them by construction.
   const before = new Set(paths);
-  const after = tarPaths(second, work);
+  const after = tarPaths(second, work, run);
   const gone = [...before].filter((p) => !after.includes(p));
   let evidence = '';
   if (plant === 'add-dependency') {
@@ -2497,7 +2552,7 @@ function mkdirIn(parent: string, name: string): string {
 }
 
 /** The paths inside a tarball, as `tar -tzf` lists them, with the leading `package/` stripped. */
-function tarPaths(tgz: string, cwd: string): string[] {
+function tarPaths(tgz: string, cwd: string, run: RunCommand): string[] {
   const listed = run('tar', ['-tzf', tgz], cwd);
   if (listed.status !== 0) return [];
   return listed.out
@@ -2569,8 +2624,13 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     faults.push(message);
     steps.push(step);
   };
+  const recordChild: RecordChild = (json) => {
+    console.log(`  SMOKE_CHILD[${spec.name}] ${json}`);
+    if (keep) appendFileSync(join(work, 'child-failures.jsonl'), json + '\n');
+  };
+  const run = caseCommandRunner(recordChild);
 
-  const built = timePhase('pack', `tarball-${spec.source.kind}`, () => tarballFor(work, spec.source, spec.plant));
+  const built = timePhase('pack', `tarball-${spec.source.kind}`, () => tarballFor(work, spec.source, spec.plant, run));
   for (const f of built.faults) fault('pack', f);
   if (built.tgz === '') return { name: spec.name, faults, steps, notes, output };
   notes.push(`the tarball carries ${built.paths.length} path(s)`);
@@ -2597,7 +2657,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   if (!existsSync(join(pkgRoot, 'package.json'))) {
     fault(
       'install',
-      `SMOKE_INSTALL_EMPTY_DIR: ${spec.installer} install of ${built.tgz} exited ${install.status} and left no node_modules/${NAME}/package.json under ${home}. ${install.out.trim().slice(0, 4000)}`,
+      `SMOKE_INSTALL_EMPTY_DIR: ${spec.installer} install of ${built.tgz} ${childExit(install)} and left no node_modules/${NAME}/package.json under ${home}. ${install.out.trim().slice(0, 4000)}`,
     );
     if (!keep) rmSync(home, { recursive: true, force: true });
     return { name: spec.name, faults, steps, notes, output };
@@ -2632,7 +2692,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     output += ran.out;
     const lines = ran.out.split('\n');
     if (ran.status !== 0 || !lines.includes(pkgVersion) || !ran.out.includes(says)) {
-      fault(step, `SMOKE_VERSION_NAMES_THE_ENTRY: \`node_modules/.bin/rigc --version\` exited ${ran.status} printing ${JSON.stringify(ran.out.trim().slice(0, 600))}; ${pkgVersion} and "${says}" were required — the launcher has to run ${entry} here and say so`);
+      fault(step, `SMOKE_VERSION_NAMES_THE_ENTRY: \`node_modules/.bin/rigc --version\` ${childExit(ran)} printing ${JSON.stringify(ran.out.trim().slice(0, 600))}; ${pkgVersion} and "${says}" were required — the launcher has to run ${entry} here and say so`);
     } else {
       notes.push(`--version: ${ran.out.trim().split('\n').join(' / ')}`);
     }
@@ -2646,7 +2706,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   const plates = run('bun', [join(home, 'make_plates.ts')], home);
   output += plates.out;
   if (plates.status !== 0) {
-    fault('fixture', `SMOKE_FIXTURE_PLATES_FROM_THE_PACKAGE: \`bun make_plates.ts\` exited ${plates.status}. ${plates.out.trim().slice(0, 4000)}`);
+    fault('fixture', `SMOKE_FIXTURE_PLATES_FROM_THE_PACKAGE: \`bun make_plates.ts\` ${childExit(plates)}. ${plates.out.trim().slice(0, 4000)}`);
   } else {
     const resolved = /^RESOLVED (.+)$/m.exec(plates.out)?.[1] ?? '';
     const asPath = resolved.startsWith('file://') ? fileURLToPath(resolved) : resolved;
@@ -2696,7 +2756,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     const printed = coreBuild.out.trim().split('\n').slice(0, 12);
     fault(
       'core-build',
-      `SMOKE_CORE_ENTRY_BUILDS: \`rigc build\` on the core entry exited ${coreBuild.status} and wrote ${coreWrote.length === 0 ? 'nothing' : coreWrote.join(', ')} under ${CORE_OUT}/, printing: ${printed[0] ?? '(nothing)'}` +
+      `SMOKE_CORE_ENTRY_BUILDS: \`rigc build\` on the core entry ${childExit(coreBuild)} and wrote ${coreWrote.length === 0 ? 'nothing' : coreWrote.join(', ')} under ${CORE_OUT}/, printing: ${printed[0] ?? '(nothing)'}` +
         `${printed.slice(1).map((line) => `\n          ${line}`).join('')}\n          exit 0 and ${coreWants.join(', ')} were required`,
     );
   } else {
@@ -2731,7 +2791,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     const receipt = /^RENDER_SHARED_OK (.+)$/m.exec(read.out)?.[1];
     for (const line of bad) fault('render-shared', `SMOKE_RENDER_SHARED_READS_THE_INSTALLED_BUILD: ${line.slice('RENDER_SHARED_BAD '.length)}`);
     if (read.status !== 0 || receipt === undefined) {
-      if (bad.length === 0) fault('render-shared', `SMOKE_RENDER_SHARED_READS_THE_INSTALLED_BUILD: ${NAME}/render-shared ${phase} exited ${read.status} without a verdict: ${read.out.trim().slice(0, 1500)}`);
+      if (bad.length === 0) fault('render-shared', `SMOKE_RENDER_SHARED_READS_THE_INSTALLED_BUILD: ${NAME}/render-shared ${phase} ${childExit(read)} without a verdict: ${read.out.trim().slice(0, 1500)}`);
     } else notes.push(`renderer reads: ${receipt}`);
   };
   if (coreBuilt) probeRenderer(coreDir, 'without-runtime');
@@ -2750,7 +2810,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
         : run('bun', ['add', `${RUNTIME}@${runtimeWanted}`], home));
     output += beside.out;
     if (!existsSync(corePkg)) {
-      fault('runtime', `SMOKE_RUNTIME_INSTALLS_BESIDE: ${spec.installer} install of ${RUNTIME}@${runtimeWanted} exited ${beside.status} and left no ${corePkg}. ${beside.out.trim().slice(0, 2000)}`);
+      fault('runtime', `SMOKE_RUNTIME_INSTALLS_BESIDE: ${spec.installer} install of ${RUNTIME}@${runtimeWanted} ${childExit(beside)} and left no ${corePkg}. ${beside.out.trim().slice(0, 2000)}`);
     } else {
       coreVersion = (JSON.parse(readFileSync(corePkg, 'utf8')) as { version?: string }).version ?? null;
       notes.push(`${RUNTIME} ${coreVersion ?? '(no version field)'} installed beside it`);
@@ -2766,7 +2826,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   const build = timePhase('build', 'runtime-entry', () => run(bin, ['build', '--rig', 'rig.json', '--motion', 'motion.json', '--out', FULL_OUT, '--profile', 'rig-play', '--pack'], home));
   output += build.out;
   if (build.status !== 0) {
-    fault('build', `SMOKE_BUILD_EXIT_0: \`node_modules/.bin/rigc build\` exited ${build.status}. ${build.out.trim().slice(0, 6000)}`);
+    fault('build', `SMOKE_BUILD_EXIT_0: \`node_modules/.bin/rigc build\` ${childExit(build)}. ${build.out.trim().slice(0, 6000)}`);
   }
 
   // 🔒 The two entries' builds of the same fixture, from the install (issue
@@ -2850,7 +2910,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   const validate = run(bin, ['validate', 'build', '--profile', 'rig-play'], home);
   output += validate.out;
   if (validate.status !== 0) {
-    fault('validate', `SMOKE_VALIDATE_READS_BACK: \`node_modules/.bin/rigc validate build\` exited ${validate.status}. ${validate.out.trim().slice(0, 4000)}`);
+    fault('validate', `SMOKE_VALIDATE_READS_BACK: \`node_modules/.bin/rigc validate build\` ${childExit(validate)}. ${validate.out.trim().slice(0, 4000)}`);
   }
 
   if (build.status === 0) probeRenderer(outDir, 'runtime-present');
@@ -2864,7 +2924,17 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     `${JSON.stringify({ named: NAMED_EXPORTS, symbols: OBSERVED_SYMBOLS, runtime: RUNTIME, rig: RIG_SPEC, deep: PRIVATE_DEEP_PATHS, paths: built.paths }, null, 2)}\n`,
   );
   writeFileSync(join(home, 'exports_probe.mjs'), EXPORTS_PROBE_SOURCE);
-  const exportsRan = run('bun', [join(home, 'exports_probe.mjs')], home);
+  const runExportsProbe = (...args: string[]): Ran => {
+    const ran = run('bun', [join(home, 'exports_probe.mjs'), ...args], home);
+    // Keep nested records out of the streams the probe uses to decide its verdict.
+    const report = join(home, EXPORTS_CHILD_FAILURES_FILE);
+    if (existsSync(report)) {
+      for (const line of readFileSync(report, 'utf8').trimEnd().split('\n')) recordChild(line);
+      rmSync(report);
+    }
+    return ran;
+  };
+  const exportsRan = runExportsProbe();
   output += exportsRan.out;
   const exportsBad = exportsRan.out.split('\n').filter((line) => line.startsWith('EXPORT_BAD '));
   const exportsCounts = /^EXPORT_COUNTS (.+)$/m.exec(exportsRan.out)?.[1];
@@ -2874,7 +2944,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   if (exportsCounts === undefined || (exportsRan.status !== 0 && exportsBad.length === 0)) {
     fault(
       'exports',
-      `SMOKE_EXPORTS_RESOLVE_FROM_THE_INSTALL: the import probe exited ${exportsRan.status} without a verdict, so nothing was resolved. ${exportsRan.out.trim().slice(0, 2000)}`,
+      `SMOKE_EXPORTS_RESOLVE_FROM_THE_INSTALL: the import probe ${childExit(exportsRan)} without a verdict, so nothing was resolved. ${exportsRan.out.trim().slice(0, 2000)}`,
     );
   } else if (exportsBad.length === 0) {
     notes.push(`exports: ${exportsCounts}`);
@@ -2903,7 +2973,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     // surface* states it beside the entry, and both halves — loading without
     // the runtime and type-checking a one-line dependant importing each
     // runtime-free entry with no @esotericsoftware/* present — are held here.
-    const bareRan = run('bun', [join(home, 'exports_probe.mjs'), 'without-runtime'], home);
+    const bareRan = runExportsProbe('without-runtime');
     output += bareRan.out;
     const bareBad = bareRan.out.split('\n').filter((line) => line.startsWith('EXPORT_BAD '));
     const bareCounts = /^EXPORT_COUNTS (.+)$/m.exec(bareRan.out)?.[1];
@@ -2911,12 +2981,12 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     if (bareCounts === undefined || (bareRan.status !== 0 && bareBad.length === 0)) {
       fault(
         'exports-without-runtime',
-        `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: the import probe without ${RUNTIME} exited ${bareRan.status} without a verdict. ${bareRan.out.trim().slice(0, 2000)}`,
+        `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: the import probe without ${RUNTIME} ${childExit(bareRan)} without a verdict. ${bareRan.out.trim().slice(0, 2000)}`,
       );
     }
     if (runsRuntimeFreeTypecheck(spec.plant)) {
-      const tsc = typecheckerOnce(timePhase);
-      const nodeForTsc = onPath('node');
+      const tsc = typecheckerOnce(timePhase, run);
+      const nodeForTsc = onPath('node', recordChild);
       for (const f of tsc.faults) fault('exports-without-runtime', f);
       if (nodeForTsc === null) fault('exports-without-runtime', 'SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: `node` is not on PATH, and `tsc` runs on it');
       let typechecked = 0;
@@ -2959,14 +3029,14 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
               const first = (errors[0] ?? oneRan.out.trim().split('\n')[0] ?? '(no diagnostic)').trim();
               fault(
                 'exports-without-runtime',
-                `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: ${row.spec}: tsc ${tsc.version} on \`import '${row.spec}';\` without ${RUNTIME} exited ${oneRan.status} (${errors.length} error(s); first: ${first}), and RELEASING.md *The import surface* states this entry needs nothing installed beside the package`,
+                `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: ${row.spec}: tsc ${tsc.version} on \`import '${row.spec}';\` without ${RUNTIME} ${childExit(oneRan)} (${errors.length} error(s); first: ${first}), and RELEASING.md *The import surface* states this entry needs nothing installed beside the package`,
               );
             }
           }
           if (typechecked === NOTHING_ENTRIES.length) {
             fault(
               'exports-without-runtime',
-              `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: tsc ${tsc.version} without ${RUNTIME} exited ${allRan.status}: ${allRan.out.trim().slice(0, 1500)}`,
+              `SMOKE_ENTRIES_STATE_WHAT_THEY_NEED: tsc ${tsc.version} without ${RUNTIME} ${childExit(allRan)}: ${allRan.out.trim().slice(0, 1500)}`,
             );
           }
         }
@@ -2995,7 +3065,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       const compareCounts = /^MESHCOMPARE_COUNTS (.+)$/m.exec(compared.out)?.[1];
       for (const line of compareBad) fault(MESHCOMPARE_STEP, `${MESHCOMPARE_CASE}: ${line.slice('MESHCOMPARE_BAD '.length)}`);
       if (compareCounts === undefined || compared.status !== 0) {
-        if (compareBad.length === 0) fault(MESHCOMPARE_STEP, `${MESHCOMPARE_CASE}: the comparison probe exited ${compared.status} without a verdict. ${compared.out.trim().slice(0, 2000)}`);
+        if (compareBad.length === 0) fault(MESHCOMPARE_STEP, `${MESHCOMPARE_CASE}: the comparison probe ${childExit(compared)} without a verdict. ${compared.out.trim().slice(0, 2000)}`);
       } else {
         notes.push(`without ${RUNTIME}: ${MESHCOMPARE_CASE} — ${compareCounts}`);
       }
@@ -3020,14 +3090,14 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       const posed = read(direct);
       for (const line of posed.bad) fault(CORE_POSE_STEP, `${CORE_POSE_CASE}: ${line}`);
       if (direct.status !== 0 || posed.matrix === undefined) {
-        if (posed.bad.length === 0) fault(CORE_POSE_STEP, `${CORE_POSE_CASE}: the pose probe exited ${direct.status} without a verdict. ${direct.out.trim().slice(0, 2000)}`);
+        if (posed.bad.length === 0) fault(CORE_POSE_STEP, `${CORE_POSE_CASE}: the pose probe ${childExit(direct)} without a verdict. ${direct.out.trim().slice(0, 2000)}`);
       } else {
         notes.push(`without ${RUNTIME}: ${CORE_POSE_CASE} — readModel then poseRawSetup through ${NAME}/core posed ${RIG_SPEC.bones.length} bone(s); ${CORE_PROBE_BONE} ${posed.matrix}`);
       }
 
       // The browser bundle.
-      const tool = bundlerOnce(timePhase);
-      const node = onPath('node');
+      const tool = bundlerOnce(timePhase, run);
+      const node = onPath('node', recordChild);
       for (const f of tool.faults) fault(CORE_BROWSER_STEP, f);
       if (node === null) fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: \`node\` is not on PATH, and vite runs on it`);
       if (tool.faults.length === 0 && node !== null) {
@@ -3039,7 +3109,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
         const refused = built.out.split('\n').find((line) => line.includes(NODE_REFUSAL));
         const externalised = built.out.split('\n').find((line) => /externali[sz]ed for browser compatibility/.test(line));
         if (built.status !== 0 || !existsSync(bundle)) {
-          fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: \`vite build\` (vite ${tool.version}, library mode) of ${NAME}/core exited ${built.status} and wrote ${existsSync(bundle) ? '' : 'no '}${CORE_BUNDLE_DIR}/${CORE_BUNDLE_FILE}${refused === undefined ? '' : ` — ${refused.trim().slice(0, 400)}`}. ${refused === undefined ? built.out.trim().slice(0, 1500) : ''}`);
+          fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: \`vite build\` (vite ${tool.version}, library mode) of ${NAME}/core ${childExit(built)} and wrote ${existsSync(bundle) ? '' : 'no '}${CORE_BUNDLE_DIR}/${CORE_BUNDLE_FILE}${refused === undefined ? '' : ` — ${refused.trim().slice(0, 400)}`}. ${refused === undefined ? built.out.trim().slice(0, 1500) : ''}`);
         } else if (externalised !== undefined) {
           fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: vite ${tool.version} externalised a node module out of ${NAME}/core's closure: ${externalised.trim().slice(0, 400)}`);
         } else {
@@ -3052,7 +3122,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
           const fromBundle = read(ran);
           for (const line of fromBundle.bad) fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: ${line}`);
           if (ran.status !== 0 || fromBundle.bones === undefined) {
-            if (fromBundle.bad.length === 0) fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: the bundle's pose probe exited ${ran.status} without a verdict. ${ran.out.trim().slice(0, 2000)}`);
+            if (fromBundle.bad.length === 0) fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: the bundle's pose probe ${childExit(ran)} without a verdict. ${ran.out.trim().slice(0, 2000)}`);
           } else if (posed.bones !== undefined && fromBundle.bones !== posed.bones) {
             fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: the bundle posed the bones ${fromBundle.bones.slice(0, 600)} and ${NAME}/core imported directly posed ${posed.bones.slice(0, 600)}; the same numbers were required`);
           } else if (nodeStrings === 0) {
@@ -3069,14 +3139,14 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       const rendered = run(bin, ['render', '--candidate', 'build', '--out', 'frames'], home);
       output += rendered.out;
       if (rendered.status !== 0 || !existsSync(join(home, 'frames', 'frames.json'))) {
-        fault('render', `SMOKE_CORE_ENTRY_RENDERS_THE_BUILD: \`rigc render --candidate build\` without ${RUNTIME} exited ${rendered.status} and wrote ${existsSync(join(home, 'frames', 'frames.json')) ? '' : 'no '}frames/frames.json. ${rendered.out.trim().slice(0, 2000)}`);
+        fault('render', `SMOKE_CORE_ENTRY_RENDERS_THE_BUILD: \`rigc render --candidate build\` without ${RUNTIME} ${childExit(rendered)} and wrote ${existsSync(join(home, 'frames', 'frames.json')) ? '' : 'no '}frames/frames.json. ${rendered.out.trim().slice(0, 2000)}`);
       } else {
         notes.push(`without ${RUNTIME}: render wrote ${readdirSync(join(home, 'frames')).length} entr(ies) under frames/`);
         const checked = run(bin, ['check', '--candidate', 'build', '--frames', 'frames'], home);
         output += checked.out;
         const poser = checked.out.split('\n').find((line) => /\bposer\b/.test(line))?.trim() ?? '';
         if (checked.status !== 0) {
-          fault('check', `SMOKE_CORE_ENTRY_CHECKS_THE_BUILD: \`rigc check --candidate build --frames frames\` without ${RUNTIME} exited ${checked.status}. ${checked.out.trim().slice(0, 2000)}`);
+          fault('check', `SMOKE_CORE_ENTRY_CHECKS_THE_BUILD: \`rigc check --candidate build --frames frames\` without ${RUNTIME} ${childExit(checked)}. ${checked.out.trim().slice(0, 2000)}`);
         } else {
           notes.push(`without ${RUNTIME}: check exited 0${poser === '' ? '' : ` (${poser.slice(0, 160)})`}`);
         }
@@ -3098,14 +3168,14 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     const named = /^rigc review: REVIEW_NOT_INSTALLED: (\S+) is not installed [^\n]*\nbun add -d (\S+)\nbunx (\S+) (.*)\n$/.exec(refusal.stderr);
     const touched = readFileSync(join(home, 'package.json'), 'utf8') !== manifestBefore;
     if (refusal.status !== 2 || refusal.stdout !== '' || named === null || named[1] !== named[2] || named[1] !== named[3] || named[4] !== `check ${FULL_OUT}` || touched) {
-      fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package exited ${refusal.status} printing ${JSON.stringify(refusal.stdout.slice(0, 300))} on stdout and ${JSON.stringify(refusal.stderr.slice(0, 600))} on stderr${touched ? ', and changed package.json' : ''}; exit 2, nothing on stdout, package.json unchanged and the lines "rigc review: REVIEW_NOT_INSTALLED: <package> is not installed …", "bun add -d <package>" and "bunx <package> check ${FULL_OUT}" on stderr were required`);
+      fault(REVIEW_STEP, `SMOKE_REVIEW_REFUSED_UNTIL_INSTALLED: \`rigc review check ${FULL_OUT}\` with nothing installed beside the package ${childExit(refusal)} printing ${JSON.stringify(refusal.stdout.slice(0, 300))} on stdout and ${JSON.stringify(refusal.stderr.slice(0, 600))} on stderr${touched ? ', and changed package.json' : ''}; exit 2, nothing on stdout, package.json unchanged and the lines "rigc review: REVIEW_NOT_INSTALLED: <package> is not installed …", "bun add -d <package>" and "bunx <package> check ${FULL_OUT}" on stderr were required`);
     } else {
       const reviewPackage = named[1];
       const added = timePhase('install', 'review', () => spec.installer === 'npm' ? run('npm', ['install', '-D', reviewPackage, '--no-audit', '--no-fund'], home) : run('bun', ['add', '-d', reviewPackage], home));
       output += added.out;
       const reviewManifest = join(home, 'node_modules', ...reviewPackage.split('/'), 'package.json');
       if (!existsSync(reviewManifest)) {
-        fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: ${spec.installer === 'npm' ? 'npm i -D' : 'bun add -d'} ${reviewPackage} exited ${added.status} and left no ${reviewManifest}. ${added.out.trim().slice(0, 2000)}`);
+        fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: ${spec.installer === 'npm' ? 'npm i -D' : 'bun add -d'} ${reviewPackage} ${childExit(added)} and left no ${reviewManifest}. ${added.out.trim().slice(0, 2000)}`);
       } else {
         const reviewRead = JSON.parse(readFileSync(reviewManifest, 'utf8')) as { version?: string; engines?: { bun?: unknown } };
         const reviewVersion = reviewRead.version ?? '(no version field)';
@@ -3122,12 +3192,12 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
         const tooOld = `rigc review: REVIEW_BUN_TOO_OLD: Bun ${String(process.versions.bun)}, ${reviewPackage} needs ${String(reviewRead.engines?.bun)}\n`;
         if (below) {
           if (checked.status !== 2 || checked.stdout !== '' || checked.stderr !== tooOld) {
-            fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: \`rigc review check ${FULL_OUT}\` under Bun ${String(process.versions.bun)}, below the ${String(reviewRead.engines?.bun)} ${reviewPackage} ${reviewVersion} declares, exited ${checked.status} printing ${JSON.stringify(checked.stdout.slice(0, 300))} on stdout and ${JSON.stringify(checked.stderr.slice(0, 600))} on stderr; exit 2, nothing on stdout and ${JSON.stringify(tooOld)} were required`);
+            fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: \`rigc review check ${FULL_OUT}\` under Bun ${String(process.versions.bun)}, below the ${String(reviewRead.engines?.bun)} ${reviewPackage} ${reviewVersion} declares, ${childExit(checked)} printing ${JSON.stringify(checked.stdout.slice(0, 300))} on stdout and ${JSON.stringify(checked.stderr.slice(0, 600))} on stderr; exit 2, nothing on stdout and ${JSON.stringify(tooOld)} were required`);
           } else {
             notes.push(`without ${RUNTIME}: rigc review refused by name until ${reviewPackage} was installed, then refused REVIEW_BUN_TOO_OLD under Bun ${String(process.versions.bun)} (${reviewPackage} ${reviewVersion} needs ${String(reviewRead.engines?.bun)})`);
           }
         } else if (checked.status !== 0) {
-          fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: \`rigc review check ${FULL_OUT}\` with ${reviewPackage} ${reviewVersion} installed beside the package exited ${checked.status}, and 0 was required. ${checked.out.trim().slice(0, 2000)}`);
+          fault(REVIEW_STEP, `SMOKE_REVIEW_CHECKS_THE_BUILD: \`rigc review check ${FULL_OUT}\` with ${reviewPackage} ${reviewVersion} installed beside the package ${childExit(checked)}, and 0 was required. ${checked.out.trim().slice(0, 2000)}`);
         } else {
           notes.push(`without ${RUNTIME}: rigc review refused by name until ${reviewPackage} was installed, then \`review check ${FULL_OUT}\` through ${reviewPackage} ${reviewVersion} exited 0 (${checked.out.trim().split('\n').join(' / ').slice(0, 240)})`);
         }
@@ -3147,7 +3217,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   const entryLink = join(skillsDir, 'rigc');
   const shippedEntry = join(pkgRoot, 'skills', 'rigc', 'SKILL.md');
   if (skills.status !== 0) {
-    fault('skills', `SMOKE_SKILLS_INSTALL_FROM_THE_PACKAGE: \`node_modules/.bin/rigc skills install --dir <tmp>\` exited ${skills.status}, so the package's skills/ directory did not reach a host directory. ${skills.out.trim().slice(0, 2000)}`);
+    fault('skills', `SMOKE_SKILLS_INSTALL_FROM_THE_PACKAGE: \`node_modules/.bin/rigc skills install --dir <tmp>\` ${childExit(skills)}, so the package's skills/ directory did not reach a host directory. ${skills.out.trim().slice(0, 2000)}`);
   } else if (!existsSync(join(entryLink, 'SKILL.md')) || !lstatSync(entryLink).isSymbolicLink()) {
     fault('skills', `SMOKE_SKILLS_INSTALL_FROM_THE_PACKAGE: skills install exited 0 and ${entryLink} is ${existsSync(entryLink) ? 'not a link' : 'not there'}, so rigc/SKILL.md cannot be read through one`);
   } else if (isAbsolute(readlinkSync(entryLink)) || realpathSync(entryLink) !== realpathSync(dirname(shippedEntry))) {
@@ -3161,7 +3231,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
   // The shim's own promise, measured rather than assumed: with bun off PATH the
   // `bin` entry has to say so in one sentence instead of dying as `env: bun: No
   // such file or directory`.
-  const bunPath = onPath('bun');
+  const bunPath = onPath('bun', recordChild);
   if (bunPath === null) {
     notes.push('SKIP the without-bun control: bun is not on PATH in this run, which is the state it is about');
   } else {
@@ -3177,7 +3247,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
     const bunDirs = [...new Set([dirname(bunPath), ...parts.filter((part) => part !== '' && existsSync(join(part, BUN_BINARY)))])];
     const bunDir = bunDirs.join(delimiter);
     const stripped = parts.filter((part) => !bunDirs.includes(part));
-    const nodePath = onPath('node');
+    const nodePath = onPath('node', recordChild);
     if (nodePath !== null && bunDirs.includes(dirname(nodePath))) {
       notes.push(`SKIP the without-bun control: node and bun share ${dirname(nodePath)}, so removing it would remove the shim's own interpreter`);
     } else {
@@ -3185,7 +3255,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       if (withoutBun.status === 0 || !/runs on Bun/.test(withoutBun.out)) {
         fault(
           'shim',
-          `SMOKE_SHIM_NAMES_BUN_WHEN_BUN_IS_ABSENT: with ${bunDir} off PATH the shim exited ${withoutBun.status} saying ${JSON.stringify(withoutBun.out.trim().slice(0, 400))}; a non-zero exit naming Bun was required`,
+          `SMOKE_SHIM_NAMES_BUN_WHEN_BUN_IS_ABSENT: with ${bunDir} off PATH the shim ${childExit(withoutBun)} saying ${JSON.stringify(withoutBun.out.trim().slice(0, 400))}; a non-zero exit naming Bun was required`,
         );
       } else {
         notes.push('with bun off PATH the shim names Bun and stops');
@@ -3560,9 +3630,11 @@ function main(): number {
 /** Directories this run made outside any case — the registry wait's tarball — removed after `main` unless `--keep`. */
 const LEFT_BEHIND: string[] = [];
 
-const code = main();
-for (const dir of LEFT_BEHIND) {
-  if (process.argv.includes('--keep')) console.log(`          kept: ${dir}`);
-  else rmSync(dir, { recursive: true, force: true });
+if (import.meta.main) {
+  const code = main();
+  for (const dir of LEFT_BEHIND) {
+    if (process.argv.includes('--keep')) console.log(`          kept: ${dir}`);
+    else rmSync(dir, { recursive: true, force: true });
+  }
+  process.exit(code);
 }
-process.exit(code);

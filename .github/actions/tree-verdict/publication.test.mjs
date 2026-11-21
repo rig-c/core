@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test';
+import { test, expect, onTestFinished } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -267,17 +267,33 @@ test('pack conditions obey the same earlier same-job literal subset', () => {
   expect(cli(f, 'pack bad condition').stderr).toContain('PUBLISH_CONDITION');
 });
 
+// #1750: preflight took 1.10 s locally and 1.60 s on the hosted retry.
+// Allow 15 s for Python, npm lifecycle subprocesses and server teardown, three times the hosted cutoff.
 test('portable lifecycle tool preflight isolates npm configuration and closes loopback server', async () => {
   const parent = mkdtempSync(join(process.env.TMPDIR, 'lifecycle-tool-'));
   const out = join(parent, 'measurement');
   const tool = fileURLToPath(new URL('./measure-publication.py', import.meta.url));
-  const result = spawnSync('python3', [tool, '--out', out, '--only', 'pack'], {
-    encoding: 'utf8', env: { ...process.env, NPM_CONFIG_REGISTRY: 'https://invalid.example', NPM_TOKEN: 'UNUSED_SENTINEL' },
+  const child = Bun.spawn(['python3', tool, '--out', out, '--only', 'pack'], {
+    detached: true, stdout: 'pipe', stderr: 'pipe',
+    env: { ...process.env, NPM_CONFIG_REGISTRY: 'https://invalid.example', NPM_TOKEN: 'UNUSED_SENTINEL' },
   });
-  writeFileSync(join(parent, 'stdout.log'), result.stdout);
-  writeFileSync(join(parent, 'stderr.log'), result.stderr);
-  expect(result.status).toBe(0);
-  const summary = JSON.parse(result.stdout);
+  let finished = false;
+  onTestFinished(async () => {
+    // Reap Python before signaling any npm descendants left in its process group.
+    finished = true;
+    child.kill('SIGKILL');
+    await child.exited;
+    try { process.kill(-child.pid, 'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  });
+  const [status, stdout, stderr] = await Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
+  if (finished) return;
+  writeFileSync(join(parent, 'stdout.log'), stdout);
+  writeFileSync(join(parent, 'stderr.log'), stderr);
+  expect(status).toBe(0);
+  const summary = JSON.parse(stdout);
   expect(summary.commands).toBe(1);
   expect(summary.puts).toBe(0);
   expect(summary.versions[0].npm).toMatch(/^\d+\.\d+\.\d+/);
@@ -290,7 +306,7 @@ test('portable lifecycle tool preflight isolates npm configuration and closes lo
     socket.on('error', () => resolve(false));
   });
   expect(listening).toBe(false);
-});
+}, 15000);
 
 test('generated literal same-step pack may ignore scripts because the job reader gates first', () => {
   const f = publicationFixture('review');

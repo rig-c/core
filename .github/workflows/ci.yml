@@ -286,6 +286,11 @@ jobs:
           npm install -g npm@12.2.2
           npm --version
 
+      - name: Check install smoke child diagnostics
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun test ./scripts/install_smoke.test.ts
+
       - name: The package installs into an empty directory and builds a rig
         run: bun run smoke
 
@@ -328,6 +333,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Check install smoke child diagnostics
+        env:
+          TEMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+        run: bun test ./scripts/install_smoke.test.ts
       - name: The package installs into an empty directory and builds a rig
         if: runner.os != 'Windows'
         run: bun run smoke

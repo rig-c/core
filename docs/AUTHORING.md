@@ -97,6 +97,12 @@ row; selecting a version neither raises a ceiling nor turns a missing measuremen
 | `--bun <version>: downloaded Bun reports <found>; selftest was not started` | The downloaded executable is not the requested runtime; retry a verified official release. No selftest ran under the wrong version |
 | `preparing the throwaway Git index: <step> exited <code>, 0 required; selftest was not started` | On the pool, the named step of the index built over the upload (`git init`, `git add -A` or `git commit`) failed; an upload with nothing to index fails at `git commit`. Check git on the pool host and what was uploaded. This is a harness fault, not a selftest result; no control ran |
 
+For a failed child process in the repository's `bun run smoke`, read the
+`SMOKE_CHILD[case]` JSON record for its command, status, signal, spawn error
+and separate stdout and stderr tails. With `--keep`, look for
+`child-failures.jsonl` in the reported case directory. The smoke's overall
+exit code is the case verdict. [Release smoke diagnostics](https://github.com/rig-c/core/blob/main/RELEASING.md#whether-the-tarball-runs)
+
 ## The vocabulary is Spine's
 
 Wherever rigc has no better abstraction it uses **Spine 4.3's own concept, its own

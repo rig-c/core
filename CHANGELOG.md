@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.8.1
+
+Every file `build` writes is byte-identical to v3.8.0's.
+
+`rigc render` now writes each frame set into a folder every filesystem can hold (#1746, closes #1744). An animation name made only of `A-Z`, `a-z`, `0-9`, `_`, `@`, `+`, `.` and `-`, not ending in `.` and not a Windows device name, keeps its folder byte for byte, so existing renders of such names are unchanged. Any other name is mapped with the rules `@rig-c/parts` uses for its diagnostic folders: each UTF-16 unit outside that set (`~` included), and a final `.`, becomes `~` plus four lowercase hex digits, and a name whose mapped form before its first dot is `con`, `prn`, `aux`, `nul`, `com1`–`com9` or `lpt1`–`lpt9` (any case) has its first character escaped. So `a:turn` writes `a~003aturn/`, `tail.` writes `tail~002e/` and `con.x` writes `~0063on.x/`; nothing is case-folded, and the `@<fps>fps` suffix at a non-default rate is appended unmapped. `frames.json` records the folder actually written under `sets[].dir`; read it from there rather than rebuilding it from the animation's name. `--extremes-only` and the contact sheet's set name follow the same mapping.
+
+Three renders are now refused, exit 2, naming the animation, before anything is posed or written: an empty animation name; a folder longer than 255 characters including its rate suffix (nothing is truncated or hashed); and two animations whose folders are one folder on a case-insensitive filesystem, such as `Idle` and `idle`. The last of these used to render on a case-sensitive filesystem; it is now refused on every platform, and the refusal names both animations, both folders and the folder they share. Render one of them with `--animation <name>` into its own `--out`.
+
+`verify:nova` now stops by name, exit 2, before fetching the corpus or starting the selftest when a step of the throwaway Git index over the upload fails (`git init`, `git add -A` or `git commit`), instead of running the selftest over an empty index (#1745, closes #1722).
+
+### Bug Fixes
+
+* **render:** map frame-set directory names that a folder cannot hold (#1746) (8e6a058)
+* **verify-nova:** stop by name before the selftest when the throwaway index fails (#1745) (f2c85b1)
+
 ## 3.8.0
 
 The `./seam` entry now exports `seamGridOf` and the `SeamGrid` type, so consumers can address the stock pair raster grid even when a pair has no overlap band or gap (#1741, closes #1740). The change is additive.

@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test';
+import { test, expect, onTestFinished } from 'bun:test';
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -28,7 +28,9 @@ globalThis.fetch = async function(url) {
   if(p.endsWith('/zip')) return new Response(Buffer.from(f.zip,'base64'));
   throw new Error('unexpected fixture route');
 };`;
-for (const scenario of ['positive', 'one-byte mismatch', 'API error', 'fork PR', 'fork run']) test(`fixture workflow real composite process: ${scenario}`, () => {
+// #1750: positive took 223 ms locally and 426 ms on the hosted retry.
+// Allow 10 s for fixture and composite startup, twice the hosted cutoff that censored the failure.
+for (const scenario of ['positive', 'one-byte mismatch', 'API error', 'fork PR', 'fork run']) test(`fixture workflow real composite process: ${scenario}`, async () => {
   const dir = mkdtempSync(join(scratch, 'consumer-'));
   try {
     const f = fixture(), repo = join(dir, 'consumer-git'); mkdirSync(repo);
@@ -70,8 +72,21 @@ for (const scenario of ['positive', 'one-byte mismatch', 'API error', 'fork PR',
       FIXTURE_GATE_SENTINEL: join(dir, 'gate'), FIXTURE_PUBLISH_SENTINEL: join(dir, 'published'), FIXTURE_GATE_EXIT: '19' };
     const action = Bun.YAML.parse(readFileSync(join(actionPath, 'action.yml'), 'utf8'));
     writeFileSync(env.TV_VERDICT_PATH, JSON.stringify({ schema: 'previous-proof' }));
-    const run = spawnSync('bash', ['-c', action.runs.steps[0].run], { env, cwd: repo, encoding: 'utf8', timeout: 10000 });
-    expect(run.status).toBe(0);
+    const child = Bun.spawn(['bash', '-c', action.runs.steps[0].run], {
+      env, cwd: repo, detached: true, stdout: 'pipe', stderr: 'ignore',
+    });
+    let finished = false;
+    onTestFinished(async () => {
+      // Reap the shell before signaling any descendants left in its process group.
+      finished = true;
+      child.kill('SIGKILL');
+      await child.exited;
+      try { process.kill(-child.pid, 'SIGKILL'); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+    });
+    const [status, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    if (finished) return;
+    expect(status).toBe(0);
     const outputs = Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map(l => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; }));
     const positive = scenario === 'positive'; expect(outputs.reused).toBe(String(positive));
     const workflow = Bun.YAML.parse(readFileSync(join(actionPath, 'fixture-workflow.yml'), 'utf8'));
@@ -86,12 +101,12 @@ for (const scenario of ['positive', 'one-byte mismatch', 'API error', 'fork PR',
     expect(outputs['verdict-path']).toBe(positive ? env.TV_VERDICT_PATH : '');
     if (scenario === 'fork PR' || scenario === 'fork run') {
       const reason = scenario === 'fork PR' ? 'untrusted PR repository/base' : 'untrusted run repository';
-      expect(run.stdout).toContain(`TREE_VERDICT_MISS: ${reason}; run the full gate`);
+      expect(stdout).toContain(`TREE_VERDICT_MISS: ${reason}; run the full gate`);
       expect(JSON.parse(readFileSync(env.TV_VERDICT_PATH, 'utf8')).schema).toBe('tree-verdict-unavailable/1');
     }
-    console.log(`PLANT composite ${scenario}: lookup exit=${run.status}; full-fixture-gate executed=${positive ? 0 : 1}; gate exit=${gateExit}; publish reached=${positive ? 1 : 0}`);
+    console.log(`PLANT composite ${scenario}: lookup exit=${status}; full-fixture-gate executed=${positive ? 0 : 1}; gate exit=${gateExit}; publish reached=${positive ? 1 : 0}`);
   } finally { rmSync(dir, { recursive: true }); }
-});
+}, scenario === 'positive' ? 10000 : undefined);
 test('publish lifecycle reader validates proof against fresh source receipt; absence/tampering/rerun runs fallback', async () => {
   const dir = mkdtempSync(join(scratch, 'reader-')), path = join(dir, 'proof.json');
   try {

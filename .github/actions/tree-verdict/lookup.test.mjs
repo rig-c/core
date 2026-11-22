@@ -232,6 +232,19 @@ for (const conclusion of ['success', 'failure']) test(`uncovered platform leg is
     .some(leg => leg.apiName === 'packed install windows-latest Bun latest')).toBe(false);
 });
 
+test('uncovered failure does not block reuse', async () => {
+  // Given overall source success, reuse requires job-level success evidence for the declared publish-chain jobs (#1714).
+  const state = fixture();
+  const name = 'packed install windows-latest Bun latest';
+  state.jobRows.push({ id: 300, name,
+    run_id: state.run.id, run_attempt: state.run.run_attempt, head_sha: state.run.head_sha,
+    status: 'completed', conclusion: 'failure' });
+  expect(state.run.conclusion).toBe('success');
+  expect(Object.values(state.receipt.collector.coverage.jobs).flatMap(job => job.legs)
+    .some(leg => leg.apiName === name)).toBe(false);
+  expect((await drive(state)).reused).toBe(true);
+});
+
 for (const event of ['push', 'workflow_dispatch']) {
   for (const status of ['identical', 'behind']) test(`tag ${event} ${status}: merged PR verdict reuses`, async () => {
     const s = fixture(); s.c.event = event; s.c.ref = 'refs/tags/v1';

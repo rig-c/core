@@ -22,7 +22,8 @@
 - `bench`:   run **once per candidate**, at the end, after the last edit to either
              spec. Neither spec was touched afterwards.
 
-Worktree: `~/Workspace/Firejune/rigc-wt-rung8` on `bench/rung8-run1`, per
+Historical worktree: `../rigc-wt-rung8` relative to the repository root,
+on `bench/rung8-run1`, per
 [`bench/runs/README.md`](../README.md).
 
 ## Honesty — one file worth declaring

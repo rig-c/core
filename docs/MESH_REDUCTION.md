@@ -3714,7 +3714,8 @@ variant's removal-only subset (43 → 33) and 33 / 6 control pass.
 The four suspects the card names were separated with an instrumented copy of
 `src/meshreduce.ts` that records, for every attempt, every required row and
 not only the first named — its results byte-identical to `reduceMesh`'s on the
-19 inputs recorded for stage D1 (on Nova) and on `MQ79`'s fixture (darwin).
+19 inputs recorded for stage D1 (on the remote job pool) and on
+`MQ79`'s fixture (darwin).
 Subjects: `MQ79`'s fixture, and demo/bottomwear with the other 8 public
 example inputs of that record; none is private art.
 
@@ -3971,8 +3972,8 @@ final-shaped on the source and the result — **34 of 34 texts identical**,
 every returned mesh identical; darwin, Apple M4, against the tree this
 change starts from (`6dcda87`). In suite, `MQ124` holds it on ten public subjects.
 
-**Cost [measured, #1280].** Each row on its own, Nova pool (WSL2, Bun 1.4.2,
-load 2.7), best of 5 (B\* and Δ best of 1), Δ and the load under the assumed
+**Cost [measured, #1280].** Separate runs per row on the remote job pool
+(WSL2, Bun 1.4.2, load 2.7), best of 5 (B\* and Δ best of 1), Δ and the load under the assumed
 amplitude above:
 
 | input | V / hull | grade | P10 | load | B\* (tests) | Δ |
@@ -4037,7 +4038,7 @@ hierarchy, and turns ±5° alone. Where pivots and hierarchy are known it
 matched the posed comparison to 1.0000 on `MQ79` and on the primary fixture.
 Its figures are a common yardstick between variants, not a verdict on any
 rig-parts attachment; D2 is where those are posed. Runs: darwin (Apple M4,
-load 5.2–14.1) and three Nova pool jobs (WSL2, load 1.2–4.4).
+load 5.2–14.1) and three jobs on the remote job pool (WSL2, load 1.2–4.4).
 
 | rank | mechanism | primary fixture, replayed (posed): total (b/i), selection / held out | demo/bottomwear, replayed [assumed motion] | cost | contract change |
 | --- | --- | --- | --- | --- | --- |
@@ -4547,7 +4548,7 @@ bounds and its refusals, a step's only `firstBlockingRow`, which names none
 of the five allocation rows, and the post-pass's only the same; no report
 carries those measurements' rows. (2) The cost: Δ reads B\* over the
 *measured mesh's own* hull, which changes at every step, so the memo that
-makes B\* over the source hull once per call does not apply. Nova pool
+makes B\* over the source hull once per call does not apply. Remote job pool
 (WSL2, Bun 1.4.2, 1-minute load 0.0–1.05), median of three alternating runs
 for the first two columns, one run for the third, the call's measurements
 counted on its rasters (`tally.uses`), under the assumed amplitude of
@@ -4857,7 +4858,7 @@ record for #1304, and its commands are at the end of this section.
   vetoed, so every TS figure is this envelope's, not parts's. The nine
   unweighted synthetic inputs take no envelope: 87 calls, 18 skipped. Inputs
   other than demo/\* and sample/\* are named by the record's label.
-- **The machine.** Nova pool jobs (WSL2 Linux 6.6, x86_64, 20 threads,
+- **The machine.** Jobs on the remote job pool (WSL2 Linux 6.6, x86_64, 20 threads,
   Bun 1.4.2), pooled rather than exclusive, the 1-minute load read at every
   call's start: 1.0–2.5 for the population run, 1.1–1.9 for the run the
   phase and outcome tables are read from. Each call in its own process: three
@@ -5026,7 +5027,7 @@ residual arrays). A per-process measurement, so it includes the harness
 
 ### CPU profile of the largest input
 
-`bun --cpu-prof-md` over the tree, demo/bottomwear (Nova pool, load 2.1–2.2;
+`bun --cpu-prof-md` over the tree, demo/bottomwear (remote job pool, load 2.1–2.2;
 4.0 s and 10.3 s of samples at 1 ms). Self time:
 
 | T (4.0 s) | | TS (10.3 s) | |
@@ -5054,8 +5055,8 @@ interpreted.
 `compareMeshesInMotion` of one candidate — the fixture's T reduction —
 against its source at the trial's schedule (`grid` and `irr` at 12 fps over
 ±5° bends, physics none, bound 1): the ramp walks 50 frames (setup, `idle`
-25 + 24), the bean 99 (setup, `bend_b` and `bend_c` 25 + 24 each). Same Nova
-job as the profiles; instrumented, median of three:
+25 + 24), the bean 99 (setup, `bend_b` and `bend_c` 25 + 24 each). Same pool job
+as the profiles; instrumented, median of three:
 
 | part | `MQ79` ramp: 160 × 48 mask, 51 ms | `MQ85` bean: 416 × 195 mask, 614 ms |
 | --- | --- | --- |
@@ -5144,7 +5145,7 @@ record's inputs:
 ```sh
 python3 make_instr.py <tree> <copy>        # the instrumented copy
 bash mkbundle.sh <bundle>                  # tree copy, instrumented copy, the recorded inputs, the harness
-cd <bundle>                                # then, on the Nova pool runner (pooled, never exclusive):
+cd <bundle>                                # then, on the remote job pool runner (pooled, never exclusive):
 bash batch.sh identity                     # tree / copy off / copy on, one hash each, 87 calls
 bash batch.sh check                        # the predicted floor and the veto's first crossing (RIGC1304_CHECK=1)
 bash batch.sh time                         # 3 tree + 3 instrumented runs per call, one process each, alternated
@@ -5203,11 +5204,11 @@ the same run under T with `protect.weightJump` 0.5 on the twelve weighted
 inputs — beyond the population — is identical on **12 of 12**, the audit
 comparing 17,425 added-edge lists and 10,571 triangulation edge sets (9.9
 million edges) with no difference. The `mesh-quality` and `mesh-compare`
-suites print the same text on main and the cut (Nova, `--jobs 4`) but for the
-wall-time clauses (`MQ18`, `MQ24`, `MQ43`, `MQ46`–`MQ48`, `MQ55`) and
+suites print the same text on main and the cut (remote job pool, `--jobs 4`) but for
+the wall-time clauses (`MQ18`, `MQ24`, `MQ43`, `MQ46`–`MQ48`, `MQ55`) and
 `MQ150`'s three lines.
 
-**Cost** [measured, #1307]. Nova pool (WSL2 Linux 6.6, x86_64, 20 threads,
+**Cost** [measured, #1307]. The pool (WSL2 Linux 6.6, x86_64, 20 threads,
 Bun 1.4.2), pooled rather than exclusive, the 1-minute load **2.4–8.4 (median
 4.0)** at the calls' starts — above §9's 1.0–2.5, other pool jobs running
 beside it. Each call in its own process, main and the cut alternated, three
@@ -5263,7 +5264,7 @@ of trees rather than a tree and its instrumented copy:
 
 ```sh
 bash mkbundle.sh <worktree> <bundle>     # main's src, the cut's src, the recorded inputs, the harness
-cd <bundle>                              # then, on the Nova pool runner (pooled, never exclusive):
+cd <bundle>                              # then, on the remote job pool runner (pooled, never exclusive):
 bash batch.sh identity                   # main / cut / cut under the audit, one hash each, 87 calls
 VARIANTS=TJ bash batch.sh identity       # T with weightJump 0.5 on the weighted inputs
 bash batch.sh time                       # 3 main + 3 cut runs per T and TS call, one process each, alternated
@@ -5317,8 +5318,8 @@ refused, **3,907** are refused by the structure first and were named by it, as
 0.5 on the twelve weighted inputs is identical on **12 of 12** (14,676
 attempts, 13,205 refused early, 4,960 of them structurally) with no difference.
 The `mesh-quality` and `mesh-compare` suites print the same text on main and
-the cut (Nova) but for the wall-time clauses (`MQ46`, `MQ47`, `MQ48` on that
-run), the `mesh-compare` summary's rss and children high-water, and
+the cut (remote job pool) but for the wall-time clauses (`MQ46`, `MQ47`,
+`MQ48` on that run), the `mesh-compare` summary's rss and children high-water, and
 `MQ151`'s lines.
 
 **The bound after C1** [measured, #1309]. A copy of the cut that, for every
@@ -5331,7 +5332,7 @@ on `scarf__handwear_l` and the with-region input, 16–25 % on the necks, 9 % on
 the ramp; under TS 8–36 % on the inputs that reach a removal. Same pool, the
 load 2.18–2.39; each figure the median of three runs' shares.
 
-**Cost** [measured, #1309]. Nova pool (WSL2 Linux 6.6, x86_64, 20 threads,
+**Cost** [measured, #1309]. The pool (WSL2 Linux 6.6, x86_64, 20 threads,
 Bun 1.4.2), pooled rather than exclusive, the 1-minute load **2.08–2.52
 (median 2.18)** at the calls' starts. Each call in its own process, main and
 the cut alternated, three of each; the median, ms; every call of a pair wrote
@@ -5385,7 +5386,7 @@ patched by one exact-text edit (`make_bound.py`).
 
 ```sh
 bash mkbundle.sh <worktree> <main meshreduce.ts> <bundle>  # main, the cut, the bound copy, the recorded inputs, the harness
-cd <bundle>                                 # then, on the Nova pool runner (pooled, never exclusive):
+cd <bundle>                                 # then, on the remote job pool runner (pooled, never exclusive):
 bash batch.sh identity                      # main / cut / cut audited and observed / main observed, 87 calls
 VARIANTS=TJ bash batch.sh identity          # T with weightJump 0.5 on the weighted inputs
 bash batch.sh bound                         # the bound after C1: 3 runs per T and TS call
@@ -5463,7 +5464,7 @@ is the last column, as its replay's count with its rewind loss.
 
 (sample/hair_back is `invalid-input` at admission, as in D1; its source hull has B\* — not measured, no reduction
 runs — and a relocated outline of 116 against 174 hull vertices.) Machines: the fixture's and the ramp's rows on
-Nova's pool (WSL2, 20 threads, Bun 1.4.2, 1-minute load 1.0–5.7), the example parts in three pool jobs (load
+the remote job pool (WSL2, 20 threads, Bun 1.4.2, 1-minute load 1.0–5.7), the example parts in three pool jobs (load
 0.7–1.9); every count is the tree's and repeats on any machine, and the fixture's row is printed by `MQ144` on darwin
 (Apple M4, load 6–14) with the same figures.
 
@@ -5580,7 +5581,7 @@ trial policy otherwise:
 | the same squares in the rigid zones, half-size 20–40 px | refused full | no | 137–172 |
 
 On `MQ79`'s ramp the full run already passes, and one region anywhere only adds vertices (42–63 against 28).
-Machines: the larger regions on Nova's pool (load 1.7–3.9), the 4 px regions on darwin (Apple M4, load 6–14).
+Machines: the larger regions on the remote job pool (load 1.7–3.9), the 4 px regions on darwin (Apple M4, load 6–14).
 
 **So the joint-proximity control at 2 regions reads 104 against the trial's 108**: it removes the rewind (the full
 run is accepted) at the price of holding 4 interior vertices where the floor needs 2, and the same squares placed in
@@ -5672,7 +5673,7 @@ not recorded. The stage-D1 record cannot widen this: its inputs carry no rig, so
 suite, `MQ154` holds the shape of that comparison on the fixture and the ramp.
 
 **Cost [measured, #1315].** `MQ154`'s two calls, with and without the field (with it: `maxSamples` 3),
-three calls each per process, three processes per mode alternated, on Nova's pool (WSL2, 20 threads, Bun 1.4.2, load
+three calls each per process, three processes per mode alternated, on the remote job pool (WSL2, 20 threads, Bun 1.4.2, load
 0.3–0.7); the medians of the three per-process medians, the report's text written in each:
 
 | subject | frames | without | with | per frame |
@@ -5797,7 +5798,7 @@ and the fixture, topwear and the two necks do not. On the larger parts the bound
 the small ones 2–3.5 px with `MQ_OVERSHOOT` (bound 3) refusing too — which is the same direction as the consumer's
 measurement: the count is held by the declared tolerance, and moving that value is what moves it.
 
-**Machine.** The fixture and the example parts in three Nova pool jobs (WSL2, 20 threads, Bun 1.4.2, 1-minute load
+**Machine.** The fixture and the example parts in three jobs on the remote job pool (WSL2, 20 threads, Bun 1.4.2, 1-minute load
 0.0–6.9); the ramp's row on darwin (Apple M4) after the window refusal was caught by name rather than thrown. Every
 count is the search's and the tree's and repeats on any machine (the L1 search run twice per input, identical); the
 largest search, Ls2 on demo/bottomwear, tested 574,280 chords in 26 s.

@@ -19,14 +19,14 @@ It is the contract both repositories agree on *before* any of stages B–D is
 written. **Stage B1 ([#1224](https://github.com/rig-c/core/issues/1224))
 implements the geometry measurement** — `measureMeshQuality` and the
 `mesh-quality-report/1` document, in `src/meshquality.ts`, re-exported through
-`rig-c/mesh` — and **stage B2 implements the reduction**: `reduceMesh`,
+`@rig-c/core/mesh` — and **stage B2 implements the reduction**: `reduceMesh`,
 in `src/meshreduce.ts`, re-exported through the same entry. Every clause the
 tree now does is marked **[implemented, #1224]** and says what the tree does,
 cited by path and symbol; *The reduction as implemented* gathers the choices B2
 had to make. **Stage C1 ([#1230](https://github.com/rig-c/core/issues/1230))
 implements the motion comparison** — `compareMeshesInMotion`, in
 `src/meshcompare.ts`, writing the `motion` section of the same document, and
-**stage C2** gives it its named entry, `rig-c/meshcompare`, held from an
+**stage C2** gives it its named entry, `@rig-c/core/meshcompare`, held from an
 install with no spine-core by the install smoke (`MQ45`), and builds the rest
 of its controls. Its clauses are marked **[implemented, #1230]**, and *The
 comparison as implemented* gathers the choices C1 and C2 had to make. The page exists
@@ -80,7 +80,7 @@ policy from a name.
 | Posing | spine-core poser and rigc's core poser behind one seam (`src/render_shared.ts`, `src/render_core.ts`); `sampleAnimation`, `sampleSetupPose` and the `Frame`/`Mesh` pieces with world vertices, page UVs, triangles (`src/render_shared.ts`) | a comparison over a common UV domain through the core poser (§3) — [implemented, #1230] `compareMeshesInMotion` poses through `poseRawSetup` and `poseRawAnimationEach` (`src/core/raw.ts`), the walk `src/render_core.ts` steps with, not through the render seam |
 | Two triangulations compared | **nothing.** `src/correspondence.ts` is a *bone* correspondence for `bonedist`/`bench` (`BONEDIST_SPEC`, `IDENTITY_CORRESPONDENCE`), not a mesh one | the whole of §3 — [implemented, #1230] `src/meshcompare.ts` |
 | Report document | `build-report/1` (`src/assertions/report.ts`): versioned, additive, byte-identical for one build, no time or path | `mesh-quality-report/1` (§2) — [implemented, #1224] for `measure`: `writeMeshQualityReport`, `src/meshquality.ts` |
-| Import surface for parts | `rig-c/mesh` holds 11 values and `AlphaMask` (RELEASING.md *The import surface*; `OBSERVED_SYMBOLS`, `scripts/install_smoke.ts`); `rig-c/render` needs spine-core installed beside it | `rig-c/mesh` (geometry) and `rig-c/meshcompare` (motion), §0 — [implemented, #1224] the geometry half: five values held by the smoke's `AGREED_IN_1224` row; [implemented, #1230] the motion half: `compareMeshesInMotion` and `uvCarriers` held by its `AGREED_IN_1230` row, and the comparison called from an install with no spine-core (`MESHCOMPARE_PROBE_SOURCE`, `scripts/install_smoke.ts`) |
+| Import surface for parts | `@rig-c/core/mesh` holds 11 values and `AlphaMask` (RELEASING.md *The import surface*; `OBSERVED_SYMBOLS`, `scripts/install_smoke.ts`); `@rig-c/core/render` needs spine-core installed beside it | `@rig-c/core/mesh` (geometry) and `@rig-c/core/meshcompare` (motion), §0 — [implemented, #1224] the geometry half: five values held by the smoke's `AGREED_IN_1224` row; [implemented, #1230] the motion half: `compareMeshesInMotion` and `uvCarriers` held by its `AGREED_IN_1230` row, and the comparison called from an install with no spine-core (`MESHCOMPARE_PROBE_SOURCE`, `scripts/install_smoke.ts`) |
 
 ## 0. Where the operations live, and what they never change
 
@@ -88,13 +88,13 @@ policy from a name.
 
 - The named entries are the API and a symbol is promised only once a
   dependant is observed using it (RELEASING.md *The import surface*). Through
-  `rig-c/mesh` parts is promised `traceAlphaOutline`, `traceOutline`,
+  `@rig-c/core/mesh` parts is promised `traceAlphaOutline`, `traceOutline`,
   `earClip`, `offsetPolygon`, `prunePolygon`, `simplifyClosedPolygon`,
   `signedArea`, `findSelfIntersection`, `checkHullOrder`,
   `measureAuthoredMeshFit`, `MeshError`, and the type `AlphaMask`.
   `measureContourFit`, `meshEdges`, `buildSegmentsLattice` and `segmentShares`
   are exported by the module and **not** promised.
-- `rig-c/render` loads `@esotericsoftware/spine-core` on import, which the
+- `@rig-c/core/render` loads `@esotericsoftware/spine-core` on import, which the
   package declares as a devDependency only since 2.0.0 (RELEASING.md, the
   paragraph after the *not promised* list). rigc's own core poser
   (`src/core/`, `src/render_core.ts`) links nothing of the runtime, and **has
@@ -120,11 +120,11 @@ policy from a name.
   `src/meshquality.ts`, `src/meshreduce.ts` and — since stage C1 —
   `src/meshcompare.ts` names any of the three operations, so
   nothing a build reaches calls them.
-- [agreed, rig-parts#126] **P1 — `rig-c/meshcompare` is accepted.**
+- [agreed, rig-parts#126] **P1 — `@rig-c/core/meshcompare` is accepted.**
   Geometry-only operations (`reduceMesh`, `measureMeshQuality`) are exported
-  from `rig-c/mesh`, which stays geometry-only; the motion comparison
+  from `@rig-c/core/mesh`, which stays geometry-only; the motion comparison
   (`compareMeshesInMotion`) is exported from the new named entry
-  `rig-c/meshcompare`. **Both** entries are held by an installed-package
+  `@rig-c/core/meshcompare`. **Both** entries are held by an installed-package
   smoke with spine-core absent, the scenario the smoke already runs for the
   observed entries. [implemented, #1230] `compareMeshesInMotion`
   is exported from `src/meshcompare.ts`, which links nothing of the runtime
@@ -1599,7 +1599,7 @@ export interface InfluenceLimits {
 ## The reduction as implemented (stage B2)
 
 [implemented, #1224] `reduceMesh(input: MeshReductionInput): MeshReductionResult`
-in `src/meshreduce.ts`, re-exported through `rig-c/mesh`, returns
+in `src/meshreduce.ts`, re-exported through `@rig-c/core/mesh`, returns
 `{ mesh: ReducedMesh | null, report }`. `ReducedMesh` is §1's `SourceMesh` in
 the canonical order plus `edges` (`meshEdges`), `indexMap` (source index →
 result index, `null` where removed), `inserted` (result indices the refinement
@@ -1823,7 +1823,7 @@ The rule:
   `src/meshreduce.ts` to no call of `measureMeshQuality` and one of
   `artRastersOf`.
 
-`measureMeshQualityWith` and `reduceMeshWith` are on `rig-c/mesh` only
+`measureMeshQualityWith` and `reduceMeshWith` are on `@rig-c/core/mesh` only
 because that entry re-exports both modules with `export *`; a symbol that is
 merely exported is not promised (RELEASING.md, *The import surface*), and the
 install smoke's observed list is unchanged. `src/meshrasters.ts` is on no named
@@ -2130,7 +2130,7 @@ tree does.
 [#1595](https://github.com/rig-c/core/issues/1595) adds
 `prepareMotionReference(input: MotionReferenceInput)` and
 `comparePreparedMotion(handle, input: MotionComparisonInput)` on the same
-`rig-c/meshcompare` entry. The first call parses and measures the reference,
+`@rig-c/core/meshcompare` entry. The first call parses and measures the reference,
 plans the schedule, samples the art and poses the reference once. The second
 call supplies candidates on that exact reference, schedule, attachments and
 options. An opaque handle keeps the prepared data private; a SHA-256 digest of
@@ -2232,7 +2232,7 @@ mesh's region UVs off its own attachment and never a page UV.
 - Explicit times walked once per phase — they would be the same poses under two
   ids; they carry no phase instead.
 - A section builder imported from `src/meshquality.ts` — `sectionOf` there is
-  internal, and exporting it would put it on `rig-c/mesh` through that
+  internal, and exporting it would put it on `@rig-c/core/mesh` through that
   entry's `export *`; `src/meshcompare.ts` applies §2's rule in its own
   `sectionOf`.
 - The version through `src/cli/shared.ts`'s `readVersion` in place — that module
@@ -2267,7 +2267,7 @@ it. One machine's reading, unpaired, as above.
   every frame), with the same document with hull vertex 0 moved
   `MESHCOMPARE_MOVED` units (that distance at every frame, at that vertex's
   UV — the fixture's bones carry no scale), and two candidates under one id,
-  refused as the `MeshReductionError` `rig-c/mesh` exports; the report has
+  refused as the `MeshReductionError` `@rig-c/core/mesh` exports; the report has
   to say `operation: 'compare'` and `poser.kind: 'core'` at the installed
   version.
 - `COMPARE_REFERENCE_FAILS` — *Independent evidence* above.
@@ -2368,7 +2368,7 @@ all fourteen `MeshReductionInput` fields, no region on any example input,
 weights by bone name, `deform` and `linkedMeshes` empty, `preset` null. 18 of
 18 calls return at both versions. Every value the automatic mode imports is
 held by a row of `OBSERVED_SYMBOLS` (`scripts/install_smoke.ts`) on
-`rig-c/mesh`; two types it uses, `SourceMesh` and `RefinementRegion`, are
+`@rig-c/core/mesh`; two types it uses, `SourceMesh` and `RefinementRegion`, are
 in no row (types are recorded, not held). rig-parts's other imports go
 through `./*.ts` courtesy keys rather than the named entries holding the same
 symbols. `compareMeshesInMotion` from the install over rig-parts's own demo
@@ -2515,7 +2515,7 @@ passes where this section's best measured candidates kept 30–53.
   (*Mechanism 2 — implemented*).
 - **No pose anywhere in the reduction.** `src/meshreduce.ts` links no poser
   (`CUR07` derives the linkers; `MQ26` holds which modules name the
-  operations), and `rig-c/mesh` stays geometry-only (§0, P1). `SourceMesh`
+  operations), and `@rig-c/core/mesh` stays geometry-only (§0, P1). `SourceMesh`
   carries weights by bone name and no bone transform (§6, *Insertion
   interpolates, then binds*).
 - **`FrameRef.role`** (`src/meshquality.ts`): `selection` exactly when the id
@@ -2875,7 +2875,7 @@ further down is kept as written; this subsection departs from it in the places
 it names, each with its reason.
 
 ```ts
-/** src/meshskinning.ts — on rig-c/mesh through src/mesh.ts's `export *`. */
+/** src/meshskinning.ts — on @rig-c/core/mesh through src/mesh.ts's `export *`. */
 export interface SkinningEnvelope {
   reference: string;                  // D0: the slot's bone (Q4). Its own terms are 0, so it may not be listed in `bones`.
   bones: SkinningEnvelopeBone[];      // every bone either mesh binds, other than `reference`, once each
@@ -2922,9 +2922,9 @@ grid — so pruning and quantisation are inside the value. Samples: §3's set at
 `art.threshold` — every art pixel centre, then every **source** hull UV —
 carried by `uvCarriers` in each mesh; a sample one mesh does not carry is
 listed by UV and left out (`samples.uncarried`). `uvCarriers` moved to
-`src/meshcarriers.ts` for this, a module that links no poser, so `rig-c/mesh`
+`src/meshcarriers.ts` for this, a module that links no poser, so `@rig-c/core/mesh`
 stays geometry-only (§0, P1) and the residual and `MQ_LOCAL_DEFORMATION` read
-one definition of the carrying triangle; `rig-c/meshcompare` re-exports it
+one definition of the carrying triangle; `@rig-c/core/meshcompare` re-exports it
 unchanged. `MeasureRow.skinning` (`SkinningDetail`) is written on this row when
 it is measured and on no other: the reading sentence; `source: { id, digest }`;
 `reference`; `samples: { measured, uncarried: { source, candidate } }`; at the
@@ -2974,7 +2974,7 @@ which also echoes `null`. A required row that is refused or not measurable
 leaves the geometry verdict `not-measured` and the candidate not accepted.
 
 **The helper.** `skinningEnvelopeBone(ranges): SkinningEnvelopeBone` on
-`rig-c/mesh` — rig-c's definition of `linear`, as parts asked (Q3). Input: the
+`@rig-c/core/mesh` — rig-c's definition of `linear`, as parts asked (Q3). Input: the
 chain from the skeleton's root to the reference (`referenceChain`) and from the
 reference's child down to the bone (`chain`), each bone a `BoneMotionRange`:
 `source: 'keys'`, its setup joint in drawing px (`pivot`), its local rotation
@@ -3004,7 +3004,7 @@ covers; the entry claims nothing outside it.
 **Example**, MQ79's ramp:
 
 ```ts
-import { measureMeshQuality, skinningEnvelopeBone, type BoneMotionRange } from 'rig-c/mesh';
+import { measureMeshQuality, skinningEnvelopeBone, type BoneMotionRange } from '@rig-c/core/mesh';
 
 const still = (bone: string, pivot: [number, number]): BoneMotionRange => ({
   bone, source: 'keys', pivot, rotate: [0, 0], scaleX: [1, 1], scaleY: [1, 1], translate: 0,
@@ -3156,7 +3156,7 @@ step to step instead of recomputing it. The proposal further down is kept as
 written; this subsection departs from it where it says so.
 
 ```ts
-/** src/meshskinning.ts — on rig-c/mesh through src/mesh.ts's `export *`. */
+/** src/meshskinning.ts — on @rig-c/core/mesh through src/mesh.ts's `export *`. */
 export interface ReductionSkinning {
   envelope: SkinningEnvelope;   // the measurement's own type
   maxResidual: number | null;   // drawing px, inclusive; null = declared absent: no step reads it, the result's row undeclared
@@ -3501,15 +3501,15 @@ export interface ReductionTargets {
   `compareMeshesInMotion` stays the acceptance; the residual only keeps the
   search where acceptance is likely.
 
-**Mechanism 3 — a motion-aware search.** It needs the poser, and `rig-c/mesh`
+**Mechanism 3 — a motion-aware search.** It needs the poser, and `@rig-c/core/mesh`
 links none and must not (§0, P1; the reduction is pure). So inside rigc it
-could only be a composed operation on `rig-c/meshcompare` — replay over
+could only be a composed operation on `@rig-c/core/meshcompare` — replay over
 `acceptedAt`, compare, keep the best — which is the same two calls parts can
 compose today, with no measurement rigc could add to them. It is proposed to
 stay in parts, with rigc's part being mechanism 2's promise. If parts wants it
 in rigc instead, the signature would be
 `reduceMeshInMotion(reduction: MeshReductionInput, comparison: Omit<MotionComparisonInput, 'candidates'>): MeshQualityReport`
-on `rig-c/meshcompare`, every frame it reads recorded as `selection`, and it
+on `@rig-c/core/meshcompare`, every frame it reads recorded as `selection`, and it
 would add no row and no bound of its own.
 
 ### Recommendation
@@ -3562,7 +3562,7 @@ exactly J*, and the rest wait for mechanism 1's card. The questions as asked:
   (as `MQ79` derives it), and does a `weightJump` just above it reduce and pass?
   Aggregate figures only.
 - **Q8.** Mechanism 3 stays in parts — agreed, or is a composed operation on
-  `rig-c/meshcompare` wanted?
+  `@rig-c/core/meshcompare` wanted?
 - **Q9.** For a replay chosen by comparison, is the held-out set parts will
   report the `irr` phase of the same animations, another animation, or none
   (`heldOutClaim: false`)?
@@ -3612,7 +3612,7 @@ inversion. The card is explicit that density is not a defect in itself — a
 curved contour and a bend legitimately need samples — and asks which of four
 things keeps the boundary dense beside a thinned interior: the boundary
 constraints, the initial sampling, the removal order and replay cut, or the
-triangulation. The ownership line is §7's: geometry in `rig-c/mesh`, the
+triangulation. The ownership line is §7's: geometry in `@rig-c/core/mesh`, the
 motion selection loop in parts.
 
 ### Existing
@@ -3686,7 +3686,7 @@ Against the replay's 191, C2 holds 114 fewer vertices and C3 89 fewer, each
 with a lower motion error, and **C0 keeps the source's boundary untouched and
 drops 81**: on this fixture the interior is the larger part of what the
 reduction leaves on the table. C0–C2 are existence proofs — the thinning poses
-every trial, which `rig-c/mesh` never does (§0) — not proposed mechanisms.
+every trial, which `@rig-c/core/mesh` never does (§0) — not proposed mechanisms.
 There is no single winner: C2 is fewest and has the worst triangles (minimum
 angle 3.5°, area P90 1,566 px², fans from three interior points to the rim); C3
 has 25 more vertices and the best shape of any reduced mesh measured, minimum
@@ -4138,7 +4138,7 @@ comes from a measurement above; none is settled by this page.
   allows; (iii) P13 is reopened so the bound reads against the traced art
   outline rather than the source hull — loosens the agreed meaning of a
   required row, and every recorded result's verdict would have to be re-taken;
-  (iv) a boundary simplification step in `rig-c/mesh` that chooses an outline
+  (iv) a boundary simplification step in `@rig-c/core/mesh` that chooses an outline
   jointly (one chord for a run of vertices) held to the art bounds and the
   declared deviation — loosens no bound, adds an operation whose removals are
   not one vertex at a time. Option (iv) as boundary runs taken as steps moved
@@ -4209,14 +4209,14 @@ comes from a measurement above; none is settled by this page.
   the vertices each step removed, or only the count per step — and is the
   prototype's ×6–10 cost acceptable while it is brought down?
 - **Q11.** Is a weight-aware removal order such as `dprio` rig-c's — a pose-free
-  default inside `rig-c/mesh`, behind an opt-in — or rig-parts's policy, passed
+  default inside `@rig-c/core/mesh`, behind an opt-in — or rig-parts's policy, passed
   in as an order? It reads weights only, and its ranking assumes every share
   change bends equally.
 
 ### Stage B — boundary runs as steps, and `acceptedAt` per operation [implemented, #1279]
 
 **Decided** [agreed, rig-parts#126, its answers to the questions above]: Q1 —
-option (iv), boundary runs taken as steps inside `rig-c/mesh`, under the
+option (iv), boundary runs taken as steps inside `@rig-c/core/mesh`, under the
 declared bounds and P13's reference meaning ((ii) is parts's own experiment;
 (i) and (iii) refused); Q6 — a run stays replayable and is held to parts's
 final motion comparison like every step, and no pre-step the replay cannot
@@ -4238,7 +4238,7 @@ accepted steps and the bisection lands earlier (sample/sleeves 190 + 2 →
 demo/bottomwear is refused outright, its unreduced source failing
 `MQ_INVERSION` against itself (one triangle, at `idle@grid@2.583333`), so no
 search runs. So Q1's answer is **option (iv) alone** — boundary runs taken as
-steps inside `rig-c/mesh`, held to the art bounds and the declared deviation,
+steps inside `@rig-c/core/mesh`, held to the art bounds and the declared deviation,
 judged by parts's motion comparison before acceptance (Q6) — with (i) and
 (iii) refused as before. Those figures are parts's, posted on rig-parts#126;
 none was re-measured here.
@@ -4359,7 +4359,7 @@ byte-exact and the non-monotone interval disclosed rather than prevented; Q4 —
 neither side promises that passing is monotone along the steps: rig-parts's
 search reports a passing prefix found by bisection, not necessarily the last,
 and re-compares the chosen step on the whole schedule; Q11 — the weight-aware
-order is rig-c's, pose-free, inside `rig-c/mesh` behind an opt-in.
+order is rig-c's, pose-free, inside `@rig-c/core/mesh` behind an opt-in.
 
 ```ts
 /** src/meshquality.ts — the input's two new fields; Retriangulation is in §2. */
@@ -6581,10 +6581,10 @@ not any stage's here.
   forbids cutting either out of one mesh (`traceOutline`, Euler's count), so
   "support" can only mean spanning a hole and bridging or refusing an island;
   §4 states that rather than promising more.
-- #1221 refers to *"runtime geometry facilities"* parts can use. The one
-  posing entry parts is promised, `rig-c/render`, needs spine-core; the
-  core poser that does not has no entry. §0 records the agreed new entry (P1),
-  [implemented, #1230] as `rig-c/meshcompare`.
+- #1221 refers to *"runtime geometry facilities"* parts can use. At the time,
+  the only promised posing entry for parts was `spine-rigc/render`, which required
+  spine-core. §0 records the new entry agreed in P1 and implemented in #1230,
+  now imported as `@rig-c/core/meshcompare`.
 - #1323 reads `COMPARE_UV_CARRIER_NOT_UNIQUE` on the full reduction of
   demo/bottomwear at spacing 12 and 18 as a fold in the result's UVs. Measured,
   it is not one: the refused sample lies on the shared edge in px and 1.35e-10

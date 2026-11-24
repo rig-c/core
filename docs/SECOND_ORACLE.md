@@ -430,7 +430,7 @@ a card of its own.
   rigc did not write; the no-bypass rule (no `--no-validate`, no escape, no API handing
   back ungated artifacts) is unchanged.
 - **What the core poses, now that a dependant poses through it.** A runtime-free web
-  player (rig-play) poses the model document through the named entry `rig-c/core`
+  player (rig-play) poses the model document through the named entry `@rig-c/core/core`
   (#1275, [RELEASING.md](../RELEASING.md) *The import surface*): a module that
   re-exports this core and adds nothing, so what it poses is what the gates above hold.
   Live track movement accepts an optional final array of exact physics constraint

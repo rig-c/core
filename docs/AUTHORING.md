@@ -148,7 +148,7 @@ commands take it and what its default is.
 | `bench <rung> --candidate <dir>` | one rung of the benchmark ladder <a id="cmd-bench"></a> |
 | `guide <RULE>` / `guide §<n>[.<m>[.<k>]] [--all]` | the guide's row for the rule a failure line names — every `FAIL` line, `vote --record` refusal, `ingest` finding and coded compile error ends with ` (see rigc guide <RULE>)`; only legacy uncoded library errors point at `§5.1` — or a section's heading, own prose and subsection index, read from the installed `docs/AUTHORING.md` when it runs. `--all` includes the subsection bodies; a leaf prints its full text either way. Sizes describe full ledger spans. `--all` with a rule is refused, exit 2; an unknown name is refused with the nearest real ones, exit 1 <a id="cmd-guide"></a> |
 | `skills install [--dir …] [--copy]` | links every agent skill this package and any installed `@rig-c/*` or rig-c alias package ship (`PACKAGE_ROOT/skills` and every `node_modules/@rig-c/*/skills/<name>/SKILL.md` and alias reachable from the project's `node_modules`) into `.agents/skills` (or `--dir`) as relative symlinks, or copies them with `--copy` — where Codex, Gemini CLI and Antigravity look — reporting which package each skill came from (`[<package>]`). In a consumer without `@rig-c/core` installed, reach the installer with `bunx @rig-c/core skills install`. A second run has nothing to do; an entry already there that is not this command's, or a duplicate skill name across two distinct packages (an alias or symlink resolving to the same `realpathSync` folder is deduplicated), is refused by name and nothing is written <a id="cmd-skills-install"></a> |
-| `review <dir> […]` | the human review of a build, handed to the `rig-review` bin of `@rig-c/review` installed beside the package; rigc does not depend on it and never installs it. `rigc review <dir> [--reference <video>] [--animation <name>] [--compare <dir>]` is `rig-review open <dir> …` with those flags 1:1 and prints the loopback URL to give a person; a first argument that is one of review's own words (`open`, `check`, `feedback`, `control`, `strip`, `compare`) or starts with `-` (`--help`, `--`) is handed over untouched. stdout is review's byte for byte, stderr review's plus the launcher's own refusals, the exit code review's. Refused by name, exit 2, before the bin starts: `REVIEW_OUTPUT_MISSING <path>` (the target is not a directory); `REVIEW_NOT_INSTALLED` with two lines, `bun add -d @rig-c/review` and `bunx @rig-c/review open <dir> …` carrying the flags given — the same on a terminal and off, with nothing installed or written; `REVIEW_BUN_TOO_OLD: Bun <found>, @rig-c/review needs <required>`, the floor read off the installed package's `engines.bun`; and an empty argument (`""`) under a Bun that drops one (Bun 1.2.0, measured by a probe), `rigc review: argument N is empty, and Bun <version>, the Bun running this, drops an empty argument when it starts a process — …`. docs/AUTHORING.md lists every line <a id="cmd-review"></a> |
+| `review <dir> […]` | the human review of a build, handed to the `rig-review` bin of `@rig-c/review` installed beside the package; rigc does not depend on it and never installs it. `rigc review <dir> [--reference <video>] [--animation <name>] [--compare <dir>]` is `rig-review open <dir> …` with those flags 1:1 and prints the loopback URL to give a person; a first argument that rigc recognizes as a review command (`open`, `check`, `feedback`, `control`, `strip`, `compare`) or starts with `-` (`--help`, `--`) is handed over untouched. stdout is review's byte for byte, stderr review's plus the launcher's own refusals, the exit code review's. Refused by name, exit 2, before the bin starts: `REVIEW_OUTPUT_MISSING <path>` (the target is not a directory); `REVIEW_NOT_INSTALLED` with two lines, `bun add -d @rig-c/review` and `bunx @rig-c/review open <dir> …` carrying the flags given — the same on a terminal and off, with nothing installed or written; `REVIEW_BUN_TOO_OLD: Bun <found>, @rig-c/review needs <required>`, the floor read off the installed package's `engines.bun`; and an empty argument (`""`) under a Bun that drops one (Bun 1.2.0, measured by a probe), `rigc review: argument N is empty, and Bun <version>, the Bun running this, drops an empty argument when it starts a process — …`. docs/AUTHORING.md lists every line <a id="cmd-review"></a> |
 
 `diff`, `bonedist`, `check` and `bench` measure against something you were given; the
 first three work on any reference you have, and `bench` is a repository workflow that needs a clone
@@ -497,11 +497,11 @@ reported `already linked`.
 `review` is the third, and it is a launcher: its body is the `rig-review` bin of
 `@rig-c/review`, a separate package rigc does not depend on and **never installs**.
 `rigc review <dir> [--reference <video>] [--animation <name>] [--compare <dir>]`
-hands over `open <dir> …` with those flags 1:1; a first argument that is one of
-rig-review's own words — `open`, `check`, `feedback`, `control`, `strip`,
-`compare`, or anything starting with `-` (`--help`, `-h`, and `--`, which hands
-the rest over as it is) — is handed over untouched. Nothing else is added: no
-`--reference` is derived, because no build rigc writes records the clip it was
+hands over `open <dir> …` with those flags 1:1. The launcher recognizes `open`,
+`check`, `feedback`, `control`, `strip` and `compare` as review commands. It hands
+over arguments untouched when the first word is one of those commands or begins
+with `-` (`--help`, `-h` or `--`, for example). The launcher derives no
+`--reference`, because no build rigc writes records the clip it was
 retargeted from. What comes back is review's: **stdout is review's stdout byte for
 byte** (the URL line an agent gives a person), stderr is review's plus only the
 launcher's own refusals, and the exit code is review's. The launcher relies on
@@ -1780,11 +1780,10 @@ written`, followed by `rigc repack: nothing was written to <out>; the work direc
 
 ### 0.5 Reading a build from code
 
-The named `rig-c/render-shared` entry promises the official renderer reads for
-checked consumers (issue #1561), available since 2.69.0; pin
-`>=2.69.0 <3.0.0`. It requires Bun and the candidate's real files, but imports
-no optional Spine runtime. The existing
-`rig-c/render` entry still eagerly imports that runtime.
+The named `@rig-c/core/render-shared` entry promises the official renderer reads for
+checked consumers (issue #1561). It requires Bun and the candidate's real files.
+The `@rig-c/core/render` entry imports the optional Spine runtime on load.
+The `render-shared` entry leaves that runtime unloaded.
 
 ```ts
 import { readFileSync } from 'node:fs';
@@ -1793,7 +1792,7 @@ import {
   loadCandidate, throughPoser, sampleSetupPose, sampleAnimation,
   pageFor, projector, rasterisePiece, renderFrame,
   type Viewport,
-} from 'rig-c/render-shared';
+} from '@rig-c/core/render-shared';
 
 const dir = 'build';
 const skeleton = join(dir, 'skeleton.json');
@@ -1838,7 +1837,7 @@ this entry. Unknown animation and missing `pageFor` page are `Error`s naming
 the requested name and available names. A forced-core flag keeps the existing
 deferred choice check; it alone does not prove `candidate.choice.core` exists.
 To use a Spine export or `forced: 'spine'`, install the runtime and explicitly
-import `rig-c/render` first; importing `render-shared` never registers it.
+import `@rig-c/core/render` first; importing `render-shared` never registers it.
 
 ## 1. The two files
 
@@ -5639,7 +5638,7 @@ it has not converged by then; `render --preroll` (§8.13) walks whole loops firs
 capture, an export, a test harness — is the render's case and takes the render's
 clock: `openTrack` and `openTracks` accept `clock`, what each step moves the physics
 clock by, and `physicsClockStep` (with `PHYSICS_CLOCK_LEAD`) is exported from
-`rig-c/core` to pass to it (issue #1396). It moves the physics alone — the track
+`@rig-c/core/core` to pass to it (issue #1396). It moves the physics alone — the track
 time, the animation time and the events stay on the steps, so the player keeps
 agreeing with `render` — and left out, a track steps the physics by the step itself,
 exactly as before. Which clock a player with a real clock uses is the player's
@@ -5647,7 +5646,7 @@ question, and rigc does not answer it.
 
 A player's `adjust` option on `openTrack` or `openTracks` receives
 `(locals, ctx)` (issue #1540). `LocalAdjustContext`, `LocalAdjust`,
-`AdjustableLocals` and `BoneLocals` are types promised through `rig-c/core`.
+`AdjustableLocals` and `BoneLocals` are types promised through `@rig-c/core/core`.
 The callback runs once per evaluated pose **after all track composition**,
 before world transforms, constraints and physics. A crossfade does not call it
 for the outgoing entry as well. Existing unary callbacks keep the same writes,
@@ -5755,7 +5754,7 @@ isolation, native per-constraint operations, empty/all/repeated selections and
 atomic named refusals; the existing `CO56`/`CO57` cover unscoped movement.
 
 For a live preview of one named constraint (issue #1541), both `LiveTrack` and
-`LiveTracks` on `rig-c/core` expose:
+`LiveTracks` on `@rig-c/core/core` expose:
 
 ```ts
 track.setPhysicsParameters('spring', { damping: 0.3, wind: 2 });
@@ -9274,7 +9273,7 @@ values move it.
 
 ### 8.8 Where two slots stop meeting — `render --seam`
 
-The `rig-c/seam` entry exports `seamGridOf(pair, rest, frame, pages)` and its
+The `@rig-c/core/seam` entry exports `seamGridOf(pair, rest, frame, pages)` and its
 `SeamGrid` return type alongside `seamsOf`. The reading uses this same helper:
 `cell` is the coarser setup texel's world side; `viewport` contains world bounds
 (y up), `scale = 1 / cell`, and pixel `width`/`height`. The raster origin is
@@ -13227,14 +13226,14 @@ art automatically and this reading changes no atlas mipmap settings.
 
 ## 14. Read a named mesh at setup
 
-`rig-c/core` promises `readSetupMesh(view, target)` and the types
+`@rig-c/core/core` promises `readSetupMesh(view, target)` and the types
 `SetupMeshTarget` and `SetupMesh` (issue #1538). It reads any named mesh or linked
 mesh, including one the setup pose does not select, without a player, animation
 step or change to the document's setup selection.
 
 ```ts
-import { readModel, underNoSkin, readSetupMesh } from 'rig-c/core';
-import type { SetupMeshTarget, SetupMesh } from 'rig-c/core';
+import { readModel, underNoSkin, readSetupMesh } from '@rig-c/core/core';
+import type { SetupMeshTarget, SetupMesh } from '@rig-c/core/core';
 
 const view = underNoSkin(readModel(modelText));
 const target: SetupMeshTarget = { slot: 'flag', attachment: 'alternate' };
@@ -13398,13 +13397,13 @@ frame: it resolves every name to an index once at load and overwrites typed
 arrays in place, so a steady-state frame allocates nothing. It computes every
 value with the oracle's own formulas in the oracle's order of operations, and it
 is held equal to the oracle at tolerance 0 rather than trusted; the oracle is not
-changed for it. It is imported from `rig-c/runtime`, an **experimental** entry
+changed for it. It is imported from `@rig-c/core/runtime`, an **experimental** entry
 (RELEASING.md, *The import surface*): not promised until it stabilises, so a
 minor may reshape it and a dependant pins an exact version.
 
 ```ts
-import { readModel, underNoSkin } from 'rig-c/core';
-import { compileRuntime, RuntimePose, RuntimeRefusal } from 'rig-c/runtime'; // experimental
+import { readModel, underNoSkin } from '@rig-c/core/core';
+import { compileRuntime, RuntimePose, RuntimeRefusal } from '@rig-c/core/runtime'; // experimental
 
 const view = underNoSkin(readModel(modelText));
 const model = compileRuntime(view, { ignore: ['events'] }); // throws RuntimeRefusal, every missing construct named
@@ -13608,7 +13607,7 @@ the consumer; core owns this protocol, without a browser dependency.
 ## 16. Compare sequential mesh candidates against one motion reference
 
 Programmatic callers that gate candidates one at a time can import
-`prepareMotionReference` and `comparePreparedMotion` from `rig-c/meshcompare`.
+`prepareMotionReference` and `comparePreparedMotion` from `@rig-c/core/meshcompare`.
 Pass the one-shot `MotionComparisonInput` without `candidates` to preparation,
 then pass each complete input with its candidate list to comparison. The handle
 reuses the reference's parsed build, art samples, carriers and poses only while

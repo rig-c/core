@@ -586,9 +586,12 @@ publication lint alone supplies no hosted no-cut runtime verdict.
 
 The action allowlist applies to jobs with a publication reader or publish.
 Admitted remote actions are checkout, setup-node, setup-bun, artifact
-upload/download, cache restore/save, release-please and the tree-verdict action.
-Their reviewed major tags or full SHAs are required. Tree-verdict requires a full
-SHA. Unknown actions and reusable calls in those jobs refuse with
+upload/download, cache restore/save and the tree-verdict action.
+The allowlist also retains `googleapis/release-please-action` for compatibility
+with the legacy parts and review publication fixtures. Core releases start with
+a manually pushed `vX.Y.Z` tag for a commit on `main`.
+Remote actions require their reviewed major tag or a full SHA. Tree-verdict
+requires a full SHA. Unknown actions and reusable calls in those jobs refuse with
 `ACTION_INVENTORY`, naming the found action and required identity/ref. Other CI
 jobs admit version bumps and unknown actions. The publisher-action denylist,
 including case-insensitive `JS-DevTools/npm-publish`, applies to every job.

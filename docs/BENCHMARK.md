@@ -1169,7 +1169,7 @@ build → read the report → fix → repeat loop, the map from every named fail
 the file that has to change, and the list of format features rigc refuses by name
 so you do not spend a loop discovering them. It travels **inside the npm package**
 too, so an agent working from an install has it on disk at
-`node_modules/rig-c/docs/AUTHORING.md`.
+`node_modules/@rig-c/core/docs/AUTHORING.md`.
 
 Compile by spelling out the paths. `--manifest` is optional; `--images <dir>` says
 where a rig spec's `image` references live (it overrides the rig's own `images`
@@ -1396,7 +1396,7 @@ docs/           AUTHORING.md (how to author a rig), BENCHMARK.md (this document)
                 LADDER.md (live rung status), SPEC_COVERAGE.md (format reference),
                 SURVEY_2026-08-22.md (the dated survey), feature_matrix.{csv,json}
 .github/        workflows/ — ci.yml (the gates), selftest-shards.yml (the sharded selftest
-                both call) and release.yml (release-please and the publish)
+                both call) and release.yml (gates and publishes on manually pushed vX.Y.Z tags)
 CONTRIBUTING.md how to propose a change; RELEASING.md — how a version is cut
 ```
 

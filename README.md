@@ -20,6 +20,12 @@ as an agent skill. Its canonical npm package is `@rig-c/core`, under the toolcha
 scope. `rig-c` is the convenience install name; `spine-rigc` is the legacy install
 name. Both remain published alongside it with the same product files.
 
+rigc is the compiler in the rig-c toolchain. [`@rig-c/parts`](https://github.com/rig-c/parts)
+turns a painting into the specs it compiles, [`@rig-c/play`](https://github.com/rig-c/play)
+plays the compiled model in a browser, [`@rig-c/review`](https://github.com/rig-c/review)
+is where a person looks at a build, and [`@rig-c/create`](https://github.com/rig-c/create)
+drives the whole cycle with an agent. rigc depends on none of them.
+
 ## What you get
 
 <p align="center">
@@ -595,6 +601,8 @@ material, like the gallery: a clone runs them.
 | `vote` | Make a ballot and record its answer. [`vote` in the CLI reference](docs/AUTHORING.md#cmd-vote) |
 | `pose` | Read part placements from a picture. [`pose` in the CLI reference](docs/AUTHORING.md#cmd-pose) |
 | `chainfit` | Read occluded parts through a candidate rig. [`chainfit` in the CLI reference](docs/AUTHORING.md#cmd-chainfit) |
+| `inspect` | Draw one pose as a labelled still, to ask the picture a question. [`inspect` in the guide](docs/AUTHORING.md#13-asking-the-picture-a-question--rigc-inspect) |
+| `texture-scale` | Name regions drawn far below their texture’s scale; a warning, never a refusal. [Texture scale in the guide](docs/AUTHORING.md#texture-scale--warning-only-region-reading) |
 | `diff` | Compare two skeletons structurally. [`diff` in the CLI reference](docs/AUTHORING.md#cmd-diff) |
 | `bonedist` | Measure per-bone world-transform distance. [`bonedist` in the CLI reference](docs/AUTHORING.md#cmd-bonedist) |
 | `check` | Compare a candidate against reference pictures. [`check` in the CLI reference](docs/AUTHORING.md#cmd-check) |

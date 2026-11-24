@@ -159,7 +159,7 @@ The release workflow now triggers on validated `vX.Y.Z` tag pushes and manual `w
 
 ### Features
 
-* **render:** name a region drawn far below its texture's scale ([#1664](https://github.com/rig-c/core/issues/1664)) ([f31a769](https://github.com/rig-c/core/commit/f31a769fe275d202d46882f67b84a77c5dc348d4)), closes [#1663](https://github.com/rig-c/core/issues/1663)
+* **render:** name a region drawn far below its texture's scale, as the `texture-scale` command ([#1664](https://github.com/rig-c/core/issues/1664)) ([f31a769](https://github.com/rig-c/core/commit/f31a769fe275d202d46882f67b84a77c5dc348d4)), closes [#1663](https://github.com/rig-c/core/issues/1663)
 
 ## [2.84.0](https://github.com/rig-c/core/compare/v2.83.0...v2.84.0) (2026-10-30)
 

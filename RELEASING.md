@@ -307,10 +307,12 @@ manual folder `prepublishOnly` hook remains in package.json. The tarball jobs
 invoke the named reader once and invoke no folder hook.
 
 The reader-to-last-publish interval must retain the same checkout and tracked
-source tree. The workflow contains no later checkout. The publication lint checks
-its declared commands and order, but does not detect every arbitrary source/tree
-mutation between those steps; that boundary is tracked by core#1709. `CUR122`
-retains every alias pack/comparison and both confirmation calls.
+source tree. The workflow contains no later checkout. In declared workflows,
+publication lint rejects publisher actions and refuses known tree-rewriting
+actions and unmodeled run steps between the reader and the last publish.
+The lint checks step order and bounded syntax. Arbitrary side effects remain
+outside those checks. `CUR122` retains every alias pack/comparison and both
+confirmation calls.
 
 **An alias is kept, and never retired by a release step** ([#1278](https://github.com/rig-c/core/issues/1278)). It stays for as long as links from outside this repository point at it — the npm page, forum threads, articles, badges other READMEs copied — and it never gets a version of its own: every cut publishes every name from one run, or none. Retiring it (deprecating, un-publishing, letting the name fall behind the package's version line) is not a release step and not a convention; it is a separate card that opens only after three things are written down in it: **npm history** — what is lost when the alias stops (download history, the package page, the provenance links of every version published under it); **external links** — an inventory of what points at the alias name and where each resolves after the rename and after a retirement (GitHub redirects the repository URL; nothing but the alias covers the npm page); and **what the alias says** — one sentence in the README naming the package's current name, and no `npm deprecate`, because a banner on every install is a retirement wearing an alias's name. The same policy holds for every package of the toolchain (`spine-rigc` → `rig-c`, `spine-parts` → `rig-parts` → `@rig-c/parts`, `spine-html` → `rig-play` → `@rig-c/play`).
 
@@ -671,39 +673,40 @@ command line instead, where it applies to the automated publish only.
 the tarball, `exports` decides what a dependant may import out of it. The
 **named entries are the API**, and an entry is named because a dependant was
 observed needing the module behind it — the map is the list, and this table
-adds what the map cannot say. Each entry is spelled under the package's name;
-an install of an alias carries the same map, so `spine-rigc/plate` and
-`@rig-c/core/plate` are the same entry as `rig-c/plate`:
+adds what the map cannot say. The first column gives the `package.json`
+`exports` keys. Under `@rig-c/core`, `./plate` resolves as `@rig-c/core/plate`.
+Installs under the `rig-c` and `spine-rigc` aliases carry the same map, so
+`rig-c/plate` and `spine-rigc/plate` resolve to the same entry.
 
 | entry | named by | needs installed beside the package |
 | --- | --- | --- |
-| `rig-c/plate` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
-| `rig-c/font5x7` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
-| `rig-c/transform` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
-| `rig-c/render` | [#1167](https://github.com/rig-c/core/issues/1167) | `@esotericsoftware/spine-core` |
-| `rig-c/render-shared` | [#1561](https://github.com/rig-c/core/issues/1561), agreed for parts#713 | nothing; Spine inputs require the explicitly registered `rig-c/render` side |
-| `rig-c/png` | [#1167](https://github.com/rig-c/core/issues/1167) | nothing |
-| `rig-c/compile` | [#1167](https://github.com/rig-c/core/issues/1167) | nothing |
-| `rig-c/rig` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
-| `rig-c/mesh` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
-| `rig-c/errors` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
-| `rig-c/meshcompare` | [#1230](https://github.com/rig-c/core/issues/1230), [#1595](https://github.com/rig-c/core/issues/1595), by agreement | nothing |
-| `rig-c/core` | [#1275](https://github.com/rig-c/core/issues/1275) | nothing |
-| `rig-c/runtime` | [#1591](https://github.com/rig-c/core/issues/1591), requested for play#200 — **experimental, not promised until it stabilises** | nothing |
-| `rig-c/cli` | [#859](https://github.com/rig-c/core/issues/859) | resolved and spawned rather than imported; which entry it runs is the table in *What an install has* above |
-| `rig-c/package.json` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
-| `rig-c/deformgen` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/environment` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/motion` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/passthrough` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/stop` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/meshrasters` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/seam` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below; `seamGridOf` and `SeamGrid` (#1740) expose the exact pair raster | nothing |
-| `rig-c/folds` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/model` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
-| `rig-c/LICENSE` | retained exact document key, #1668 | read as text |
-| `rig-c/bin/rigc` | retained exact launcher key, #1668 | resolved and spawned with Node and Bun |
-| `rig-c/tools/png_probe` | retained exact PNG helper key, #1668 | nothing |
+| `./plate` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
+| `./font5x7` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
+| `./transform` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
+| `./render` | [#1167](https://github.com/rig-c/core/issues/1167) | `@esotericsoftware/spine-core` |
+| `./render-shared` | [#1561](https://github.com/rig-c/core/issues/1561), agreed for parts#713 | nothing; Spine inputs require the explicitly registered `@rig-c/core/render` side |
+| `./png` | [#1167](https://github.com/rig-c/core/issues/1167) | nothing |
+| `./compile` | [#1167](https://github.com/rig-c/core/issues/1167) | nothing |
+| `./rig` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
+| `./mesh` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
+| `./errors` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
+| `./meshcompare` | [#1230](https://github.com/rig-c/core/issues/1230), [#1595](https://github.com/rig-c/core/issues/1595), by agreement | nothing |
+| `./core` | [#1275](https://github.com/rig-c/core/issues/1275) | nothing |
+| `./runtime` | [#1591](https://github.com/rig-c/core/issues/1591), requested for play#200 — **experimental, not promised until it stabilises** | nothing |
+| `./cli` | [#859](https://github.com/rig-c/core/issues/859) | resolved and spawned rather than imported; which entry it runs is the table in *What an install has* above |
+| `./package.json` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
+| `./deformgen` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./environment` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./motion` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./passthrough` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./stop` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./meshrasters` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./seam` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below; `seamGridOf` and `SeamGrid` (#1740) expose the exact pair raster | nothing |
+| `./folds` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./model` | [#1668](https://github.com/rig-c/core/issues/1668), consumer audit below | nothing |
+| `./LICENSE` | retained exact document key, #1668 | read as text |
+| `./bin/rigc` | retained exact launcher key, #1668 | resolved and spawned with Node and Bun |
+| `./tools/png_probe` | retained exact PNG helper key, #1668 | nothing |
 
 The CLI observation surface is promised by agreement for parts#839 before its
 adoption (#1642):
@@ -712,18 +715,13 @@ adoption (#1642):
 | --- | --- | --- |
 | `rigc render --extremes-only` | Same `extremes.json` and readable `extremes.png` bytes as `--extremes`, per selected set; no ordinary frames, contact sheet or `frames.json`. Existing posing, subset and viewport options apply; other diagnostic/sheet output flags are refused by name. | rigc builds use the core entry; Spine exports require the runtime as for `render` |
 
-⚠️ **Three things are spelled `rig-c/core`, and they are different things.**
-The **import** `rig-c/core` is the row above: one entry of this package under
-the `rig-c` alias, the posing core, the `./core` key of `exports`. The
-**package** `@rig-c/core` is the whole of this package under the toolchain's
-npm scope — the `name` in `package.json` (*Publishing* above, issue
-[#1347](https://github.com/rig-c/core/issues/1347)) — so installed under the
-canonical name the same entry is imported as `@rig-c/core/core`; `@rig-c/core` on its
-own names no entry at all, since `exports` has no `.` key. The **repository**
-[`rig-c/core`](https://github.com/rig-c/core) is where this tree lives on
-GitHub. The entry was not renamed when the other two arrived, and nothing about
-it changed: an import is always written in code with the package name in front
-of the entry, so the first two never meet in one specifier.
+The posing core is imported as `@rig-c/core/core` through the `./core`
+export key. With the `rig-c` compatibility alias, the import is `rig-c/core`.
+The **package** name `@rig-c/core` is the `name` in `package.json`
+(*Publishing* above, issue [#1347](https://github.com/rig-c/core/issues/1347)).
+Imports use a named subpath because `exports` has no `.` key. The
+**repository** [`rig-c/core`](https://github.com/rig-c/core) is where this
+tree lives on GitHub.
 
 🔒 **The contract.** Renaming or removing a named entry, **or a symbol the
 smoke lists for it**, is a breaking change — and so is a listed symbol
@@ -752,23 +750,23 @@ alike:
 
 | entry | values held | types observed |
 | --- | --- | --- |
-| `rig-c/rig` | `parseRigSpec`, `splitRigSkin`, `RIG_SPEC_VERSION`, `RIG_SKIN_CONSTRAINT_KEYS`, `RIG_KEYS` | `RigSpec`, `RigBone`, `RigConstraint`, `RigSkin`, `RigSkinConstraintKey` |
-| `rig-c/mesh` | `traceAlphaOutline`, `traceOutline`, `earClip`, `offsetPolygon`, `prunePolygon`, `simplifyClosedPolygon`, `signedArea`, `findSelfIntersection`, `checkHullOrder`, `measureAuthoredMeshFit`, `MeshError` | `AlphaMask` |
-| `rig-c/errors` | `CompileError` | — |
+| `@rig-c/core/rig` | `parseRigSpec`, `splitRigSkin`, `RIG_SPEC_VERSION`, `RIG_SKIN_CONSTRAINT_KEYS`, `RIG_KEYS` | `RigSpec`, `RigBone`, `RigConstraint`, `RigSkin`, `RigSkinConstraintKey` |
+| `@rig-c/core/mesh` | `traceAlphaOutline`, `traceOutline`, `earClip`, `offsetPolygon`, `prunePolygon`, `simplifyClosedPolygon`, `signedArea`, `findSelfIntersection`, `checkHullOrder`, `measureAuthoredMeshFit`, `MeshError` | `AlphaMask` |
+| `@rig-c/core/errors` | `CompileError` | — |
 
-and, through `rig-c/transform`, `computeExactFrameTransforms`,
+and, through `@rig-c/core/transform`, `computeExactFrameTransforms`,
 `normaliseDegrees` and `toWorld` beside the three #1167 listed. The table in
 the smoke is the one that is checked; this one is its reading for a person.
 
 A later observation of the same entry is its own row, as the rule above says:
 rig-parts's automatic mesh mode (its `c03dd8a`, PR #131) was read calling
 `reduceMesh` with the types `SourceMesh` and `RefinementRegion` from
-`rig-c/mesh`, which the agreed row had not recorded — found by rigc#1238's
+`spine-rigc/mesh`, which the agreed row had not recorded — found by rigc#1238's
 D1 over the installed package, recorded by #1241. At that observation the other path imports used the `./*.ts` courtesy; 3.0 removes it. The migration table below records the current consumer audit.
 
 🤝 **Agreed rows are promised before observation**
 ([#1224](https://github.com/rig-c/core/issues/1224)). Through
-`rig-c/mesh`, `measureMeshQuality`, `writeMeshQualityReport`,
+`@rig-c/core/mesh`, `measureMeshQuality`, `writeMeshQualityReport`,
 `MeshReductionError`, `MESH_QUALITY_REPORT_SPEC` and `reduceMesh` are held, and
 the report's and the reduction's types recorded, because the dependant agreed in writing to import them from
 that entry before either side had written them (docs/MESH_REDUCTION.md, P1;
@@ -780,7 +778,7 @@ promised.
 
 The segments preflight is also promised by agreement
 ([#1450](https://github.com/rig-c/core/issues/1450), parts#378), through
-`rig-c/mesh`. A dependant preflights with the functions the compiler calls,
+`@rig-c/core/mesh`. A dependant preflights with the functions the compiler calls,
 rather than maintaining a second lattice, distance or reach rule:
 
 | promised signature | return and units |
@@ -881,12 +879,12 @@ before — measured against `32e5cc1` on the 18 inputs of the stage-D1 record,
 posed comparisons (docs/MESH_REDUCTION.md, §8 *G — what it derives from* and
 *Stage B — the amplitude on a comparison*). A reader of `gradation` as a
 `number` reads `number | null | undefined`. `ComparePlant` and
-`compareMeshesInMotionPlanted` on `rig-c/meshcompare` are the suite's
+`compareMeshesInMotionPlanted` on `@rig-c/core/meshcompare` are the suite's
 plants, merely exported, so by the rule above not promised.
 
 The region pixel set computed by scanline
 ([#1263](https://github.com/rig-c/core/issues/1263)) changes no promised
-symbol and no output, and what it adds to the module behind `rig-c/mesh` —
+symbol and no output, and what it adds to the module behind `@rig-c/core/mesh` —
 `closedPolygonCentres` and `inClosedPolygon`, with `authoredMeshFitOf` from
 #1262 and the two plant types — is merely exported, so by the rule above it is
 not promised.
@@ -899,7 +897,7 @@ gains one row, `MQ_SKINNING_RESIDUAL`, the key `MeasureRow.skinning` on that
 row only, and `effective.skinning`, the echo. `skinningEnvelopeBone` — the
 helper that turns declared rotation and scale ranges into an envelope entry,
 which the dependant asked to be rig-c's so that both sides read one
-definition of `linear` (rig-parts#126, Q3) — is held through `rig-c/mesh`
+definition of `linear` (rig-parts#126, Q3) — is held through `@rig-c/core/mesh`
 under the `AGREED_IN_1294` row, with `SkinningEnvelope`,
 `SkinningEnvelopeBone`, `SkinningResidualInput`, `SkinningDetail`,
 `SkinningEcho`, `BoneMotionRange` and `EnvelopeBoneRanges` recorded. A call
@@ -907,7 +905,7 @@ without the field writes every byte as before — measured against `e948469` on
 the 18 inputs of the stage-D1 record, 70 of 70 reduction reports, meshes and
 measurements (docs/MESH_REDUCTION.md, §7 *Mechanism 1 — implemented, the
 measurement half*). `uvCarriers` is now defined in `src/meshcarriers.ts`
-and re-exported from `rig-c/meshcompare` as it was, so the `AGREED_IN_1230`
+and re-exported from `@rig-c/core/meshcompare` as it was, so the `AGREED_IN_1230`
 row reads the same function. `skinningResidual`, `termsAt`,
 `skinningSamplesOf`, `validateSkinning`, `sourceMeshDigest`,
 `skinningEchoOf`, `SKINNING_READING`, the plant types and the two planted
@@ -931,7 +929,7 @@ samples (docs/MESH_REDUCTION.md, §7 *Mechanism 1 — implemented, the reducer
 half*).
 The field's type, `ReductionSkinning`, is reached through the recorded
 `MeshReductionInput`; the smoke records no new name, because no dependant has
-named one. What the reducer half adds beside it on `rig-c/mesh` —
+named one. What the reducer half adds beside it on `@rig-c/core/mesh` —
 `SkinningCarry`, `CarryPlant`, `CarryTally`, `CarryReading`, `CarryCheck`,
 `CARRY_TOLERANCE`, `TermsMesh`, `SkinningContract`, `skinningContract`,
 `sampleResidual`, `envelopeTerms`, `validateReductionSkinning`, and the
@@ -998,7 +996,7 @@ does `KeptPlant`, a member of `ReductionPlant`.
 
 🤝 **The same agreement names a second entry**
 ([#1230](https://github.com/rig-c/core/issues/1230)). The contract puts the
-motion comparison on an entry of its own, `rig-c/meshcompare`, and says
+motion comparison on an entry of its own, `@rig-c/core/meshcompare`, and says
 it needs nothing beside the package — the core is its only poser
 (docs/MESH_REDUCTION.md, P1 and P2). Through it `compareMeshesInMotion` and
 `uvCarriers` are held, and `MotionComparisonInput`, `BuiltCandidate` and
@@ -1008,7 +1006,7 @@ taken away, the smoke runs one comparison from the install on the build it
 just wrote — the flag mesh against itself (0 at every frame), against the same
 document with one hull vertex moved (that distance, at every frame), and two
 candidates under one id (refused as the `MeshReductionError` that
-`rig-c/mesh` exports) — and holds the report to `operation: 'compare'`
+`@rig-c/core/mesh` exports) — and holds the report to `operation: 'compare'`
 and the core poser at the installed version
 (`SMOKE_MESHCOMPARE_COMPARES_FROM_AN_INSTALL_WITH_NO_SPINE_CORE`, the
 contract's `MQ45`). Its line prints the comparison's frames, samples and wall
@@ -1026,17 +1024,17 @@ supplied separately for each call.
 ([#1275](https://github.com/rig-c/core/issues/1275)). rig-play, the
 successor of spine-html, poses `skeleton.model.json` with rigc's own core and
 links no Spine runtime; it was seen importing the core's files through the
-`./*.ts` courtesy (removed in 3.0), and `rig-c/render` — the one named
-entry that poses — needs the runtime. So `rig-c/core` names the poser:
+`./*.ts` courtesy (removed in 3.0), and `@rig-c/core/render` — the one named
+entry that poses — needs the runtime. So `@rig-c/core/core` names the poser:
 `src/core/entry.ts`, a module that only re-exports, so the core's files keep
 their names and the entry moves with them. Observed in rig-play, issue #1275
 (`OBSERVED_IN_1275`):
 
 | entry | values held | types observed |
 | --- | --- | --- |
-| `rig-c/core` | `readModel`, `underSkin`, `underNoSkin`, `CoreInputError`, `CORE_DOCUMENT_SPEC`, `CORE_DOCUMENT_SPECS`, `CORE_BLEND_MODES`, `activeBones`, `poseRawSetup`, `poseRawAnimation`, `poseRawAnimationEach`, `loopedTime`, `setupBounds`, `poseWalkSetup`, `poseLoopingWalk`, `documentPageLookup`, `drawnRegions`, `regionPageUvs`, `meshPageUvs`, `readUvSequences`, `clipThrough`, `clipShapeOf`, `convexWhy`, `REGION_UVS`, `REGION_TRIANGLES`, `eventsFired` | `CompiledDocument`, `RawPose`, `RawBone`, `RawDrawn`, `RawClip`, `RawClipped`, `RawEvent`, `RawReset`, `WalkPose`, `CoreSlotRow`, `CoreBlendMode`, `ClipShape`, `ClipResult`, `DrawnRegion`, `UvPage`, `UvRegion`, `UvSource`, `ModelPage`, `ModelPageRegion` |
+| `@rig-c/core/core` | `readModel`, `underSkin`, `underNoSkin`, `CoreInputError`, `CORE_DOCUMENT_SPEC`, `CORE_DOCUMENT_SPECS`, `CORE_BLEND_MODES`, `activeBones`, `poseRawSetup`, `poseRawAnimation`, `poseRawAnimationEach`, `loopedTime`, `setupBounds`, `poseWalkSetup`, `poseLoopingWalk`, `documentPageLookup`, `drawnRegions`, `regionPageUvs`, `meshPageUvs`, `readUvSequences`, `clipThrough`, `clipShapeOf`, `convexWhy`, `REGION_UVS`, `REGION_TRIANGLES`, `eventsFired` | `CompiledDocument`, `RawPose`, `RawBone`, `RawDrawn`, `RawClip`, `RawClipped`, `RawEvent`, `RawReset`, `WalkPose`, `CoreSlotRow`, `CoreBlendMode`, `ClipShape`, `ClipResult`, `DrawnRegion`, `UvPage`, `UvRegion`, `UvSource`, `ModelPage`, `ModelPageRegion` |
 
-🤝 **A second `rig-c/core` row is promised by request**
+🤝 **A second `@rig-c/core/core` row is promised by request**
 ([#1276](https://github.com/rig-c/core/issues/1276)): `openTrack`, with the
 types `LiveTrack` and `TrackOptions` — the live track the rig-play 1.0 plan asked
 for on that issue (a player steps once per frame by a `dt` it does not know in
@@ -1066,7 +1064,7 @@ the symbols an entry exports, and none was added.
 
 The additive evaluation context requested by
 [#1540](https://github.com/rig-c/core/issues/1540) promises one more type through
-`rig-c/core`: `LocalAdjustContext` (`REQUESTED_IN_1540`). `LocalAdjust` now takes
+`@rig-c/core/core`: `LocalAdjustContext` (`REQUESTED_IN_1540`). `LocalAdjust` now takes
 `(locals, ctx)` with readonly `trackTime: number | null`,
 `animation: string | null` and `globalTime: number`. The first two identify the
 current track-0 entry, with unwrapped seconds starting at 0; no entry means
@@ -1084,7 +1082,7 @@ That runtime probe does not type-check consumers.
 ([#1396](https://github.com/rig-c/core/issues/1396)): `physicsClockStep` and
 `PHYSICS_CLOCK_LEAD`, the render's physics clock (issue
 [#1380](https://github.com/rig-c/core/issues/1380)), which the player asked
-to import from `rig-c/core` so that it can pass it to the live tracks' new
+to import from `@rig-c/core/core` so that it can pass it to the live tracks' new
 option before it could be seen doing so (`REQUESTED_IN_1396`). The option
 itself — `clock` on `TrackOptions` and `TracksOptions`, what each step moves
 the physics clock by — is additive on types the rows above already name: left
@@ -1109,7 +1107,7 @@ closure gained no module (`CUR123`).
 
 | entry | values promised | types promised |
 | --- | --- | --- |
-| `rig-c/core` | methods on `LiveTrack` and `LiveTracks`: `setPhysicsParameters`, `readPhysicsParameters`, `clearPhysicsParameters` | `PhysicsParameters`, `PhysicsParameterPatch`, `PhysicsParameterRead` |
+| `@rig-c/core/core` | methods on `LiveTrack` and `LiveTracks`: `setPhysicsParameters`, `readPhysicsParameters`, `clearPhysicsParameters` | `PhysicsParameters`, `PhysicsParameterPatch`, `PhysicsParameterRead` |
 
 These methods are additive on the already promised track types. Patches are per
 instance, applied after authored/keyed/slider fields and before integration;
@@ -1126,7 +1124,7 @@ types, exercise all six fields, and refuse a partially invalid patch atomically.
 
 | entry | values promised | types promised |
 | --- | --- | --- |
-| `rig-c/core` | `readSetupMesh` | `SetupMeshTarget`, `SetupMesh` |
+| `@rig-c/core/core` | `readSetupMesh` | `SetupMeshTarget`, `SetupMesh` |
 
 `readSetupMesh(view, { slot, attachment, skin? })` reads selected or unselected
 mesh and linked-mesh setup world vertices, detached triangles and hull. Omitted
@@ -1161,12 +1159,12 @@ about the evaluation changed, so no pose moved. Both live in
 gained no module (`CUR123`).
 
 The promise is "no runtime, and nothing a browser lacks", so it is held where
-that is true. With the runtime taken away, the smoke imports `rig-c/core`
+that is true. With the runtime taken away, the smoke imports `@rig-c/core/core`
 from the install and calls `readModel` then `poseRawSetup` on the build it
 just wrote (`SMOKE_CORE_POSES_FROM_AN_INSTALL_WITH_NO_SPINE_CORE`: the
 fixture's bones in order, the `hand` bone's world matrix with determinant 1,
 and `readModel("{}")` refused as the `CoreInputError` the entry exports). Then
-it bundles `import { readModel, poseRawSetup } from 'rig-c/core'` with vite —
+it bundles `import { readModel, poseRawSetup } from '@rig-c/core/core'` with vite —
 library mode, one entry, the browser build vite makes by default, no node
 polyfill, at the version this tree's `bun.lock` resolves, installed into a
 directory of its own and never into the install — and runs **the bundle**
@@ -1203,7 +1201,7 @@ one clear pixel inside (16 vertices enclosing 16 px, `holePixels` 1),
 `measureAuthoredMeshFit` on a mesh over half of an opaque mask, and
 `RIG_SPEC_VERSION` and `RIG_KEYS` against the fixture's own spec. The
 refusal is read **across the package boundary**: it has to be an instance
-of the `CompileError` that `rig-c/errors` exports, or a dependant that
+of the `CompileError` that `@rig-c/core/errors` exports, or a dependant that
 catches it by its class misses it. The `fork-compile-error` plant gives the
 packed `src/rig.ts` a `CompileError` of its own — same name, same message,
 every build still green — and the probe has to go red alone, naming the
@@ -1215,7 +1213,7 @@ not the implementation module's whole namespace:
 
 | entry | values held | types recorded |
 | --- | --- | --- |
-| `rig-c/render-shared` | `loadCandidate`, `throughPoser`, `sampleAnimation`, `sampleSetupPose`, `pageFor`, `projector`, `rasterisePiece`, `renderFrame`; failure classes `CandidateAtlasError`, `CandidatePairError`, `PoserChoiceError`, `SlotSubsetError`, `SpineRuntimeError`, `CoreInputError` | `Candidate`, `SkeletonFacts`, `PoserChoice`, `PoserName`, `MakeCorePoser`, `Poser`, `Posed`, `PoseSource`, `PoseOptions`, `DrawOptions`, `SkinRoster`, `SlotSubset`, `Frame`, `BoneSnapshot`, `AttachmentPose`, `AttachmentRest`, `Piece`, `PieceCommon`, `PieceTexture`, `UvWindow`, `Quad`, `Mesh`, `ClipSource`, `Viewport`, `EmitPixel`, `Plate`, `RGBA`, `EnvironmentStep`, `EnvironmentChange` |
+| `@rig-c/core/render-shared` | `loadCandidate`, `throughPoser`, `sampleAnimation`, `sampleSetupPose`, `pageFor`, `projector`, `rasterisePiece`, `renderFrame`; failure classes `CandidateAtlasError`, `CandidatePairError`, `PoserChoiceError`, `SlotSubsetError`, `SpineRuntimeError`, `CoreInputError` | `Candidate`, `SkeletonFacts`, `PoserChoice`, `PoserName`, `MakeCorePoser`, `Poser`, `Posed`, `PoseSource`, `PoseOptions`, `DrawOptions`, `SkinRoster`, `SlotSubset`, `Frame`, `BoneSnapshot`, `AttachmentPose`, `AttachmentRest`, `Piece`, `PieceCommon`, `PieceTexture`, `UvWindow`, `Quad`, `Mesh`, `ClipSource`, `Viewport`, `EmitPixel`, `Plate`, `RGBA`, `EnvironmentStep`, `EnvironmentChange` |
 
 These are the existing official functions and classes, with their existing
 arguments and results. Importing the entry registers no Spine side, even if the
@@ -1224,7 +1222,7 @@ model, skeleton digest, atlas placement and rosters agree; missing or mismatched
 inputs retain the named refusal and its reason. A /3 build can use its own page
 placement without an atlas. Spine inputs, explicit Spine choice and a core
 fallback require the registered side: a consumer asking for those explicitly
-imports `rig-c/render`, which still eagerly imports the optional runtime.
+imports `@rig-c/core/render`, which still eagerly imports the optional runtime.
 `throughPoser` reports the chosen poser and reason beside its value; its callback
 must write nothing, since the existing registered fallback can rerun it.
 `loadCandidate` retains its deferred forced-core refusal order; callers must not
@@ -1236,7 +1234,7 @@ again with the runtime beside the package. It reads setup and animation region
 and mesh geometry, page selection, projected and rasterised pixels, and the skin
 roster. Missing model/page/atlas, digest/atlas/roster mismatch, unknown
 animation/skin/slot/page and an unregistered Spine side are refused by name.
-Runtime-present calls explicitly load `rig-c/render` and compare core and Spine
+Runtime-present calls explicitly load `@rig-c/core/render` and compare core and Spine
 poses and pixels. `drop-render-shared-entry` removes the named key;
 `stub-render-shared-sampler` keeps `sampleSetupPose` callable but makes it return
 no frames, which only the installed call probe must catch. `CUR135` holds the
@@ -1248,7 +1246,7 @@ This additive entry is a **minor** release contract, first published in 2.69.0
 Consumers can pin `>=2.69.0 <3.0.0`. A source or packed-candidate result is not
 a postcut registry confirmation.
 
-🧪 **`rig-c/runtime` is experimental, and not promised until it stabilises**
+🧪 **`@rig-c/core/runtime` is experimental, and not promised until it stabilises**
 ([#1591](https://github.com/rig-c/core/issues/1591), requested for play#200).
 It is the in-place runtime poser, stage 0 of that issue: one model compiled at
 load, one pose per skeleton overwritten in place, held equal to the oracle at
@@ -1263,24 +1261,24 @@ nothing beside the package:
 
 | entry | values read | types recorded |
 | --- | --- | --- |
-| `rig-c/runtime` | `compileRuntime`, `RuntimePose`, `RuntimeRefusal`, `RuntimeInputError`, `RUNTIME_FEATURES`, `RUNTIME_STAGE` | `RuntimeModel`, `RuntimeOptions`, `RuntimeMissing`, `RuntimeFeature`, `RuntimeAnimation`, `RuntimeAttachment`, `RuntimeSlot` |
+| `@rig-c/core/runtime` | `compileRuntime`, `RuntimePose`, `RuntimeRefusal`, `RuntimeInputError`, `RUNTIME_FEATURES`, `RUNTIME_STAGE` | `RuntimeModel`, `RuntimeOptions`, `RuntimeMissing`, `RuntimeFeature`, `RuntimeAnimation`, `RuntimeAttachment`, `RuntimeSlot` |
 
-It carries `rig-c/core`'s browser promise, which is not experimental: its
+It carries `@rig-c/core/core`'s browser promise, which is not experimental: its
 static value closure reaches only `src/runtime/` and `src/core/`, names no
 package and no node builtin by value, and leaves those two only for a type
-import of `src/model.ts` (`CUR136`, beside `rig-c/core`'s `CUR123`). The day it
+import of `src/model.ts` (`CUR136`, beside `@rig-c/core/core`'s `CUR123`). The day it
 stabilises, its row loses the marker, and the contract above starts covering it
 in that release's notes.
 
 What is **not** promised, so nobody reads more into an entry than is there:
 
 - **Any other export of an entry's module.** An entry exposes the whole file
-  behind it; only the symbols the smoke lists are held. `rig-c/compile`
+  behind it; only the symbols the smoke lists are held. `@rig-c/core/compile`
   is the compiler's whole module and promises one function out of it.
-- **Types, by the smoke.** `BoneTransform` (through `rig-c/transform`),
-  `BoneSnapshot`, `Frame` and `Mesh` (through `rig-c/render`), the five
-  `Rig*` types (through `rig-c/rig`), `AlphaMask` (through
-  `rig-c/mesh`) and the nineteen through `rig-c/core` were observed and are **not held by the smoke**: a type
+- **Types, by the smoke.** `BoneTransform` (through `@rig-c/core/transform`),
+  `BoneSnapshot`, `Frame` and `Mesh` (through `@rig-c/core/render`), the five
+  `Rig*` types (through `@rig-c/core/rig`), `AlphaMask` (through
+  `@rig-c/core/mesh`) and the nineteen through `@rig-c/core/core` were observed and are **not held by the smoke**: a type
   does not exist at run time, and checking one against the install needs
   `tsc`, which neither the package nor the `installs` job has — that job
   installs no dev dependencies, on purpose. A renamed type surfaces in the
@@ -1289,7 +1287,7 @@ What is **not** promised, so nobody reads more into an entry than is there:
   hand, for the one dependant it names.
 - **Unlisted package subpaths** — refused since 3.0; use the migration table below.
 
-`rig-c/render` loads `@esotericsoftware/spine-core` when it is imported,
+`@rig-c/core/render` loads `@esotericsoftware/spine-core` when it is imported,
 and since 2.0.0 the package declares the runtime as a devDependency only
 ([#1061](https://github.com/rig-c/core/issues/1061)), so `npm install
 rig-c` does not bring it. A dependant importing that entry installs
@@ -1403,8 +1401,8 @@ that has a `package.json` of its own, and runs it in three phases (issue
    called (*The import surface*).
 3. **The runtime taken away again.** `rigc --version` names `cli_core.ts` once
    more, every listed entry is imported again and held to whether it needs
-   the runtime, `rig-c/meshcompare` compares meshes of the round-tripped
-   build from the install (*The import surface*, `MQ45`), `rig-c/core`
+   the runtime, `@rig-c/core/meshcompare` compares meshes of the round-tripped
+   build from the install (*The import surface*, `MQ45`), `@rig-c/core/core`
    poses its setup pose from the install and again from a vite browser
    bundle of the entry that resolved no node module (*The import surface*,
    [#1275](https://github.com/rig-c/core/issues/1275)), and `rigc render`

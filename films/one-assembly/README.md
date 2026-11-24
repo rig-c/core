@@ -68,9 +68,10 @@ tree clean — everything a run produces is covered by the repository `.gitignor
 `rigc-demo@2x.gif`; the ones that ship are `assets/rigc-demo.gif` and
 `assets/rigc-demo@2x.gif`, and this README's numbers are those files'.
 
-Step 3b's `spec/check_framing.ts` imports `rig-c/render`, which links
-`@esotericsoftware/spine-core`. The published package does not depend on it, so the
-import resolves it from this repository's own install: run `bun install` at the
+With step 0's `rig-c@2.64.3` pin, step 3b's `spec/check_framing.ts` imports
+`rig-c/render`, which links `@esotericsoftware/spine-core`. The published package
+does not depend on it, so the import resolves it from this repository's own
+install: run `bun install` at the
 repository root before `./run.sh`.
 
 **The art is generated, not committed.** `art/parts/` and `art/svg/` are step 1's output
@@ -92,7 +93,7 @@ One adaptation for the repository, and it is mechanical:
 | --- | --- | --- |
 | `art/make_parts.ts`, `art/mock.ts`, `spec/make_specs.ts`, `spec/check_framing.ts`, `gif/assemble_gif.ts` | each resolves its own directory with `fileURLToPath(new URL('…', import.meta.url))` where it used to read `new URL('…', import.meta.url).pathname` | `URL.pathname` is percent-encoded. Under a checkout whose path holds a space or a non-ASCII character these scripts created a sibling directory literally named `My%20Rigs`, wrote the parts into it, and then failed with `ENOENT` on a directory that exists — so the film could not be re-run from such a checkout at all ([#558](https://github.com/rig-c/core/issues/558)). The URL each script builds is untouched; only its conversion to a path is. On an ASCII path the two spellings return the same string, trailing slash included, so no value any script computes moves and no output changes. |
 
-Then the re-cut on the current package, with the name it ships under in the band and a 2x
+Then the re-cut on the pinned package, with the name it ships under in the band and a 2x
 file beside the 1x ([#1503](https://github.com/rig-c/core/issues/1503)):
 
 | File | Changed | Why |

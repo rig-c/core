@@ -93,9 +93,10 @@ finished GIFs land here as `rigc-keypose.gif` and `rigc-keypose@2x.gif`; the one
 ship are `assets/rigc-keypose.gif` and `assets/rigc-keypose@2x.gif`, and this README's
 numbers are those files'.
 
-Step 3's `spec/check_framing.ts` and `spec/check_face_clear.ts` import `rig-c/render`,
-which links `@esotericsoftware/spine-core`. The published package does not depend on it,
-so the import resolves it from this repository's own install: run `bun install` at the
+With step 0's `rig-c@2.64.3` pin, step 3's `spec/check_framing.ts` and
+`spec/check_face_clear.ts` import `rig-c/render`, which links
+`@esotericsoftware/spine-core`. The published package does not depend on it, so
+the import resolves it from this repository's own install: run `bun install` at the
 repository root before `./run.sh`.
 
 **playwright-core** is not a dependency of this repository. Either

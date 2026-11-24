@@ -683,8 +683,8 @@ Live rung status is
 ## Contributing
 
 Issues are the ledger; see [CONTRIBUTING.md](https://github.com/rig-c/core/blob/main/CONTRIBUTING.md) for what a change
-has to clear before it lands. Releases are cut by release-please —
-[RELEASING.md](https://github.com/rig-c/core/blob/main/RELEASING.md).
+has to clear before it lands. Releases are cut by manually pushing a `vX.Y.Z` tag
+for a commit on `main` as described in [RELEASING.md](https://github.com/rig-c/core/blob/main/RELEASING.md).
 
 ## Licence
 

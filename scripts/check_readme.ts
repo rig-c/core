@@ -47,6 +47,11 @@ export function readmeFaults(text: string, cap = README_WORD_CAP): string[] {
       if (!(README_HEADINGS as readonly string[]).includes(name)) faults.push(`README_HEADING: README.md:${index + 1} has unlisted ## heading ${JSON.stringify(name)}`);
     }
     if (line.includes('|') && /(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)/u.test(line)) faults.push(`README_TABLE_DATE: README.md:${index + 1} has a YYYY-MM-DD inside a table cell`);
+    // A link or image to a file of this repository is a relative path: the package page renders it
+    // against the `repository` field, so the absolute form is one more string to keep right.
+    for (const match of line.matchAll(/https:\/\/(?:github\.com\/rig-c\/core\/(?:blob|tree|raw)\/|raw\.githubusercontent\.com\/rig-c\/core\/)[^\s)"'>]*/gu)) {
+      faults.push(`README_LINK_ABSOLUTE_SAME_REPOSITORY: README.md:${index + 1} links ${match[0]}; write the path relative to the repository root`);
+    }
     prose.push(line);
   }
   for (const match of prose.join('\n').matchAll(/\b(?:measured|read)\s+on\s+20\d*/giu)) {

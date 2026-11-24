@@ -21,6 +21,8 @@ const plants: Array<[string, string, string]> = [
   ['empty document', '\n\t', 'README_EMPTY'],
   ['duplicate link text', '[Build guide](first) and [Build guide](second)', 'README_LINK_TEXT_DUPLICATE'],
   ['generic link text', '[ReFeReNcE](docs/AUTHORING.md#0-the-loop)', 'README_LINK_TEXT_GENERIC'],
+  ['absolute link to a file of this repository', '[Gate guide](https://github.com/rig-c/core/blob/main/docs/GATE.md#rows)', 'README_LINK_ABSOLUTE_SAME_REPOSITORY'],
+  ['absolute image of this repository', '<img src="https://raw.githubusercontent.com/rig-c/core/main/assets/banner.svg" alt="banner" />', 'README_LINK_ABSOLUTE_SAME_REPOSITORY'],
 ];
 for (const [name, text, code] of plants) {
   test(`plant ${name} is refused by ${code}`, () => {
@@ -61,4 +63,9 @@ test('generic labels are case-insensitive exact visible text, not descriptive ph
     expect(readmeFaults(`[${label}](target)`).some((fault) => fault.startsWith('README_LINK_TEXT_GENERIC:'))).toBe(true);
   }
   expect(readmeFaults('[Reference frames](frames) and [Docs for rig authors](guide)')).toEqual([]);
+});
+
+test('links to other repositories, issues, other hosts and fenced examples are not same-repository faults', () => {
+  expect(readmeFaults('[Parts guide](https://github.com/rig-c/parts/blob/main/README.md) and [an issue](https://github.com/rig-c/core/issues/1) and [the site](https://rig-c.github.io/) and [Gate guide](docs/GATE.md)')).toEqual([]);
+  expect(readmeFaults('## Commands\n```md\n[Gate guide](https://github.com/rig-c/core/blob/main/docs/GATE.md)\n```\n')).toEqual([]);
 });

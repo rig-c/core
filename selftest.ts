@@ -74789,9 +74789,9 @@ interface DocLink {
  *
  * ⭐ The third is not hypothetical padding: **every image in README.md is an HTML
  * `<img>` tag**, so a check that read only markdown syntax would cover none of
- * them. They are absolute `raw.githubusercontent.com` URLs today and so they all
- * pass, which is exactly the state in which the hole is invisible — the next one
- * written relative is the one that would ship broken.
+ * them. They are relative paths, and PKG02 holds each to a file the repository
+ * tracks — the README is the package page, which renders a relative image from
+ * the repository rather than from the installed copy.
  *
  * Anchor-only targets, absolute URLs and protocol-relative URLs drop out here:
  * none of them resolves through the filesystem, so none of them can be a link to
@@ -74866,6 +74866,23 @@ function expandShippedSet(root: string, allowlist: string[]): { shipped: Set<str
   return { shipped, unreadable };
 }
 
+/**
+ * The relative links of the shipped docs that point at nothing a reader can reach.
+ *
+ * README.md is the package page, rendered against the repository, so its links
+ * are held to `inRepository`; every other shipped doc is read from an installed
+ * copy and held to `ships`. A link that leaves the repository is dead for both.
+ */
+function deadShippedDocLinks(
+  links: DocLink[],
+  ships: (path: string) => boolean,
+  inRepository: (path: string) => boolean,
+): DocLink[] {
+  return links.filter(
+    (link) => link.resolved === null || !(link.doc === 'README.md' ? inRepository(link.resolved) : ships(link.resolved)),
+  );
+}
+
 function runShippedDocSuite(): number {
   console.log('\n── the published package\'s own links (issue #333) ──');
   let bad = 0;
@@ -74912,13 +74929,19 @@ function runShippedDocSuite(): number {
       'PKG02 pass while checking nothing, so the numbers it stands on are asserted here first',
   );
 
-  const dead = links.filter((link) => link.resolved === null || !shipsToo(link.resolved));
+  // The README is the package page: the registry renders its relative links and images against
+  // the `repository` field (links at `blob/HEAD` with the anchor kept, images from the raw host —
+  // read on published pages for both Markdown and HTML forms), so a README link is held to what
+  // the repository tracks. Every other shipped doc is read from an installed copy and keeps the
+  // packed set.
+  const tracked = new Set(trackedFiles(root));
+  const dead = deadShippedDocLinks(links, shipsToo, (path) => tracked.has(path) || [...tracked].some((file) => file.startsWith(`${path}/`)));
   say(
     'PKG02_A_SHIPPED_DOC_RELATIVE_LINKS_ONLY_WHAT_ALSO_SHIPS',
     dead.length === 0,
     dead.length === 0
       ? `${links.length} relative link(s) across ${docs.length} shipped doc(s) all resolve to files that ship`
-      : `${dead.length} of ${links.length} relative link(s) point outside the published package:\n` +
+      : `${dead.length} of ${links.length} relative link(s) point outside the published package (README.md: outside the repository's tracked files):\n` +
         dead
           .map(
             (link) =>
@@ -74935,6 +74958,32 @@ function runShippedDocSuite(): number {
     'a relative link in a shipped doc resolves inside `node_modules/rig-c/`, where a file outside `files` is ' +
       'not there at all — and the repository, where the file IS where the link says, is the one place the defect ' +
       'cannot be seen. Found three times before anything checked: #222, #330 and #332',
+  );
+
+  const plant = (doc: string, resolved: string | null): DocLink => ({ doc, line: 1, target: resolved ?? '../outside.md', resolved });
+  const plantShips = (path: string): boolean => path === 'docs/SHIPPED.md';
+  const plantTracked = (path: string): boolean => path === 'docs/SHIPPED.md' || path === 'docs/REPOSITORY_ONLY.md';
+  const planted = deadShippedDocLinks(
+    [
+      plant('README.md', 'docs/SHIPPED.md'),
+      plant('README.md', 'docs/REPOSITORY_ONLY.md'),
+      plant('README.md', 'docs/NOWHERE.md'),
+      plant('README.md', null),
+      plant('docs/SHIPPED.md', 'docs/SHIPPED.md'),
+      plant('docs/SHIPPED.md', 'docs/REPOSITORY_ONLY.md'),
+      plant('docs/SHIPPED.md', null),
+    ],
+    plantShips,
+    plantTracked,
+  ).map((link) => `${link.doc} -> ${String(link.resolved)}`);
+  const plantedWant = ['README.md -> docs/NOWHERE.md', 'README.md -> null', 'docs/SHIPPED.md -> docs/REPOSITORY_ONLY.md', 'docs/SHIPPED.md -> null'];
+  say(
+    'PKG03_THE_README_LINKS_WHAT_THE_REPOSITORY_TRACKS_AND_EVERY_OTHER_SHIPPED_DOC_ONLY_WHAT_SHIPS',
+    planted.length === plantedWant.length && planted.every((entry, at) => entry === plantedWant[at]),
+    `planted 7 links, refused ${planted.length}: ${planted.join('; ') || 'none'}`,
+    'the two rules sit in one filter, so a slip in the README branch either lets a guide link repository-only ' +
+      'material again (dead in every install) or refuses the README a link the package page resolves; the plant ' +
+      'holds both directions, and a README link to a path the repository does not track stays refused',
   );
 
   return bad;

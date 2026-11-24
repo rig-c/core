@@ -219,8 +219,12 @@ catalogues, dated or machine-specific figures, version history, or licence text
 beyond a pointer to NOTICE.md. **A feature PR adds at most one line to it.**
 Move detail to the appropriate guide rather than growing the landing page; keep
 inbound heading anchors as one-sentence link stubs and repoint content pins.
-Package-relative links must target shipped files; use absolute GitHub links for
-repository-only material. `scripts/check_readme.ts` enforces the fixed word cap,
+In README.md, links and images to files of this repository are relative paths,
+whether or not the file ships: the package page renders them against the
+`repository` field (owner's ruling 2026-11-24, measured that day on published
+pages). In every other shipped document, package-relative links must target
+shipped files, because the installed copy resolves nothing else; use absolute
+GitHub links there for repository-only material. `scripts/check_readme.ts` enforces the fixed word cap,
 level-two heading allowlist and dated-measurement exclusions; its planted-failure
 controls run in CI. Do not raise the cap to accommodate a feature paragraph.
 

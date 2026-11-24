@@ -75,7 +75,7 @@ which is also repository material and not in the published package,
 *What a run may read* — the prompt that starts a run quotes them
 outright, which is the copy that binds.
 
-Repository maintainers can run the full selftest on Nova with
+Repository maintainers can run the full selftest on the remote job pool with
 `bun run verify:nova -- --label "<issue + purpose>" --owner "<who>"
 --session "<session id>" [--bun <version>]`. This is checkout tooling, not an
 installed `rigc` command. `NOVA_RUN` names `nova-run.sh`, or it is found on PATH.

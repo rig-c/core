@@ -141,8 +141,8 @@ not pinned in CI — older `1.4.x` releases are untested until a report arrives.
 
 From a source checkout, `bun run verify:nova -- --label "<issue + purpose>"
 --owner "<who>" --session "<session id>" [--bun <version>]` sends the full
-selftest to the Nova pool (`NOVA_RUN` names the runner, or `nova-run.sh` is on
-PATH). `--bun 1.4.0` selects that exact stable release. Before upload, the hand
+selftest to the remote job pool (`NOVA_RUN` names the runner, or
+`nova-run.sh` is on PATH). `--bun 1.4.0` selects that exact stable release. Before upload, the hand
 fetches Bun's official `SHASUMS256.txt` and checks that the Linux x64 baseline
 archive is available; on the pool it downloads the pinned archive, verifies its
 SHA-256, checks its executable's version, and puts that private Bun first on PATH

@@ -248,7 +248,7 @@ Evidence digests (SHA-256, private raw locations omitted):
 
 ## Stage 3 CPU microbench (2026-10-27)
 
-This is the scoped [#1589](https://github.com/rig-c/core/issues/1589) CPU measurement for runtime stage 3, not another browser capture. The inputs are the paired public `spineboy/walk` and `raptor/walk` models, Spine exports and atlases. Nova ran Bun 1.4.4 on an Intel Core Ultra 7 265K under the farm's exclusive admission. No renderer, player or adapter is loaded. Both fixtures exercise IK/transform constraints; these timings do not measure the new physics/slider workloads. Those have independent tolerance-zero and allocation controls.
+This is the scoped [#1589](https://github.com/rig-c/core/issues/1589) CPU measurement for runtime stage 3, not another browser capture. The inputs are the paired public `spineboy/walk` and `raptor/walk` models, Spine exports and atlases. The remote job pool host ran Bun 1.4.4 on an Intel Core Ultra 7 265K under the farm's exclusive admission. No renderer, player or adapter is loaded. Both fixtures exercise IK/transform constraints; these timings do not measure the new physics/slider workloads. Those have independent tolerance-zero and allocation controls.
 
 `tools/runtime_stage3_bench.ts` uses the existing microbench's asset reader and official spine-core 4.3.13 arm. Each launch retains 300 same-frame pairs after 120 warmup pairs at 1/60 s, alternating AB/BA, with 1 or 100 instances phased by `(i * 0.07) % 1`. A/A compares identical runtime arms; A/B compares official A with runtime B. AA1/AB1/AA2/AB2 ran first, then the fixed doubling rule reached eight launches of each kind because some rows remained unresolved. It stopped there, without waiting for machine silence.
 
@@ -281,7 +281,7 @@ Eight of the sixteen rows remain unresolved. In particular, the 100-instance spi
 
 Before AA1, the 30 µs world-stage work plant shifted that stage by 29.969 µs, timeline by -0.163 µs and geometry by -0.0015 µs. The separate uninstrumented allocation child read 0 B/frame; its object plant read 32.768 B/frame. Allocation is collector-off heap growth (`BUN_JSC_useGC=0`), after 3,000 warmup frames, the least of three 4,000-frame batches. Stage-three physics and slider-physics controls independently also read 0 B/frame and detected their plants. Timing-wrapper allocations are not represented as zero.
 
-Evidence SHA-256 (raw files retained privately on Nova):
+Evidence SHA-256 (raw files retained privately on the pool host):
 
 | Record | SHA-256 |
 | --- | --- |
@@ -423,8 +423,8 @@ calibration and all correction/verification raw samples. Run the one 128-pair
 diagnostic next, then pass the exact calibration unchanged to AA1/plant1 through
 AA5/plant5. Tool and config digests must match, and the calibration must explicitly
 record admission. Every output path must be new; existing
-receipts are refused. Linux x64 timing belongs on the exclusive Nova pool, whose
-15-minute deadline includes install and capture. Calibration forecasts the full
+receipts are refused. Linux x64 timing belongs on the remote job pool under exclusive
+admission. The 15-minute deadline includes install and capture. Calibration forecasts the full
 512-pair, interleaved-only, two-fixture budget from fresh verification wall time,
 with 50% headroom plus 60 seconds. Its forecast must be below 840 seconds; an
 unresolved plant or forecast refuses acceptance before AA1. Missing CPU, failed
@@ -513,9 +513,9 @@ The separately labelled 128-pair diagnostic recorded both real grouped direction
 
 All raw CPU/wall samples, both reducers, all checkpoints, actual execution orders, output checksums, source manifests and sealed receipts are retained privately. No product code was optimized. These commands did not certify a renderer, GPU, browser or universal hardware result.
 
-Post-series untimed preflight and controller controls returned 0 (preflight meter reads: 0). Ordinary-pool typecheck, lint and the unmodified full selftest also returned 0 (94 suites, 2,735 printed case lines); this correctness verification is separate from the failed measurement bars.
+Post-series untimed preflight and controller controls returned 0 (preflight meter reads: 0). Typecheck, lint and the unmodified full selftest also returned 0 on the remote job pool under ordinary admission (94 suites, 2,735 printed case lines); this correctness verification is separate from the failed measurement bars.
 
-| Run | Nova job ID | Runner exit |
+| Run | Pool job ID | Runner exit |
 | --- | --- | ---: |
 | AA1 | `20261029T160027Z-428688ab1d08407d904a809e2d828405` | 0 |
 | plant1 | `20261029T160609Z-2d4101b43c954f40aa98388c7ba90381` | 0 |

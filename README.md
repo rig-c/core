@@ -24,7 +24,9 @@ rigc is the compiler in the rig-c toolchain. [`@rig-c/parts`](https://github.com
 turns a painting into the specs it compiles, [`@rig-c/play`](https://github.com/rig-c/play)
 plays the compiled model in a browser, [`@rig-c/review`](https://github.com/rig-c/review)
 is where a person looks at a build, and [`@rig-c/create`](https://github.com/rig-c/create)
-drives the whole cycle with an agent. rigc depends on none of them.
+drives the whole cycle with an agent. rigc depends on none of them. The
+[getting-started guide](https://github.com/rig-c/getting-started#the-whole-thing-in-one-glance)
+shows what each package takes and gives.
 
 ## What you get
 

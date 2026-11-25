@@ -1,7 +1,7 @@
 /** Core's rigc-run/1 receipt follows rig-run/1 with a complete input array. */
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CompileError } from '../errors.ts';
 import { readPackageMeta } from '../package_meta.ts';
 
@@ -62,10 +62,45 @@ export function runStampPath(out: string, file: string): string {
 /** `render`'s own receipt, at the root of `--out`: a name no `build` writes, so a render into a build's directory leaves its `run.json` alone. */
 export const RENDER_RUN_FILE = 'render-run.json';
 export const RENDER_RUN_SPEC = 'rigc-run/2';
+/** The temporary name the record is written under and renamed from, beside it. */
+export const RENDER_RUN_TEMP_FILE = `${RENDER_RUN_FILE}.tmp`;
+
+/**
+ * Whether a path relative to a render's `--out` is its receipt — the one file every byte comparison of a render
+ * leaves out, because it holds wall-clock times. One predicate, so no comparison spells the exclusion its own way.
+ */
+export function isRenderRunRecord(relativePath: string): boolean {
+  return relativePath === RENDER_RUN_FILE;
+}
+
+/**
+ * The frame-set directory, if any, that would be the record's path or its temporary one on a case-insensitive
+ * filesystem — refused before anything is written, since the rename after the frames would otherwise fail on it.
+ */
+export function frameSetDirOnRecord(dirs: readonly string[]): string | undefined {
+  const reserved = [RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE];
+  return dirs.find((dir) => reserved.includes(dir.toLowerCase()));
+}
 /** The `render` flags whose value is a path, so `argv` writes it relative to the output directory. `render` takes no positional. */
 export const RENDER_PATH_FLAGS: readonly string[] = ['candidate', 'atlas', 'environment', 'viewport-from', 'boundary-from', 'out'];
 export type RenderInputRole = 'skeleton' | 'atlas' | 'model' | 'environment' | 'viewport' | 'boundary';
 export interface RenderInput { role: RenderInputRole; path: string; sha256: string }
+
+/** A directory through every link, so a rerun whose working directory the process reports by its real path agrees. */
+function realDir(path: string): string {
+  return existsSync(path) ? realpathSync(path) : resolve(path);
+}
+
+/**
+ * A directory through every link; a file through the links of its directory only, keeping its own name. Measured
+ * (issue #1770, review): a `--candidate` naming a linked `skeleton.json` was followed to its target, and the rerun
+ * looked for the atlas and model beside the target rather than beside the link.
+ */
+function realKeepingName(path: string): string {
+  const absolute = resolve(path);
+  if (!existsSync(absolute) || statSync(absolute).isDirectory()) return realDir(absolute);
+  return join(realDir(dirname(absolute)), basename(absolute));
+}
 
 /**
  * `path` relative to the output directory, `/`-separated (`.` for the directory itself) — or, when no relative
@@ -77,8 +112,7 @@ export interface RenderInput { role: RenderInputRole; path: string; sha256: stri
  * path that, run from the output directory, resolved nowhere.
  */
 function relativeToOut(outRoot: string, path: string): string {
-  const real = (p: string): string => existsSync(p) ? realpathSync(p) : resolve(p);
-  const rel = relative(real(outRoot), real(path));
+  const rel = relative(realDir(outRoot), realKeepingName(path));
   if (isAbsolute(rel)) return path;
   return rel === '' ? '.' : rel.split(sep).join('/');
 }
@@ -160,7 +194,7 @@ export function writeRenderRunStamp(
     outputs: rows,
   };
   const target = resolve(out, RENDER_RUN_FILE);
-  const temporary = target + '.tmp';
+  const temporary = resolve(out, RENDER_RUN_TEMP_FILE);
   try {
     writeFileSync(temporary, JSON.stringify(stamp, null, 2) + '\n', { flag: 'wx' });
     renameSync(temporary, target);

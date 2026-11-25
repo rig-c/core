@@ -53,7 +53,7 @@ import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
 import { writeWhole } from './write_whole.ts';
-import { filesWrittenUnder, readRenderInputs, RENDER_RUN_FILE, renderRunArgv, runStampPackage, writeRenderRunStamp } from './run_stamp.ts';
+import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampPackage, writeRenderRunStamp } from './run_stamp.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
 import { ATLAS_ABSENT, BOOLEAN_FLAGS, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -911,11 +911,22 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
   const only = readAnimationFlag(flags, [...facts.animations]);
   // Every set's directory, refused as one scope before anything is posed or written (issue #1744): a name that maps to
   // no directory, or two that one case-insensitive filesystem would make one folder of, is named here and nowhere later.
+  const setNames = only !== undefined ? [only] : facts.animations.length > 0 ? [...facts.animations] : [SETUP_POSE_DIR];
+  let setDirs: string[];
   try {
-    frameSetDirs(only !== undefined ? [only] : facts.animations.length > 0 ? [...facts.animations] : [SETUP_POSE_DIR], fps);
+    setDirs = frameSetDirs(setNames, fps);
   } catch (err) {
     if (err instanceof FrameSetDirError) throw new UsageError(err.message);
     throw err;
+  }
+  // The receipt's own names at the root of --out (issue #1770): a set directory spelled like one, in any case, would
+  // have its frames written and then fail the record's rename. Refused here, before anything is written.
+  const onRecord = frameSetDirOnRecord(setDirs);
+  if (onRecord !== undefined) {
+    throw new UsageError(
+      `animation ${JSON.stringify(setNames[setDirs.indexOf(onRecord)])} maps to the frame-set directory ${JSON.stringify(onRecord)}, which spells, ignoring case, ` +
+        `the render receipt ${RENDER_RUN_FILE} or its temporary name ${RENDER_RUN_TEMP_FILE} beside the sets — rename the animation, or render the others with --animation <name>`,
+    );
   }
   const skin = readSkinFlag(flags, [...facts.skins]);
   const subset = readSlotSubsetFlags(flags, facts, skin);

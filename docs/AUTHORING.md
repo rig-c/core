@@ -8179,7 +8179,11 @@ spelled either `--flag value` or `--flag=value`. `render` takes no positional
 argument, so any other token is kept as it was given. An option that was not
 given is not written: nothing is expanded and no default is filled in. If a
 path has no relative spelling from the output directory, as on Windows across
-drives, that token is written as given. The render is never refused over its
+drives, that token is written as given. A directory is relativised through
+symbolic links, so a temporary root reached through one still spells a short
+path. A file keeps its own name: a `--candidate` naming a linked
+`skeleton.json` is written as the link, because the atlas and model beside the
+link are the ones that render read. The render is never refused over its
 record. When `--out` was not given, `argv` holds no `--out`, so a rerun from
 the output directory writes into `render/` under it: the same files, one level
 down.
@@ -8196,6 +8200,12 @@ UTF-16 code-unit order. These are every file in each frame-set directory it
 cleared and rewrote, plus `frames.json` and `boundary.json` when it wrote them
 (or `parallax.json` and `parallax.png`). Files left by an earlier render are
 not listed. Paths follow the `argv` rule.
+
+Two names are reserved beside the frame sets: `render-run.json` and its
+temporary name `render-run.json.tmp`, compared ignoring case. An animation
+whose frame-set directory spells either is refused before anything is written,
+naming the animation; rename it, or render the others with
+`--animation <name>`.
 
 An earlier record is removed before the first write. A render that stops part
 way leaves none. A usage error stops before that and keeps the earlier record.

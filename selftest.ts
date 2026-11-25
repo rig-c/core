@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { filesWrittenUnder, RENDER_RUN_FILE, RUN_STAMP_FILE } from './src/cli/run_stamp.ts';
+import { filesWrittenUnder, isRenderRunRecord, RENDER_RUN_FILE, RUN_STAMP_FILE } from './src/cli/run_stamp.ts';
 import { runPhysicsOffSuite } from './selftest_physics_off.ts';
 import { runParallaxSuite } from './selftest_parallax.ts';
 import * as poseSearch from './src/pose.ts';
@@ -68132,7 +68132,7 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
     for (const row of [...(stamp.inputs ?? []), ...(stamp.outputs ?? [])]) {
       if (isAbsolute(row.path) || row.path.includes('\\') || !existsSync(join(out, row.path)) || digest(join(out, row.path)) !== row.sha256) faults.push(`path/hash ${row.path}`);
     }
-    const files = filesWrittenUnder(out).map((file) => relative(out, file).split(sep).join('/')).filter((file) => file !== RENDER_RUN_FILE).sort();
+    const files = filesWrittenUnder(out).map((file) => relative(out, file).split(sep).join('/')).filter((file) => !isRenderRunRecord(file)).sort();
     if (JSON.stringify((stamp.outputs ?? []).map((row) => row.path)) !== JSON.stringify(files)) faults.push('output inventory');
     return faults;
   };
@@ -68190,6 +68190,55 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
       'an observation-only render writes no frames.json and is still one invocation with one receipt');
   }
 
+  // Review finding (a): an animation whose frame-set directory spells the record's name or its temporary one, in any
+  // case, is refused before anything is written — the rename after the frames would otherwise fail on the directory.
+  // The near miss beside them renders, so the refusal is the reserved names and nothing wider.
+  for (const [name, refused] of [['render-run.json', true], ['Render-Run.JSON.tmp', true], ['render-run.jsonx', false]] as const) {
+    const motionPath = join(fixture, 'motion.json');
+    const motion = JSON.parse(readFileSync(motionPath, 'utf8')) as { animations: Record<string, unknown> };
+    const animations: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(motion.animations)) animations[key === 'bow' ? name : key] = value;
+    const renamedMotion = join(work, `motion-${name}.json`);
+    writeFileSync(renamedMotion, JSON.stringify({ ...motion, animations }));
+    const renamedBuild = join(work, `build-${name}`);
+    const rebuilt = spawnSync(process.execPath, ['cli.ts', 'build', '--rig', join(fixture, 'rig.json'), '--motion', renamedMotion, '--out', renamedBuild], { cwd: import.meta.dir, encoding: 'utf8' });
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const out = join(work, `named-${entry}-${name}`);
+      const run = renderIn(import.meta.dir, entry, ['--candidate', renamedBuild, '--max', '32', '--out', out], work);
+      const named = run.stderr.includes(`animation ${JSON.stringify(name)} maps to the frame-set directory`) && run.stderr.includes(RENDER_RUN_FILE);
+      const held = rebuilt.status === 0 && (refused ? run.status === 2 && named && !existsSync(out) : run.status === 0 && audit(read(out), out).length === 0);
+      say('RR09_A_SET_DIRECTORY_ON_THE_RECORD_NAME_IS_REFUSED_BEFORE_ANY_WRITE', held,
+        `${entry} animation ${JSON.stringify(name)}: build exit=${String(rebuilt.status)}, render exit=${String(run.status)}, ${refused ? `refusal names it=${named}, --out absent=${!existsSync(out)}` : `rendered with a sound record=${run.status === 0 && audit(read(out), out).length === 0}`}`,
+        'a finished render must not fail over its receipt: the collision is caught where the set directories are named, before any frame is written');
+    }
+  }
+
+  // Review finding (b): a --candidate naming a linked skeleton.json keeps the link's name, so the rerun reads the
+  // atlas and model beside the link. The target sits alone, so a record that followed the link replays to exit 2.
+  {
+    const target = join(work, 'link-target');
+    const linked = join(work, 'linked');
+    mkdirSync(target);
+    mkdirSync(linked);
+    cpSync(join(work, 'build', 'skeleton.json'), join(target, 'skeleton.json'));
+    for (const file of readdirSync(join(work, 'build'))) {
+      if (file !== 'skeleton.json' && file !== RUN_STAMP_FILE && statSync(join(work, 'build', file)).isFile()) cpSync(join(work, 'build', file), join(linked, file));
+    }
+    symlinkSync(join('..', 'link-target', 'skeleton.json'), join(linked, 'skeleton.json'), 'file');
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const out = join(work, `linked-${entry}-a`);
+      const first = renderIn(import.meta.dir, entry, ['--candidate', join('linked', 'skeleton.json'), '--max', '64', '--out', out], work);
+      const stamp = read(out);
+      const copy = join(work, `linked-${entry}-b`);
+      mkdirSync(copy);
+      const again = stamp === null ? null : renderIn(import.meta.dir, entry, stamp.argv, copy);
+      const same = again !== null && renderHashedFiles(out).length > 0 && contents(out) === contents(copy);
+      say('RR10_A_LINKED_SKELETON_FILE_REPLAYS_BESIDE_THE_LINK', first.status === 0 && stamp?.argv[1] === '../linked/skeleton.json' && again?.status === 0 && same,
+        `${entry}: exit=${String(first.status)}, --candidate recorded as ${JSON.stringify(stamp?.argv[1] ?? null)}, replay exit=${String(again?.status ?? null)}, ${renderHashedFiles(out).length} compared file(s) identical=${same}`,
+        'the link names the directory the atlas and model are read from; following it to its target would replay a render the record does not describe');
+    }
+  }
+
   // Planted in a source copy: the writer without argv must fail the key-order check, and a path with no relative
   // spelling (another volume) is written as given rather than refusing the render.
   const plantTree = absentTree(join(work, 'plant-tree'));
@@ -68206,9 +68255,9 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
   say('RR07_A_WRITER_WITHOUT_ARGV_FAILS_THE_KEY_ORDER_CHECK', noArgvApplied && mutant.status === 0 && mutantFaults.includes('key order'),
     `mutant applied=${noArgvApplied}, exit=${String(mutant.status)}, faults=${mutantFaults.join(',') || 'none'}`,
     'the mutant the field exists for: a record that lost argv is refused by name, not read as a pass');
-  const relativeLine = '  const rel = relative(real(outRoot), real(path));';
+  const relativeLine = '  const rel = relative(realDir(outRoot), realKeepingName(path));';
   const volumeApplied = source.split(relativeLine).length === 2;
-  writeFileSync(modulePath, source.replace(relativeLine, "  const rel = path === 'build' ? resolve('planted-other-volume') : relative(real(outRoot), real(path));"));
+  writeFileSync(modulePath, source.replace(relativeLine, "  const rel = path === 'build' ? resolve('planted-other-volume') : relative(realDir(outRoot), realKeepingName(path));"));
   const volumeOut = join(work, 'volume');
   const volume = renderIn(plantTree, 'cli_core.ts', ['--candidate', 'build', '--max', '64', '--out', volumeOut], work);
   const volumeArgv = read(volumeOut)?.argv ?? [];
@@ -70758,7 +70807,7 @@ function runCliSuite(): number {
       existsSync(join(work, name))
         ? readdirSync(join(work, name), { recursive: true })
             .map(String)
-            .filter((file) => statSync(join(work, name, file)).isFile() && file !== RENDER_RUN_FILE)
+            .filter((file) => statSync(join(work, name, file)).isFile() && !isRenderRunRecord(file))
             .sort()
         : [];
     const whole = renderInto('whole', []);
@@ -91937,7 +91986,7 @@ function runGeometryExportSuite(): number {
     const plain = renderInto('plain', []);
     const filesOf = (name: string): string[] =>
       existsSync(join(work, name))
-        ? readdirSync(join(work, name), { recursive: true }).map(String).filter((f) => statSync(join(work, name, f)).isFile() && f !== RENDER_RUN_FILE).sort()
+        ? readdirSync(join(work, name), { recursive: true }).map(String).filter((f) => statSync(join(work, name, f)).isFile() && !isRenderRunRecord(f)).sort()
         : [];
     const probes: string[] = [];
     for (const [label, run] of [['build', built], ['first', first], ['second', second], ['plain', plain]] as const) {
@@ -92143,7 +92192,7 @@ function runGeometryExportSuite(): number {
     const refusalOf = (run: ReturnType<typeof runCli>): string =>
       run.stderr.split('\n').find((line) => line.startsWith('rigc render: '))?.slice('rigc render: '.length) ?? '';
     const filesUnder = (dir: string): string[] =>
-      existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile() && f !== RENDER_RUN_FILE).sort() : [];
+      existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile() && !isRenderRunRecord(f)).sort() : [];
     const renderOf = (dir: string, out: string, extra: string[] = []): ReturnType<typeof runCli> =>
       runCli(['render', '--candidate', dir, ...extra, '--out', join(work, out)]);
     // The library's own sentence for the same file, at the framing's rate and on a box of its own.
@@ -92327,7 +92376,7 @@ function runGeometryExportSuite(): number {
     };
     const buildProbe = [...buildOf(unposedRig, slide), ...buildOf(posedRig, slide), ...buildOf(collapsedRig, {})];
     const filesUnder = (dir: string): string[] =>
-      existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile() && f !== RENDER_RUN_FILE).sort() : [];
+      existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile() && !isRenderRunRecord(f)).sort() : [];
     const refusalOf = (run: ReturnType<typeof runCli>, command: string): string =>
       run.stderr.split('\n').find((line) => line.startsWith(`rigc ${command}: `))?.slice(`rigc ${command}: `.length) ?? '';
     const renderOf = (dir: string, out: string, extra: string[] = []): ReturnType<typeof runCli> =>
@@ -113005,7 +113054,7 @@ function poserReasonFaults(reasons: readonly string[], other: string | null, pri
   return faults;
 }
 
-/** Every file under `dir` and its bytes' digest, by relative path — two render directories compared file by file. */
+/** Every file under `dir` but a render's receipt, and its bytes' digest, by relative path — two render directories compared file by file. */
 function dirDigests(dir: string): Map<string, string> {
   const out = new Map<string, string>();
   const walk = (at: string): void => {
@@ -113013,7 +113062,7 @@ function dirDigests(dir: string): Map<string, string> {
     for (const entry of readdirSync(at, { withFileTypes: true }).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
-      else out.set(full.slice(dir.length + 1), createHash('sha256').update(readFileSync(full)).digest('hex'));
+      else if (!isRenderRunRecord(full.slice(dir.length + 1))) out.set(full.slice(dir.length + 1), createHash('sha256').update(readFileSync(full)).digest('hex'));
     }
   };
   walk(dir);
@@ -124280,7 +124329,7 @@ function runRenderEnvironmentSuite(): number {
         for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
           const r = rel === '' ? entry.name : `${rel}/${entry.name}`;
           if (entry.isDirectory()) walk(r);
-          else out.push(r);
+          else if (!isRenderRunRecord(r)) out.push(r);
         }
       };
       walk('');
@@ -124641,7 +124690,7 @@ function runRenderPrerollSuite(): number {
         for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
           const r = rel === '' ? entry.name : `${rel}/${entry.name}`;
           if (entry.isDirectory()) walk(r);
-          else out.push(r);
+          else if (!isRenderRunRecord(r)) out.push(r);
         }
       };
       walk('');
@@ -125368,7 +125417,7 @@ function runRenderPhysicsSuite(): number {
       for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
         const r = rel === '' ? e.name : `${rel}/${e.name}`;
         if (e.isDirectory()) walk(r);
-        else out.push(r);
+        else if (!isRenderRunRecord(r)) out.push(r);
       }
     };
     walk('');
@@ -144802,7 +144851,7 @@ function runFoldsSuite(): number {
     const probes = [...pre];
     if (bendFile !== null && geometryFile !== null) {
       if (JSON.stringify(fromGeometry()) !== JSON.stringify(bendFile.meshes)) probes.push(`foldsOf over render --geometry's ${GEOMETRY_FILE} is not render --folds's ${FOLDS_FILE}`);
-      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && f !== RENDER_RUN_FILE).sort();
+      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && !isRenderRunRecord(f)).sort();
       const plainFiles = files(dir('plain'));
       const foldFiles = files(dir('folds'));
       const extra = foldFiles.filter((f) => !plainFiles.includes(f));
@@ -145508,7 +145557,7 @@ function runPassThroughSuite(): number {
   {
     const probes = [...pre];
     if (pre.length === 0) {
-      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && f !== RENDER_RUN_FILE).sort();
+      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && !isRenderRunRecord(f)).sort();
       const plainFiles = files(dir('plain'));
       const extra = files(dir('pass')).filter((f) => !plainFiles.includes(f));
       const want = sets.map((s) => `${s}/${PASS_THROUGH_FILE}`).sort();
@@ -145741,7 +145790,7 @@ function overlapByteFaults(a: ReadonlyMap<string, string>, b: ReadonlyMap<string
 }
 
 /** The files a render wrote under `root`, relative, sorted. */
-const overlapTreeFiles = (root: string): string[] => (existsSync(root) ? readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && f !== RENDER_RUN_FILE).sort() : []);
+const overlapTreeFiles = (root: string): string[] => (existsSync(root) ? readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && !isRenderRunRecord(f)).sort() : []);
 
 /**
  * OX05's reading: a run without the flag (`plain`) beside one with it
@@ -146741,7 +146790,7 @@ function runSeamSuite(): number {
   {
     const probes = [...pre];
     if (pre.length === 0) {
-      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && f !== RENDER_RUN_FILE).sort();
+      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && !isRenderRunRecord(f)).sort();
       const plainFiles = files(dir('plain'));
       const extra = files(dir('seam')).filter((f) => !plainFiles.includes(f));
       const want = sets.map((s) => `${s}/${SEAM_FILE}`).sort();
@@ -147544,7 +147593,7 @@ function runAngleRangeSuite(): number {
   {
     const probes = [...pre];
     if (pre.length === 0) {
-      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && f !== RENDER_RUN_FILE).sort();
+      const files = (root: string): string[] => readdirSync(root, { recursive: true }).map(String).filter((f) => statSync(join(root, f)).isFile() && !isRenderRunRecord(f)).sort();
       const plainRoot = join(lowProbe.work, 'r_plain');
       const angleRoot = join(lowProbe.work, 'r_angle');
       if (JSON.stringify(files(plainRoot)) !== JSON.stringify(files(angleRoot))) probes.push(`render --angle-range wrote [${files(angleRoot).join(', ')}], the plain render [${files(plainRoot).join(', ')}]`);

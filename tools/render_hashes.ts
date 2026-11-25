@@ -137,7 +137,7 @@ import {
 } from '../src/render.ts';
 import { galleryRecipes, HashesInputError, readRecipes, recipesOfValue, runRecipe, TREE_ROOT, type Recipe, type StageEntry } from './emit_hashes.ts';
 import { readKeepWork, WorkDirectory } from './work_dir.ts';
-import { RENDER_RUN_FILE } from '../src/cli/run_stamp.ts';
+import { isRenderRunRecord } from '../src/cli/run_stamp.ts';
 
 export const RENDER_HASHES_SPEC = 'render-hashes/1';
 const CLI = join(TREE_ROOT, 'cli.ts');
@@ -224,7 +224,7 @@ export function filesUnder(dir: string): string[] {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (relative(dir, full) !== RENDER_RUN_FILE) out.push(relative(dir, full).split(sep).join('/'));
+      else if (!isRenderRunRecord(relative(dir, full).split(sep).join('/'))) out.push(relative(dir, full).split(sep).join('/'));
     }
   };
   walk(dir);

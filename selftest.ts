@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { filesWrittenUnder, isRenderRunRecord, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, RUN_STAMP_FILE } from './src/cli/run_stamp.ts';
+import { filesWrittenUnder, isRenderRunRecord, LINK_RULE, linkRuleFor, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, RUN_STAMP_FILE } from './src/cli/run_stamp.ts';
 import { runPhysicsOffSuite } from './selftest_physics_off.ts';
 import { runParallaxSuite } from './selftest_parallax.ts';
 import * as poseSearch from './src/pose.ts';
@@ -68267,9 +68267,9 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
   say('RR07_A_WRITER_WITHOUT_ARGV_FAILS_THE_KEY_ORDER_CHECK', noArgvApplied && mutant.status === 0 && mutantFaults.includes('key order'),
     `mutant applied=${noArgvApplied}, exit=${String(mutant.status)}, faults=${mutantFaults.join(',') || 'none'}`,
     'the mutant the field exists for: a record that lost argv is refused by name, not read as a pass');
-  const relativeLine = '  const rel = relative(realDir(outRoot), realKeepingName(path));';
+  const relativeLine = '  const rel = relative(spelledDir(outRoot), spelledKeepingName(path));';
   const volumeApplied = source.split(relativeLine).length === 2;
-  writeFileSync(modulePath, source.replace(relativeLine, "  const rel = path === 'build' ? resolve('planted-other-volume') : relative(realDir(outRoot), realKeepingName(path));"));
+  writeFileSync(modulePath, source.replace(relativeLine, "  const rel = path === 'build' ? resolve('planted-other-volume') : relative(spelledDir(outRoot), spelledKeepingName(path));"));
   const volumeOut = join(work, 'volume');
   const volume = renderIn(plantTree, 'cli_core.ts', ['--candidate', 'build', '--max', '64', '--out', volumeOut], work);
   const volumeArgv = read(volumeOut)?.argv ?? [];
@@ -68298,6 +68298,31 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
   say('RR12_THE_LEFTOVER_REMOVAL_TAKEN_OUT_FAILS_RR11', removalApplied && unremoved.status !== 0 && unremoved.faults.includes('record missing on green'),
     `plant applied=${removalApplied}, exit=${String(unremoved.status)}, faults=${unremoved.faults.join(',') || 'none'}`,
     'the control must be seen failing on the fault it was written for, or a pass says nothing');
+
+  // `--out` named through a link shallower than its target (issues #1770, #1775): the recorded argv replayed from a
+  // sibling directory named through the same link renders the same bytes under this host's own link rule.
+  {
+    const outDeep = join(work, 'out-real', 'deep');
+    mkdirSync(outDeep, { recursive: true });
+    const outLink = join(work, 'out-link');
+    symlinkSync(outDeep, outLink, 'dir');
+    const timeless = (r: RenderStamp | null): string => r === null ? '(none)' : JSON.stringify({ ...r, started_at: 'T', finished_at: 'T' });
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const out = join(outLink, `${entry}-a`);
+      const first = renderIn(import.meta.dir, entry, ['--candidate', 'build', '--max', '64', '--geometry', '--out', out], work);
+      const stamp = read(out);
+      const base = LINK_RULE === 'as-spelled' ? out : join(outDeep, `${entry}-a`);
+      const faults = audit(stamp, base);
+      const copy = join(outLink, `${entry}-b`);
+      mkdirSync(copy);
+      const again = stamp === null ? null : renderIn(import.meta.dir, entry, stamp.argv, copy);
+      const sameBytes = renderHashedFiles(out).length > 0 && contents(out) === contents(copy);
+      const sameRecord = timeless(stamp) === timeless(read(copy));
+      say('RR13_A_RECORD_THROUGH_A_LINKED_OUT_REPLAYS_UNDER_THE_HOST_RULE', first.status === 0 && faults.length === 0 && again?.status === 0 && sameBytes && sameRecord,
+        `${entry} (${LINK_RULE}): exit=${String(first.status)}, faults=${faults.join(',') || 'none'}, replay exit=${String(again?.status ?? null)}, identical=${sameBytes}, records equal=${sameRecord}`,
+        'a render receipt written through a linked --out must replay from that --out under this platform\'s link rule');
+    }
+  }
   rmSync(work, { recursive: true, force: true });
 }
 
@@ -68364,13 +68389,112 @@ function linkedOutControls(say: (name: string, ok: boolean, detail: string, why:
   symlinkSync(join(import.meta.dir, 'node_modules'), join(plantTree, 'node_modules'), 'dir');
   const modulePath = join(plantTree, 'src', 'cli', 'shared.ts');
   const source = readFileSync(modulePath, 'utf8');
-  const doorLine = '      outDir: realDir(flags.out),\n';
+  const doorLine = '      outDir: spelledDir(flags.out),\n';
   const applied = source.split(doorLine).length === 2;
   writeFileSync(modulePath, source.replace(doorLine, '      outDir: resolve(flags.out),\n'));
   const planted = buildBoth(plantTree, 'cli_core.ts', 'build-planted');
   say('LO03_THE_PLAIN_ARITHMETIC_RESTORED_FAILS_LO01', applied && planted.linked === 0 && planted.real === 0 && !planted.same && !planted.found,
     `plant applied=${applied}, exit through the link=${String(planted.linked)}, through the real path=${String(planted.real)}, identical=${planted.same}, resolves=${planted.found}`,
     'the control must be seen failing on the fault it was written for, or a pass says nothing');
+
+  // Platform link rule (issue #1775): this host's own rule on `build --report`'s receipt, and the win32 rule
+  // (`as-spelled`) modelled on every host — with the other platform's rule planted in a source copy to fail it.
+  {
+    interface RunStampRows {
+      inputs: Array<{ role: string; path: string }>;
+      outputs: Array<{ path: string }>;
+    }
+    interface RenderStampRows {
+      argv: string[];
+      started_at: string;
+      finished_at: string;
+      inputs: Array<{ role: string; path: string; sha256: string }>;
+      outputs: Array<{ path: string; sha256: string }>;
+    }
+    const stampResolves = (base: string, stampPath: string): boolean => {
+      if (!existsSync(stampPath)) return false;
+      const stamp = JSON.parse(readFileSync(stampPath, 'utf8')) as RunStampRows;
+      const rows = [...stamp.inputs, ...stamp.outputs];
+      return rows.length > 0 && rows.every((row) => !isAbsolute(row.path) && !row.path.includes('\\') && existsSync(join(base, row.path)));
+    };
+    const ruleExpected = process.platform === 'win32' ? 'as-spelled' : 'through-links';
+    const tableOk = LINK_RULE === ruleExpected && linkRuleFor('win32') === 'as-spelled' && linkRuleFor('linux') === 'through-links' && linkRuleFor('darwin') === 'through-links';
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const spelledOut = join(link, `host-${entry}`);
+      const realOut = join(deep, `host-${entry}`);
+      const report = join(link, `host-${entry}.report.json`);
+      const ran = runEntryIn(import.meta.dir, entry, ['build', '--rig', join(fixture, 'rig.json'), '--motion', join(fixture, 'motion.json'), '--out', spelledOut, '--report', report], import.meta.dir);
+      const base = LINK_RULE === 'as-spelled' ? spelledOut : realOut;
+      const ok = tableOk && ran.status === 0 && resolves(base) && stampResolves(base, join(realOut, RUN_STAMP_FILE));
+      say('LO04_THE_HOST_LINK_RULE_HOLDS_FOR_THIS_PLATFORM', ok,
+        `${entry} (${process.platform} -> ${LINK_RULE}): exit=${String(ran.status)}, rule table=${tableOk}, resolves from ${LINK_RULE} base=${resolves(base)}, run.json rows resolve=${stampResolves(base, join(realOut, RUN_STAMP_FILE))}`,
+        'each host spells written relative paths by its own platform rule, including --report in run.json');
+    }
+
+    // Anchor the win32 model under `realpathSync(work)` so an OS link above `work` (macOS `/var` -> `/private/var`)
+    // does not mix into the child's `process.cwd()`: the only link between the paths is `realLink` -> `realDeep`, two
+    // levels shallower than its target, modelling a Windows junction under a working directory spelled through it.
+    const realWork = realpathSync(work);
+    const realFixture = join(realWork, 'fixture');
+    const realBuilt = join(realWork, 'built');
+    const realDeep = join(realWork, 'real', 'deep');
+    const realLink = join(realWork, 'link');
+    const digest = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex');
+    const contents = (dir: string): string => JSON.stringify(renderHashedFiles(dir).map((file) => [file, digest(join(dir, file))]));
+    const timeless = (r: RenderStampRows | null): string => r === null ? '(none)' : JSON.stringify({ ...r, started_at: 'T', finished_at: 'T' });
+    const winTree = absentTree(join(realWork, 'win-tree'));
+    rmSync(join(winTree, 'node_modules'), { recursive: true });
+    symlinkSync(join(import.meta.dir, 'node_modules'), join(winTree, 'node_modules'), 'dir');
+    const runStampPath = join(winTree, 'src', 'cli', 'run_stamp.ts');
+    const runStampSource = readFileSync(runStampPath, 'utf8');
+    const ruleLine = 'export const LINK_RULE: LinkRule = linkRuleFor(process.platform);';
+    const winApplied = runStampSource.split(ruleLine).length === 2;
+
+    const exerciseAsSpelled = (root: string, tag: string, entries: readonly string[]): { buildOk: boolean; ingestOk: boolean; renderOk: boolean } => {
+      let buildOk = true;
+      let renderOk = true;
+      for (const entry of entries) {
+        const spelledOut = join(realLink, `${tag}-build-${entry}`);
+        const deepOut = join(realDeep, `${tag}-build-${entry}`);
+        const report = join(realLink, `${tag}-${entry}.report.json`);
+        const builtRun = runEntryIn(root, entry, ['build', '--rig', join(realFixture, 'rig.json'), '--motion', join(realFixture, 'motion.json'), '--out', spelledOut, '--report', report], realWork);
+        // Under Windows `..` collapses textually on the spelled path (`join(spelledOut, ...)`), climbing beside the junction.
+        buildOk = buildOk && builtRun.status === 0 && resolves(spelledOut) && !resolves(deepOut) && stampResolves(spelledOut, join(deepOut, RUN_STAMP_FILE));
+
+        const spelledRender = join(realLink, `${tag}-render-${entry}`);
+        const renderRun = runEntryIn(root, entry, ['render', '--candidate', 'built', '--max', '64', '--geometry', '--out', join('link', `${tag}-render-${entry}`)], realWork);
+        const stampFile = join(spelledRender, RENDER_RUN_FILE);
+        const stamp = existsSync(stampFile) ? JSON.parse(readFileSync(stampFile, 'utf8')) as RenderStampRows : null;
+        const rowsResolve = stamp !== null && [...stamp.inputs, ...stamp.outputs].every((row) => !isAbsolute(row.path) && !row.path.includes('\\') && existsSync(join(spelledRender, row.path)));
+        // On Windows a process started in `link/<dir>` keeps that two-segment spelling as its cwd and collapses `..`
+        // textually, landing at the same place a two-segment directory under `realWork` does on every host.
+        const spelledCwd = join(realWork, 'spelled-cwd', `${tag}-${entry}`);
+        mkdirSync(spelledCwd, { recursive: true });
+        const replay = stamp === null ? null : runEntryIn(root, entry, ['render', ...stamp.argv], spelledCwd);
+        const replayStamp = existsSync(join(spelledCwd, RENDER_RUN_FILE)) ? JSON.parse(readFileSync(join(spelledCwd, RENDER_RUN_FILE), 'utf8')) as RenderStampRows : null;
+        const sameBytes = renderHashedFiles(spelledRender).length > 0 && contents(spelledRender) === contents(spelledCwd);
+        renderOk = renderOk && renderRun.status === 0 && rowsResolve && replay?.status === 0 && sameBytes && timeless(stamp) === timeless(replayStamp);
+      }
+      const spelledSpecs = join(realLink, `${tag}-specs`);
+      const ingestRun = runEntryIn(root, 'cli.ts', ['ingest', join(realBuilt, 'skeleton.json'), '--images', join(realFixture, 'parts'), '--out', spelledSpecs], realWork);
+      const rigText = existsSync(join(spelledSpecs, 'rig.json')) ? readFileSync(join(spelledSpecs, 'rig.json'), 'utf8') : null;
+      const images = rigText === null ? undefined : (JSON.parse(rigText) as { images?: string }).images;
+      const ingestOk = ingestRun.status === 0 && images !== undefined && existsSync(join(spelledSpecs, images, 'head.png')) && !existsSync(join(realDeep, `${tag}-specs`, images, 'head.png'));
+      return { buildOk, ingestOk, renderOk };
+    };
+
+    writeFileSync(runStampPath, runStampSource.replace(ruleLine, "export const LINK_RULE: LinkRule = linkRuleFor('win32');"));
+    const win = exerciseAsSpelled(winTree, 'win32', ['cli.ts', 'cli_core.ts']);
+    say('LO05_THE_WIN32_LINK_RULE_MODELS_AS_SPELLED_ACROSS_BUILD_INGEST_AND_RENDER', winApplied && win.buildOk && win.ingestOk && win.renderOk,
+      `applied=${winApplied}, build=${win.buildOk}, ingest=${win.ingestOk}, render+replay=${win.renderOk}`,
+      'on Windows `..` resolves textually beside a junction, so written relative paths must be computed from the paths as spelled');
+
+    writeFileSync(runStampPath, runStampSource.replace(ruleLine, "export const LINK_RULE: LinkRule = linkRuleFor('linux');"));
+    const other = exerciseAsSpelled(winTree, 'other', ['cli_core.ts']);
+    say('LO06_THE_OTHER_PLATFORM_RULE_PLANTED_FAILS_THE_WIN32_MODEL', winApplied && !other.buildOk && !other.ingestOk && !other.renderOk,
+      `applied=${winApplied}, build=${other.buildOk}, ingest=${other.ingestOk}, render+replay=${other.renderOk}`,
+      'planting through-links into the win32 model climbs one level too many on build, ingest and render replay, reproducing issue #1775');
+  }
   rmSync(work, { recursive: true, force: true });
 }
 

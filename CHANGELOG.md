@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.9.1
+
+Every file `build` writes is byte-identical to v3.9.0's.
+
+**Read before upgrading:**
+
+* On POSIX, 3.9.0 could build through a symbolic link and then fail when reading the build through that same link. `render` exited 2 with “nothing at” the page path. `repack` exited 1, reported that every atlas page “is not on disk”, and wrote nothing. This regression did not affect 3.8.1. With 3.9.1, both commands can also read a build made at its real path through a link, a flow that already failed for both commands in 3.8.1.
+* Render (including texture substitution), repack, validation and benchmark gates, preview, ballot comparisons, and the editor round-trip image check now resolve relative paths from the same directory as the writer. On POSIX this means the real directory behind the link. Windows keeps the directory spelling supplied by the caller.
+* The fix preserves the measured bytes of build artifacts, render outputs, and repacked rig data. Run receipts record the package version and wall-clock times.
+
+### Bug Fixes
+
+* Resolve written relative paths from the platform-specific build directory (#1781) (4e5832f0)
+
 ## 3.9.0
 
 Every file `build` writes is byte-identical to v3.8.1's.

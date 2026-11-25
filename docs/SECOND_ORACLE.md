@@ -6,7 +6,7 @@ steps 0a–3 landed by 2026-10-01 and shipped in 1.6.1 (1.6.0 was tagged and nev
 served, #1003); step 4 landed 2026-10-01 to 10-02 over 1.7.0–1.9.3 and shipped as
 **2.0.0** (2026-10-02, #1071), which closed #380 (§6). #380 carries the history of the
 argument, including the two shapes it rejected on 2026-09-04 and what has become of
-each since (§7); [ROADMAP.md](../ROADMAP.md) *What changes the frame* is the frame —
+each since (§7); [ROADMAP_TO_1.0.md](ROADMAP_TO_1.0.md) *What changes the frame* is the frame —
 *the milestone is not the second backend, it is the second oracle.*
 
 ---
@@ -53,7 +53,7 @@ against (§7).
    ever wanted.
 4. R1 remains reachable from R2 through `ingest`: the 1.0 exam measured `ingest → build`
    pose-identical to the editor's own export on production rigs
-   ([ROADMAP.md](../ROADMAP.md), *1.0 — claimed*), so a Spine file our core needs to
+   ([ROADMAP_TO_1.0.md](ROADMAP_TO_1.0.md), *1.0 — claimed*), so a Spine file our core needs to
    pose is a spec first.
 
 What R2 costs, stated: a corpus row enters through `ingest`, so an ingest `BLOCK` or

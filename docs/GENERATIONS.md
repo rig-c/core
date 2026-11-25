@@ -155,7 +155,7 @@ The same-generation import is the rule because the alternative was measured.
 **[observed]** A 4.3 editor importing another generation's JSON directly drops
 constraints without a word.
 
-The path is measured in [ROADMAP.md](https://github.com/rig-c/core/blob/main/ROADMAP.md)
+The path is measured in [ROADMAP_TO_1.0.md](https://github.com/rig-c/core/blob/main/docs/ROADMAP_TO_1.0.md)
 §*1.0 — claimed on 2026-09-24*: each source posed under its own generation's
 `spine-core`, the editor's 4.3.26 export and rigc's rebuild posed under 4.3.13, and every
 rebuild posing within the editor's own migration noise against the source. 3.8 has no

@@ -15,7 +15,7 @@ model to a Spine emitter: *which writes are content and which are Spine's shape*
 the model's fields are, from the values that exist*, and *what an emitter that must
 reproduce today's bytes has to own*.
 
-The frame is [ROADMAP.md](../ROADMAP.md) *What changes the frame*, and the rule this
+The frame is [ROADMAP_TO_1.0.md](ROADMAP_TO_1.0.md) *What changes the frame*, and the rule this
 serves is [CLAUDE.md](../CLAUDE.md) *Conventions*: `src/compile.ts` stays independent of
 the runtime (`CUR07` holds that it links no `spine-core`). This page adds the other half
 of that sentence as a count: how much of `compile.ts` is **shaped** like Spine even

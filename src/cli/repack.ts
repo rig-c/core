@@ -53,6 +53,7 @@ import { CompileError } from '../errors.ts';
 import { findingLine, ingest, IngestError, type IngestFinding, type IngestOptions, IngestSpecRefused, type IngestStage } from '../ingest.ts';
 import { MODEL_DOCUMENT_FILE, pagesOfAtlas, spineFileSha256 } from '../model.ts';
 import { atlasRefusals, documentDisagreements, firstLineApart, type InputPage, keptPageRefusals, liftAtlas, polygonOwnedTexels, regionDifferences, REPACK_WORK_PREFIX, RepackError, skeletonDifferences } from '../repack.ts';
+import { resolveWrittenPath } from '../written_path.ts';
 import {
   type BuildGate,
   type BuildReport,
@@ -248,7 +249,7 @@ function pagesLine(inputAtlas: string, inputPages: readonly InputPage[], outAtla
   const inputBytes = new Map(inputPages.map((p) => [p.page.name, p.path]));
   const same = outPages.filter((name) => {
     const from = inputBytes.get(name);
-    return from !== undefined && readFileSync(from).equals(readFileSync(join(buildDir, name)));
+    return from !== undefined && readFileSync(from).equals(readFileSync(resolveWrittenPath(buildDir, name)));
   });
   if (inputAtlas === outAtlas && same.length === outPages.length && outPages.length === inputPages.length) {
     return `  ..    pages  skeleton.atlas and all ${outPages.length} page(s) byte-identical to the input's — these settings pack these regions as the input was packed`;
@@ -486,10 +487,13 @@ export function cmdRepack({ flags, positional }: CommandArgs, gate: BuildGate, p
     console.log(pagesLine(atlasText, lifting.pages, outAtlas, buildDir, outPages));
 
     mkdirSync(out, { recursive: true });
-    for (const name of [...outPages, ...BUILD_TEXTS]) {
-      copyFileSync(join(buildDir, name), join(out, name));
-      console.log(`rigc: wrote ${join(out, name)}`);
-    }
+    const copyStaged = (from: string, name: string): void => {
+      const to = join(out, name);
+      copyFileSync(from, to);
+      console.log(`rigc: wrote ${to}`);
+    };
+    for (const name of outPages) copyStaged(resolveWrittenPath(buildDir, name), name);
+    for (const name of BUILD_TEXTS) copyStaged(join(buildDir, name), name);
     if (record !== null) writeBuildReport(record);
     console.log(gate.look(out));
   } finally {
@@ -546,7 +550,7 @@ function keptPagesDocument(c: {
   for (const page of c.parsed.pages) {
     const to = join(c.buildDir, page.name);
     mkdirSync(dirname(to), { recursive: true });
-    copyFileSync(resolve(atlasDir, page.name), to);
+    copyFileSync(resolveWrittenPath(atlasDir, page.name), to);
   }
 
   // (c) `build --atlas-in` through the entry's own gate. It returns only green; a red gate exits from inside it.

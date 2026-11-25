@@ -93,6 +93,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { MODEL_DOCUMENT_FILE, MODEL_DOCUMENT_SPEC } from '../src/model.ts';
 import { parseAtlasText } from '../src/atlas.ts';
+import { spelledDir } from '../src/written_path.ts';
 import { CoreInputError, readModel } from '../src/core/index.ts';
 import { reportLines, runtimeCut4c5Facts, runtimeFacts, runtimePosedFacts, validate, type ValidateProfile, type ValidateReport } from '../src/validate.ts';
 import { MODEL_SUPPLY, MOVED_ASSERTIONS, validateModel, type ModelReport, type ModelSupply, type ModelValidateInput } from '../src/assertions/model/index.ts';
@@ -765,15 +766,16 @@ export function verdictRow(name: string, outDir: string): VerdictRow {
   const missing = files.filter((f) => !existsSync(f));
   if (missing.length > 0) return { name, refused: `the build wrote no ${missing.map((f) => f.slice(outDir.length + 1)).join(', ')}`, cells: [], walk: null };
   const [skeletonText, atlasText, modelText] = files.map((f) => readFileSync(f, 'utf8'));
+  const atlasDir = spelledDir(outDir);
   const cells: VerdictCell[] = [];
   const rig = documentRig(modelText);
   const declaredDurations = documentDurations(modelText);
   const inputs = { ...(rig === undefined ? {} : { rig }), ...(declaredDurations === undefined ? {} : { declaredDurations }) };
   for (const profile of VERDICT_PROFILES) {
     // The document beside the pair is handed over as `build` hands it: since issue #907 it is where A14 and A19 read a rigc build's stage.
-    const spine = validate({ skeletonText, atlasText, atlasDir: outDir, profile, modelText, ...inputs });
+    const spine = validate({ skeletonText, atlasText, atlasDir, profile, modelText, ...inputs });
     // The model side reads the rig info and the durations off the document itself, and refuses either given beside it (issue #1054).
-    const modelInput: ModelValidateInput = { modelText, atlasDir: outDir, profile, given: modelGivenOf(modelText, skeletonText, atlasText) };
+    const modelInput: ModelValidateInput = { modelText, atlasDir, profile, given: modelGivenOf(modelText, skeletonText, atlasText) };
     const model = validateModel(modelInput);
     const spineParse = spine.failures.find((f) => f.assertion === 'A00_ROUNDTRIP_PARSE');
     const modelParse = model.failures.find((f) => f.assertion === A00_MODEL_READ || f.assertion === A00_MODEL_REGIONS_ON_PAGES);

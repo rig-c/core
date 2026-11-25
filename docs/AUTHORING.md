@@ -418,6 +418,16 @@ What the flags mean:
 | `--dir` | `skills install` only: the directory to install the agent skills into, resolved against your working directory (default `.agents/skills`, which Codex, Gemini CLI and Antigravity read). The skills are scanned from the `skills/` directory of the package the command runs from and every `@rig-c/*` and rig-c alias package in the project's `node_modules`, never a loose `skills/` in the working directory |
 | `--copy` | `skills install` only: copy each skill folder instead of writing a relative symlink to it. A copy is not reached by an upgrade of the package; one that is no longer the package's bytes is refused on the next run, naming the first file that differs |
 
+rigc reads relative page names from the directory of the atlas or model document
+that names them. The editor round-trip tool reads a relative `skeleton.images`
+from the skeleton's directory. Both use the same platform rule as `build`.
+On POSIX, rigc resolves directory symlinks before applying the relative path,
+so a build can be read through an alias at a different depth. On Windows,
+rigc uses the directory as spelled, so `..` climbs beside the junction.
+Use the build's original directory spelling on Windows if another spelling
+would make the relative path land elsewhere. Explicitly absolute values follow
+the reader's existing rules.
+
 `render` also takes `--fps <n>` (the rate it samples at, default 12 — the same
 protocol rate the reference frames use) and `--max <px>` (the long side of a
 frame, default 256). A set drawn at any rate but the default is written to

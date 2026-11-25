@@ -97,7 +97,8 @@
  * time is printed on stderr only, so two runs print the same table.
  */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { resolveWrittenPath } from '../src/written_path.ts';
 import {
   DEFAULT_PAGE_SIZE,
   DEFAULT_PADDING,
@@ -293,7 +294,7 @@ export function inputsOfBuild(out: string, liftDir: string): { inputs: PackInput
   const scales = new Map<string, number>();
   let duplicates = 0;
   for (const page of atlas.pages) {
-    const pagePath = join(out, page.name);
+    const pagePath = isAbsolute(page.name) ? join(out, page.name) : resolveWrittenPath(out, page.name);
     if (!existsSync(pagePath)) throw new AnchorInputError(`the atlas names page ${JSON.stringify(page.name)} and the build wrote no such file`);
     const plate = readPlate(pagePath);
     for (const region of page.regions) {

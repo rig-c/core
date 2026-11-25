@@ -61,7 +61,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
+import { resolveWrittenPath } from '../src/written_path.ts';
 
 /** Where the editor lives, per platform, from Esoteric's own CLI page. */
 export const EDITOR_DEFAULTS: Record<string, string> = {
@@ -1259,6 +1260,7 @@ async function main(): Promise<void> {
   const rigc = rigcCommand();
 
   const source = join(opts.build, 'skeleton.json');
+  let editorSource = source;
   const log: string[] = [];
   const emit = (line: string): void => {
     console.log(line);
@@ -1350,7 +1352,8 @@ async function main(): Promise<void> {
     const probe = read.skeleton as ImagesProbe;
     const declared = probe.skeleton?.images;
     if (declared !== undefined && declared !== '') {
-      const imagesDir = resolve(opts.build, declared);
+      const imagesDir = resolveWrittenPath(opts.build, declared);
+      if (!isAbsolute(declared)) editorSource = resolveWrittenPath(opts.build, 'skeleton.json');
       // Only the two attachment types that read a texture. A boundingbox,
       // clipping or path attachment names no image and would be a false
       // refusal — `src/types.ts` says so for each of them.
@@ -1494,7 +1497,7 @@ async function main(): Promise<void> {
     emit('');
     emit('## 1 import  (json -> project)');
     const project = join(opts.out, `${opts.name}.spine`);
-    const imported = run(opts.editor, [...pin, '-i', source, '-o', project, '-r', opts.name], opts.timeoutS);
+    const imported = run(opts.editor, [...pin, '-i', editorSource, '-o', project, '-r', opts.name], opts.timeoutS);
     emit(`  exit=${imported.status}${imported.timedOut ? `  TIMED OUT after ${opts.timeoutS}s` : ''}`);
     // A step "went wrong" if it reported failure OR did not leave the artifact
     // it exists to leave. Both are cases where the editor's own words are the
@@ -1537,6 +1540,8 @@ async function main(): Promise<void> {
   const cand = join(opts.out, 'export-cand');
   if (exportedBytes !== null) writeFileSync(join(cand, 'skeleton.json'), exportedBytes);
   else copyFileSync(exportedJson, join(cand, 'skeleton.json'));
+  // Copy direct children of the build. Path-valued page names were refused
+  // above because moving this atlas to the staging directory changes their base.
   for (const f of readdirSync(opts.build)) {
     if (f.endsWith('.atlas') || f.endsWith('.png')) copyFileSync(join(opts.build, f), join(cand, f));
   }

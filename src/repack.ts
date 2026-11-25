@@ -55,8 +55,9 @@ import { type AtlasPage, type AtlasRegion, extractRegion, footprintCell, packFoo
 import { Plate, readPlate } from '../tools/plate.ts';
 import { MODEL_DOCUMENT_FILE } from './model.ts';
 import { readPngHeader } from './png.ts';
+import { resolveWrittenPath } from './written_path.ts';
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 /**
  * A repack refused: an input it cannot lift exactly, a repack that lost
@@ -222,7 +223,7 @@ export function atlasRefusals(parsed: ParsedAtlas, atlasDir: string): { refusals
   const firstPage = new Map<string, string>();
   const folded = new Map<string, string>();
   for (const { page, fields, regions } of atlasFields(parsed)) {
-    const path = resolve(atlasDir, page.name);
+    const path = resolveWrittenPath(atlasDir, page.name);
     let plate: Plate | null = null;
     if (!existsSync(path)) refusals.push(`page "${page.name}" is not on disk: nothing at ${path}`);
     else {
@@ -315,7 +316,7 @@ export function keptPageRefusals(parsed: ParsedAtlas, atlasDir: string): string[
           `and ${MODEL_DOCUMENT_FILE}'s page names are paths from the directory it sits in`,
       );
     } else {
-      const path = resolve(atlasDir, page.name);
+      const path = resolveWrittenPath(atlasDir, page.name);
       if (!existsSync(path)) refusals.push(`page "${page.name}" is not on disk: nothing at ${path}`);
       else {
         const header = readPngHeader(path);

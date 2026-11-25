@@ -17,11 +17,13 @@ import { diffLines, type DiffReport, diffSkeletons, reportedFigures, sectionFigu
 import { findRung, RUNG_IDS, type RungSkeleton } from '../ladder.ts';
 import { buildPreview, buildPreviewPanes, PLAYER_LINE, type PreviewGate, type PreviewInput, type PreviewPage } from '../preview.ts';
 import { atlasPageNames } from '../render.ts';
+import { atlasPagePath } from '../render_shared.ts';
 import { BoneDistError } from '../bonedist.ts';
 import { assertionCountForProfile, CLI_DEFAULT_PROFILE, reportLines, validate, type ValidateProfile } from '../validate.ts';
 import { failLine } from '../guide.ts';
 import { type CliRefusal, type CommandRun, DEFAULT_BALLOT, PACKAGE_ROOT, DEFAULT_LEDGER, parseJsonNamed, readAnimationFlag, readJsonFile, readPackageMeta, readSkeletonText, readVersion, resolveBuild, resolveCut, resolveViewable, runCheck, spinePairOf, type BuildGate, runBuild, readProfile, STAGELESS_FRAMING, UsageError, writeJson, modelTextBeside } from './shared.ts';
 import { cmdRepack } from './repack.ts';
+import { spelledDir } from '../written_path.ts';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
@@ -90,7 +92,7 @@ export function cmdValidate(flags: Record<string, string>, positional: string[])
   const report = validate({
     skeletonText,
     atlasText,
-    atlasDir: dirname(atlasPath),
+    atlasDir: spelledDir(dirname(atlasPath)),
     declaredDurations: derived?.declaredDurations,
     rig: derived?.rig,
     ...(modelText === undefined ? {} : { modelText }),
@@ -152,7 +154,7 @@ function skeletonAnimationNames(skeletonText: string, path: string): string[] {
  */
 function previewGate(skeletonPath: string, skeletonText: string, atlasText: string, atlasDir: string): PreviewGate {
   const modelText = modelTextBeside(skeletonPath, skeletonText);
-  const lines = reportLines(validate({ skeletonText, atlasText, atlasDir, ...(modelText === undefined ? {} : { modelText }), profile: CLI_DEFAULT_PROFILE }));
+  const lines = reportLines(validate({ skeletonText, atlasText, atlasDir: spelledDir(atlasDir), ...(modelText === undefined ? {} : { modelText }), profile: CLI_DEFAULT_PROFILE }));
   const refusal = lines.find((line) => line.startsWith('  FAIL  '));
   return {
     // `reportLines` ends on the summary by construction; the gutter is the
@@ -248,7 +250,7 @@ export function cmdPreview(flags: Record<string, string>, candidates: string[]):
     console.log(`  ..    skeleton ${skeletonPath}`);
     console.log(`  ..    atlas    ${atlasPath}`);
     const pages: PreviewPage[] = atlasPageNames(atlasText).map((name) => {
-      const path = join(atlasDir, name);
+      const path = atlasPagePath(atlasDir, name);
       if (!existsSync(path)) {
         throw new UsageError(
           `the atlas declares page "${name}", which resolves to ${path} and is not there — ` +
@@ -302,7 +304,7 @@ function loadBallotCandidate(target: string): { candidate: BallotCandidateInput;
   const atlasText = readFileSync(atlasPath, 'utf8');
   const atlasDir = dirname(atlasPath);
   const pages: PreviewPage[] = atlasPageNames(atlasText).map((name) => {
-    const path = join(atlasDir, name);
+    const path = atlasPagePath(atlasDir, name);
     if (!existsSync(path)) {
       throw new UsageError(
         `the atlas declares page "${name}", which resolves to ${path} and is not there — ` +
@@ -549,7 +551,7 @@ export function cmdBench(flags: Record<string, string>, positional: string[]): v
 
   console.log(`  ── validate (profile ${profile}) ──`);
   const benchModel = modelTextBeside(skeletonPath, skeletonText);
-  const report = validate({ skeletonText, atlasText, atlasDir: dirname(atlasPath), ...(benchModel === undefined ? {} : { modelText: benchModel }), profile });
+  const report = validate({ skeletonText, atlasText, atlasDir: spelledDir(dirname(atlasPath)), ...(benchModel === undefined ? {} : { modelText: benchModel }), profile });
   for (const line of reportLines(report)) console.log(`  ${line}`);
   console.log('');
 

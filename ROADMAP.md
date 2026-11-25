@@ -44,9 +44,6 @@ end to end on real art yet.
 
 ## What is next
 
-> **Draft note.** The order below is a proposal, not a decision. Remove this
-> note when the order is settled.
-
 1. **Prove the three bets on real art.** First, because the answers decide the
    rest: whether a deform is stored as offsets or evaluated from a depth and an
    angle is a question about the model every later item builds on.

@@ -53,7 +53,7 @@ import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
 import { writeWhole } from './write_whole.ts';
-import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, realDir, realInput, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampPackage, writeRenderRunStamp } from './run_stamp.ts';
+import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, realDir, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampPackage, spelledDir, spelledInput, writeRenderRunStamp } from './run_stamp.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
 import { ATLAS_ABSENT, BOOLEAN_FLAGS, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -2256,8 +2256,8 @@ export function cmdIngest(flags: Record<string, string>, positional: string[]): 
     }
     stage = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
   }
-  // Through its links, as `build`'s is (issue #1773): `images` below is spelled from it as a relative path.
-  const outDir = realDir(flags.out);
+  // By the platform's link rule, as `build`'s is (issues #1773, #1775): `images` below is spelled from it as a relative path.
+  const outDir = spelledDir(flags.out);
   /**
    * The rig spec's own `images`, spelled from `--out` the way `build` spells
    * `skeleton.images` from its own output directory — the SAME function, so the
@@ -2285,7 +2285,7 @@ export function cmdIngest(flags: Record<string, string>, positional: string[]): 
     // nothing else, so the parts may well be extracted AFTER the specs are
     // written, and refusing a directory this command never opens would refuse a
     // legitimate order of work. `build` is where a missing PNG is named.
-    specImages = relativeImagesPath(outDir, realDir(flags.images));
+    specImages = relativeImagesPath(outDir, spelledDir(flags.images));
   }
   console.log(`rigc ingest ${skeletonPath}`);
   console.log(`  ..    out  ${outDir}`);
@@ -3039,11 +3039,11 @@ function cmdSplit(flags: Record<string, string>): void {
   for (const flag of ['rig', 'motion', 'slot', 'out'] as const) {
     if (flags[flag] === undefined) throw new UsageError(`split needs --${flag}`);
   }
-  // Through their links, as `build`'s are (issue #1773): `images` below is spelled from `outDir` to the rig file's
+  // By the platform's link rule, as `build`'s are (issues #1773, #1775): `images` below is spelled from `outDir` to the rig file's
   // directory as a relative path.
-  const rigPath = realInput(flags.rig, 'file');
-  const motionPath = realInput(flags.motion, 'file');
-  const outDir = realDir(flags.out);
+  const rigPath = spelledInput(flags.rig, 'file');
+  const motionPath = spelledInput(flags.motion, 'file');
+  const outDir = spelledDir(flags.out);
   for (const [flag, path] of [['rig', rigPath], ['motion', motionPath]] as const) {
     if (!existsSync(path) || !statSync(path).isFile()) throw new SplitError(`--${flag} ${path}: no file there`, 2);
   }

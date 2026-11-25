@@ -87,11 +87,48 @@ export type RenderInputRole = 'skeleton' | 'atlas' | 'model' | 'environment' | '
 export interface RenderInput { role: RenderInputRole; path: string; sha256: string }
 
 /**
+ * How a path is spelled before a relative path that is written to disk is computed from it — one rule per platform,
+ * because the platforms read `..` differently (issue #1775, measured on native Windows and on macOS, Bun 1.4.4):
+ *
+ * - `through-links` (every platform but Windows): `..` climbs out of a linked directory physically, beside the link's
+ *   target, and a process whose working directory was reached through a link reports its real path. So both ends are
+ *   resolved through their links (`realDir`, `realKeepingName`), and one directory under two spellings writes one set
+ *   of bytes (issues #1770, #1773).
+ * - `as-spelled` (Windows): `..` is removed from the text before the filesystem is asked, so it climbs out of a
+ *   junction beside the junction, and a process started in a directory spelled through one reports that spelling. A
+ *   relative path computed between link-resolved ends climbed one level too many there: a `build --out` given through
+ *   a junction wrote an `images` and page names that resolved only from the real spelling, and the replay of a
+ *   `render` record from the `--out` it was given exited 2. So both ends are taken as given (absolute, nothing
+ *   resolved), and each spelling of one directory writes the bytes that resolve from that spelling.
+ *
+ * Only the paths spelled *into* something written follow this rule. Whether two paths name one directory — `--report`
+ * inside `--out`, `--boundary-from` equal to it — is a question about the filesystem, and `realDir` answers it on
+ * every platform.
+ */
+export type LinkRule = 'through-links' | 'as-spelled';
+export function linkRuleFor(platform: string): LinkRule {
+  return platform === 'win32' ? 'as-spelled' : 'through-links';
+}
+/** The rule this process spells by: its own platform's. */
+export const LINK_RULE: LinkRule = linkRuleFor(process.platform);
+
+/** A directory as written paths are computed from it, under `LINK_RULE`: through its links, or as given. */
+export function spelledDir(path: string): string {
+  return LINK_RULE === 'as-spelled' ? resolve(path) : realDir(path);
+}
+
+/** A file or directory as written paths are computed to it, under `LINK_RULE`; a file keeps its own name either way. */
+export function spelledKeepingName(path: string): string {
+  return LINK_RULE === 'as-spelled' ? resolve(path) : realKeepingName(path);
+}
+
+/**
  * A path through every link whether or not it exists yet: the real path of its nearest existing ancestor with the rest
  * appended, so a rerun whose working directory the process reports by its real path agrees, and an output directory a
- * command is about to create is spelled from where it will really be. A relative path is only true when it is computed
- * between two paths spelled this way: climbing `..` out of a linked directory lands beside the link's target, not
- * beside the link (issues #1770, #1773).
+ * command is about to create is spelled from where it will really be. On a platform whose rule is `through-links`, a
+ * relative path is only true when it is computed between two paths spelled this way: climbing `..` out of a linked
+ * directory lands beside the link's target, not beside the link (issues #1770, #1773). Written paths go through
+ * `spelledDir`, which applies this only under that rule.
  */
 export function realDir(path: string): string {
   const rest: string[] = [];
@@ -117,30 +154,32 @@ export function realKeepingName(path: string): string {
 }
 
 /**
- * An input a command hands on through its links when it is what the command asks for — a file through the links of
- * its directory (`realKeepingName`), a directory through all of them — and as given otherwise: a path that names
- * nothing, or the wrong kind of thing, is refused downstream by name, and the refusal names it as the caller spelled
- * it. Only an input that is read has its path spelled into anything written (issue #1773).
+ * An input a command hands on spelled by `LINK_RULE` when it is what the command asks for — a file through the links
+ * of its directory (`spelledKeepingName`), a directory through all of them (`spelledDir`) — and as given otherwise: a
+ * path that names nothing, or the wrong kind of thing, is refused downstream by name, and the refusal names it as the
+ * caller spelled it. Only an input that is read has its path spelled into anything written (issues #1773, #1775).
  */
-export function realInput(path: string, kind: 'file' | 'dir'): string {
+export function spelledInput(path: string, kind: 'file' | 'dir'): string {
   const absolute = resolve(path);
   if (!existsSync(absolute)) return absolute;
   const stat = statSync(absolute);
-  if (kind === 'file') return stat.isFile() ? realKeepingName(absolute) : absolute;
-  return stat.isDirectory() ? realDir(absolute) : absolute;
+  if (kind === 'file') return stat.isFile() ? spelledKeepingName(absolute) : absolute;
+  return stat.isDirectory() ? spelledDir(absolute) : absolute;
 }
 
 /**
  * `path` relative to the output directory, `/`-separated (`.` for the directory itself) — or, when no relative
  * spelling exists (another volume), `path` as the command line gave it: a receipt never refuses the render it records.
  *
- * ⚠️ Both ends are resolved through the filesystem's links when they exist. Measured (issue #1770): with the output
- * given through a linked directory (`/var` → `/private/var` on macOS) and the candidate relative to a working
- * directory the process reports by its real path, the textual difference climbed out through the link and named a
- * path that, run from the output directory, resolved nowhere.
+ * ⚠️ Both ends are spelled by `LINK_RULE`. Measured (issue #1770): on macOS, with the output given through a linked
+ * directory (`/var` → `/private/var`) and the candidate relative to a working directory the process reports by its
+ * real path, the textual difference climbed out through the link and named a path that, run from the output
+ * directory, resolved nowhere — so there both ends go through their links. Measured (issue #1775): on Windows the
+ * link-resolved difference is the one that resolves nowhere from `--out` given through a junction, so there both ends
+ * are taken as given.
  */
 function relativeToOut(outRoot: string, path: string): string {
-  const rel = relative(realDir(outRoot), realKeepingName(path));
+  const rel = relative(spelledDir(outRoot), spelledKeepingName(path));
   if (isAbsolute(rel)) return path;
   return rel === '' ? '.' : rel.split(sep).join('/');
 }

@@ -86,9 +86,23 @@ export const RENDER_PATH_FLAGS: readonly string[] = ['candidate', 'atlas', 'envi
 export type RenderInputRole = 'skeleton' | 'atlas' | 'model' | 'environment' | 'viewport' | 'boundary';
 export interface RenderInput { role: RenderInputRole; path: string; sha256: string }
 
-/** A directory through every link, so a rerun whose working directory the process reports by its real path agrees. */
-function realDir(path: string): string {
-  return existsSync(path) ? realpathSync(path) : resolve(path);
+/**
+ * A path through every link whether or not it exists yet: the real path of its nearest existing ancestor with the rest
+ * appended, so a rerun whose working directory the process reports by its real path agrees, and an output directory a
+ * command is about to create is spelled from where it will really be. A relative path is only true when it is computed
+ * between two paths spelled this way: climbing `..` out of a linked directory lands beside the link's target, not
+ * beside the link (issues #1770, #1773).
+ */
+export function realDir(path: string): string {
+  const rest: string[] = [];
+  let at = resolve(path);
+  while (!existsSync(at)) {
+    const up = dirname(at);
+    if (up === at) break;
+    rest.unshift(basename(at));
+    at = up;
+  }
+  return join(realpathSync(at), ...rest);
 }
 
 /**
@@ -96,10 +110,24 @@ function realDir(path: string): string {
  * (issue #1770, review): a `--candidate` naming a linked `skeleton.json` was followed to its target, and the rerun
  * looked for the atlas and model beside the target rather than beside the link.
  */
-function realKeepingName(path: string): string {
+export function realKeepingName(path: string): string {
   const absolute = resolve(path);
   if (!existsSync(absolute) || statSync(absolute).isDirectory()) return realDir(absolute);
   return join(realDir(dirname(absolute)), basename(absolute));
+}
+
+/**
+ * An input a command hands on through its links when it is what the command asks for — a file through the links of
+ * its directory (`realKeepingName`), a directory through all of them — and as given otherwise: a path that names
+ * nothing, or the wrong kind of thing, is refused downstream by name, and the refusal names it as the caller spelled
+ * it. Only an input that is read has its path spelled into anything written (issue #1773).
+ */
+export function realInput(path: string, kind: 'file' | 'dir'): string {
+  const absolute = resolve(path);
+  if (!existsSync(absolute)) return absolute;
+  const stat = statSync(absolute);
+  if (kind === 'file') return stat.isFile() ? realKeepingName(absolute) : absolute;
+  return stat.isDirectory() ? realDir(absolute) : absolute;
 }
 
 /**
@@ -193,10 +221,19 @@ export function writeRenderRunStamp(
     inputs: inputs.map((input) => ({ role: input.role, path: pathOf(input.path), sha256: input.sha256 })),
     outputs: rows,
   };
-  const target = resolve(out, RENDER_RUN_FILE);
-  const temporary = resolve(out, RENDER_RUN_TEMP_FILE);
+  writeThroughTemporary(resolve(out, RENDER_RUN_FILE), resolve(out, RENDER_RUN_TEMP_FILE), JSON.stringify(stamp, null, 2) + '\n');
+}
+
+/**
+ * Write a receipt under its temporary name and rename it into place, so a reader never meets half a file. A temporary
+ * file already there is a leftover of a run killed between its write and its rename, and is removed first: the receipt
+ * is written after every output, and the exclusive create failing on that leftover failed a finished run over its
+ * receipt (issue #1772).
+ */
+function writeThroughTemporary(target: string, temporary: string, text: string): void {
+  rmSync(temporary, { force: true });
   try {
-    writeFileSync(temporary, JSON.stringify(stamp, null, 2) + '\n', { flag: 'wx' });
+    writeFileSync(temporary, text, { flag: 'wx' });
     renameSync(temporary, target);
   } finally {
     rmSync(temporary, { force: true });
@@ -221,11 +258,5 @@ export function writeRunStamp(out: string, inputs: readonly RunInput[], outputs:
     outputs: rows,
   };
   const target = resolve(out, RUN_STAMP_FILE);
-  const temporary = target + '.tmp';
-  try {
-    writeFileSync(temporary, JSON.stringify(stamp, null, 2) + '\n', { flag: 'wx' });
-    renameSync(temporary, target);
-  } finally {
-    rmSync(temporary, { force: true });
-  }
+  writeThroughTemporary(target, target + '.tmp', JSON.stringify(stamp, null, 2) + '\n');
 }

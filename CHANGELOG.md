@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.9.0
+
+Every file `build` writes is byte-identical to v3.8.1's.
+
+**Read before upgrading:**
+
+* Both CLI entries write one `render-run.json` at the root of `render --out` after a successful frame-set, extremes-only or parallax render. The `rigc-run/2` record contains the package name and version, command, ordered arguments, wall-clock times and SHA-256 rows for the recorded inputs and files written by that invocation. Replay the recorded arguments from the output directory with the same package version. Paths use `/` separators when relative, and a file such as a linked `skeleton.json` keeps its leaf name so its sibling atlas and model remain discoverable. Existing frame, geometry and metadata bytes keep their determinism contract. The build's `run.json` and its `rigc-run/1` schema stay in place. Animation folders that would occupy `render-run.json` or `render-run.json.tmp` are now refused case-insensitively.
+* On macOS and Linux, a linked `--out` used to calculate `..` from the path as typed. For example, if `link` targets `real/deep`, the path from `link/build` to `art/page.png` changes from `../../art/page.png` to `../../../art/page.png`. It now calculates from the real directory, so relative atlas page names, `skeleton.images`, the `images` field written by `ingest --images`, and build and render record paths resolve from the output location. With `--copy-images`, `../<directory>/` uses the real directory's basename on these hosts. On Windows, both ends keep their supplied directory spelling so `..` resolves beside a junction. The spelling change can move path strings for linked inputs or outputs. Ordinary unlinked atlas, skeleton and rig-spec path strings retain their bytes. Receipt bytes can vary with time and package version.
+* A killed build or render can leave `run.json.tmp` or `render-run.json.tmp` before the final rename. The next invocation that reaches writing clears that stale file before writing the new record. If writing fails, cleanup also removes the temporary file. This changes the stale file inventory and recovery from a failed write. Cleanup affects the temporary record only.
+
+### Features
+
+* **render:** record replay arguments and content hashes in `render-run.json` (#1771) (9e279025)
+
+### Bug Fixes
+
+* **build:** resolve written relative paths through linked output directories and clear stale run-record temporaries (#1774) (66052d9d)
+* **cli:** use the host's path spelling rule for symbolic links and Windows junctions (#1776) (6ad2ec5d)
+
+### Documentation
+
+* describe the post-1.0 roadmap and link the completed 1.0 roadmap (#1767) (55bb4b92)
+* link the getting-started guide from the README (#1766) (bc7fa361)
+* use relative repository links in the README (#1763) (75707de5)
+* name the related tools and list the missing commands in the README (#1760) (1704f062)
+* use platform-neutral terminology for the remote job pool (#1758) (9b5d96b1)
+* align the README and authoring guide with the current release and import surface (#1757) (7343f919)
+* document the smoke command's raw child failure records in the authoring guide (#1752) (3faa2f79)
+
 ## 3.8.1
 
 Every file `build` writes is byte-identical to v3.8.0's.

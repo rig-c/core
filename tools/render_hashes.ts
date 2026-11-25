@@ -29,7 +29,9 @@
  * 1. **the CLI's render**, `RENDER_COMMAND` below, as a caller runs it: every
  *    animation at the protocol rate (12 fps, the CLI's default), each set's
  *    frames, its contact sheet and its `geometry.json`, and `frames.json`,
- *    whose `viewport` is the framing box. Hashed as `render/<path>`.
+ *    whose `viewport` is the framing box. Hashed as `render/<path>`. The
+ *    wall-clock receipt `render-run.json` beside them is excluded, as
+ *    `emit_hashes` excludes `run.json`; every other file is compared.
  * 2. **what the CLI does not write and the posing seam still produces**, in
  *    this process through `src/render.ts`: the setup pose drawn over the same
  *    viewport (`extra/setup.png` — a skeleton with animations never writes it),
@@ -135,6 +137,7 @@ import {
 } from '../src/render.ts';
 import { galleryRecipes, HashesInputError, readRecipes, recipesOfValue, runRecipe, TREE_ROOT, type Recipe, type StageEntry } from './emit_hashes.ts';
 import { readKeepWork, WorkDirectory } from './work_dir.ts';
+import { isRenderRunRecord } from '../src/cli/run_stamp.ts';
 
 export const RENDER_HASHES_SPEC = 'render-hashes/1';
 const CLI = join(TREE_ROOT, 'cli.ts');
@@ -213,15 +216,15 @@ const FRAMING_KEYS = ['x', 'y', 'width', 'height', 'scale', 'pixelWidth', 'pixel
 // one row
 // ---------------------------------------------------------------------------
 
-/** Every file under `dir`, relative, `/`-separated, in code-unit order. */
-function filesUnder(dir: string): string[] {
+/** Every file under `dir` but the render receipt at its root, relative, `/`-separated, in code-unit order. */
+export function filesUnder(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
   const walk = (at: string): void => {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
-      else out.push(relative(dir, full).split(sep).join('/'));
+      else if (!isRenderRunRecord(relative(dir, full).split(sep).join('/'))) out.push(relative(dir, full).split(sep).join('/'));
     }
   };
   walk(dir);

@@ -11,6 +11,7 @@ import { sampleAll, sampleSetupPose, framingViewport, renderFrame, BACKGROUND, t
 import { corePoser } from './src/render_core.ts';
 import { galleryRecipes, runRecipe } from './tools/emit_hashes.ts';
 import { overlapFixture, OVERLAP_PLATE } from './fixtures/public.ts';
+import { isRenderRunRecord } from './src/cli/run_stamp.ts';
 
 const ROOT = import.meta.dir;
 const hash = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
@@ -140,7 +141,8 @@ export function runExtremesSuite(report?: Say): number {
       const expected: Array<[string, number, number]> = [['rotate', -20, 35], ['translate.x', -2, 6], ['translate.y', OVERLAP_PLATE.armY - 4, OVERLAP_PLATE.armY + 3], ['scale.x', 1, Math.fround(1.2)], ['scale.y', Math.fround(0.8), 1], ['shear.x', -3, 4], ['shear.y', -6, 5]];
       const matched = expected.every(([name, min, max]) => { const channel = c.channels.find((x) => x.path.join('/') === `bone/arm/${name}`); return channel?.min.value === min && channel.max.value === max; });
       say('EX16_COMPONENTWISE_ROTATE_TRANSLATE_SCALE_SHEAR_MATCH_KEY_EXTREMA', matched, JSON.stringify(c.channels.filter((x) => x.path[1] === 'arm')));
-      const tree = (path: string): Record<string, string> => Object.fromEntries(readdirSync(path, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? Object.entries(tree(join(path, e.name))).map(([k, v]) => [`${e.name}/${k}`, v]) : [[e.name, hash(readFileSync(join(path, e.name)))]]));
+      // The wall-clock render receipt is outside every byte comparison (issue #1770), so the tree compared leaves it out.
+      const tree = (path: string): Record<string, string> => Object.fromEntries(readdirSync(path, { withFileTypes: true }).filter((e) => !isRenderRunRecord(e.name)).flatMap((e) => e.isDirectory() ? Object.entries(tree(join(path, e.name))).map(([k, v]) => [`${e.name}/${k}`, v]) : [[e.name, hash(readFileSync(join(path, e.name)))]]));
       const plain = tree(join(work, 'plain')), flagged = tree(join(work, 'flag'));
       say('EX17_EXISTING_FRAMES_FILES_UNCHANGED_WHEN_FLAG_ENABLED', Object.entries(plain).every(([p, h]) => flagged[p] === h), `${Object.keys(plain).length} existing file hashes compared`);
       const geom = render('geometry', ['--geometry']), geomExtra = render('geometry-extra', ['--geometry', '--extremes']);

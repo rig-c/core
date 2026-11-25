@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { filesWrittenUnder, isRenderRunRecord, RENDER_RUN_FILE, RUN_STAMP_FILE } from './src/cli/run_stamp.ts';
+import { filesWrittenUnder, isRenderRunRecord, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, RUN_STAMP_FILE } from './src/cli/run_stamp.ts';
 import { runPhysicsOffSuite } from './selftest_physics_off.ts';
 import { runParallaxSuite } from './selftest_parallax.ts';
 import * as poseSearch from './src/pose.ts';
@@ -68047,6 +68047,17 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
       earlier !== null && refusedOver.status === 1 && refusedOver.text === earlier,
       `cli_core.ts over an earlier build: exit=${String(refusedOver.status)}, earlier stamp kept byte for byte=${earlier !== null && refusedOver.text === earlier}`,
       'like a usage error, the refusal stops before the earlier stamp is removed, so the directory still describes the build that wrote it');
+    // A run killed between the stamp's write and its rename leaves `run.json.tmp` (issue #1772): the next build removes it.
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      const out = join(fixture, `${entry}-leftover-temp`);
+      mkdirSync(out);
+      writeFileSync(join(out, `${RUN_STAMP_FILE}.tmp`), 'left by a killed run');
+      const leftover = epochBuild(entry, out, FIXED);
+      const sound = leftover.text !== null && timesOf(leftover.text) === `${FIXED_ISO}/${FIXED_ISO}`;
+      say('RS15_A_LEFTOVER_TEMPORARY_STAMP_DOES_NOT_FAIL_THE_BUILD', leftover.status === 0 && sound && !existsSync(join(out, `${RUN_STAMP_FILE}.tmp`)),
+        `${entry}: exit=${String(leftover.status)}, stamp written=${sound}, temporary left=${existsSync(join(out, `${RUN_STAMP_FILE}.tmp`))}`,
+        'the stamp is written after every output, so a leftover of an earlier killed run must not fail a finished build over its receipt');
+    }
   }
 
   // Plant only in an isolated source copy, then exercise the normal CLI entry points.
@@ -68265,6 +68276,28 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
   say('RR08_A_PATH_WITH_NO_RELATIVE_SPELLING_IS_WRITTEN_AS_GIVEN', volumeApplied && volume.status === 0 && volumeArgv[1] === 'build',
     `plant applied=${volumeApplied}, exit=${String(volume.status)}, argv=${JSON.stringify(volumeArgv)}`,
     'a receipt never refuses the render it records: with no path from the output directory, the token stays as the caller gave it');
+
+  // A render killed between the record's write and its rename leaves the temporary file (issue #1772): the next render
+  // into the same --out removes it and writes a sound record. The plant takes the removal out and sees the render fail.
+  const leftoverRender = (root: string, entry: string, out: string): { status: number | null; faults: string[]; left: boolean } => {
+    mkdirSync(out);
+    writeFileSync(join(out, RENDER_RUN_TEMP_FILE), 'left by a killed render');
+    const run = renderIn(root, entry, ['--candidate', 'build', '--max', '32', '--out', out], work);
+    return { status: run.status, faults: audit(read(out), out), left: existsSync(join(out, RENDER_RUN_TEMP_FILE)) };
+  };
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    const r = leftoverRender(import.meta.dir, entry, join(work, `leftover-${entry}`));
+    say('RR11_A_LEFTOVER_TEMPORARY_RECORD_DOES_NOT_FAIL_THE_RENDER', r.status === 0 && r.faults.length === 0 && !r.left,
+      `${entry}: exit=${String(r.status)}, faults=${r.faults.join(',') || 'none'}, temporary left=${r.left}`,
+      'the record is written after every frame, so a leftover of an earlier killed render must not fail a finished render over its receipt');
+  }
+  const removalLine = '  rmSync(temporary, { force: true });\n  try {\n';
+  const removalApplied = source.split(removalLine).length === 2;
+  writeFileSync(modulePath, source.replace(removalLine, '  try {\n'));
+  const unremoved = leftoverRender(plantTree, 'cli_core.ts', join(work, 'leftover-planted'));
+  say('RR12_THE_LEFTOVER_REMOVAL_TAKEN_OUT_FAILS_RR11', removalApplied && unremoved.status !== 0 && unremoved.faults.includes('record missing on green'),
+    `plant applied=${removalApplied}, exit=${String(unremoved.status)}, faults=${unremoved.faults.join(',') || 'none'}`,
+    'the control must be seen failing on the fault it was written for, or a pass says nothing');
   rmSync(work, { recursive: true, force: true });
 }
 

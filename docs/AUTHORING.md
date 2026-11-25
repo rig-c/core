@@ -8144,7 +8144,8 @@ for a rerun with fixed inputs. `CE_RUN_STAMP_PACKAGE` (message label `RUN_STAMP_
 package name or version.
 
 An earlier stamp is removed before compilation. A refused build leaves no
-stamp. Usage errors stop before removal. `repack` and in-process compilation
+stamp. The stamp is written as `run.json.tmp` and renamed; a leftover
+`run.json.tmp` from a build killed between the two is removed first. Usage errors stop before removal. `repack` and in-process compilation
 retain their existing output contracts. `run.json` records wall-clock time,
 or the `SOURCE_DATE_EPOCH` instant when set, and is excluded from A18 and
 `emit_hashes` byte comparisons. All other output
@@ -8210,7 +8211,8 @@ naming the animation; rename it, or render the others with
 `--animation <name>`.
 
 An earlier record is removed before the first write. A render that stops part
-way leaves none. A usage error stops before that and keeps the earlier record.
+way leaves none. A leftover `render-run.json.tmp` from a render killed between
+the record's write and its rename is removed before the record is written. A usage error stops before that and keeps the earlier record.
 An in-process call to the render body, with no entry clock, writes no record.
 The record is excluded from `render_hashes` and from every byte comparison.
 Every other file keeps its determinism contract. The keys, key order and

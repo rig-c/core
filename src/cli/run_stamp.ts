@@ -221,10 +221,19 @@ export function writeRenderRunStamp(
     inputs: inputs.map((input) => ({ role: input.role, path: pathOf(input.path), sha256: input.sha256 })),
     outputs: rows,
   };
-  const target = resolve(out, RENDER_RUN_FILE);
-  const temporary = resolve(out, RENDER_RUN_TEMP_FILE);
+  writeThroughTemporary(resolve(out, RENDER_RUN_FILE), resolve(out, RENDER_RUN_TEMP_FILE), JSON.stringify(stamp, null, 2) + '\n');
+}
+
+/**
+ * Write a receipt under its temporary name and rename it into place, so a reader never meets half a file. A temporary
+ * file already there is a leftover of a run killed between its write and its rename, and is removed first: the receipt
+ * is written after every output, and the exclusive create failing on that leftover failed a finished run over its
+ * receipt (issue #1772).
+ */
+function writeThroughTemporary(target: string, temporary: string, text: string): void {
+  rmSync(temporary, { force: true });
   try {
-    writeFileSync(temporary, JSON.stringify(stamp, null, 2) + '\n', { flag: 'wx' });
+    writeFileSync(temporary, text, { flag: 'wx' });
     renameSync(temporary, target);
   } finally {
     rmSync(temporary, { force: true });
@@ -249,11 +258,5 @@ export function writeRunStamp(out: string, inputs: readonly RunInput[], outputs:
     outputs: rows,
   };
   const target = resolve(out, RUN_STAMP_FILE);
-  const temporary = target + '.tmp';
-  try {
-    writeFileSync(temporary, JSON.stringify(stamp, null, 2) + '\n', { flag: 'wx' });
-    renameSync(temporary, target);
-  } finally {
-    rmSync(temporary, { force: true });
-  }
+  writeThroughTemporary(target, target + '.tmp', JSON.stringify(stamp, null, 2) + '\n');
 }

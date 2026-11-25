@@ -82247,7 +82247,7 @@ function runCurrencySuite(): number {
       const moved = ((): string | null => {
         if (!downloadStep.startsWith('      - name: Download')) return null;
         const without = releaseText.replace(downloadStep, '');
-        const confirm = '      # ROADMAP.md\'s fourth condition';
+        const confirm = '      # docs/ROADMAP_TO_1.0.md\'s fourth condition';
         return without.includes(confirm) ? without.replace(confirm, `${downloadStep}${confirm}`) : null;
       })();
       const { probes, cases } = runPlants(

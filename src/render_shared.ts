@@ -21,7 +21,7 @@
  * runtime here, and such an input is refused by name (`SpineRuntimeError`).
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { Plate, readPlate, type RGBA } from '../tools/plate.ts';
 import { pageFootprint, parseAtlasText } from './atlas.ts';
 import { CoreInputError } from './core/index.ts';
@@ -39,6 +39,7 @@ import { spinePosingFor, type SpineSkeletonData } from './spine_side.ts';
 import { walkTimelines } from './timelines.ts';
 import { firstNonFinite, type PosedVertices, type WorldTransform } from './nonfinite.ts';
 import { environmentAt, type EnvironmentChange, type EnvironmentStep } from './environment.ts';
+import { resolveWrittenPath } from './written_path.ts';
 
 // ---------------------------------------------------------------------------
 // the Spine side, through the seam (issue #1052)
@@ -929,6 +930,11 @@ function skeletonDurations(root: JsonObject): Array<{ name: string; duration: nu
   });
 }
 
+/** Keep render's join semantics for page names, including absolute-looking names. */
+export function atlasPagePath(atlasDir: string, name: string): string {
+  return isAbsolute(name) ? join(atlasDir, name) : resolveWrittenPath(atlasDir, name);
+}
+
 /**
  * Every page named, read from `atlasDir` by that name — the images a candidate
  * is drawn from, whichever poser draws it. A page that is not there is
@@ -939,7 +945,7 @@ function skeletonDurations(root: JsonObject): Array<{ name: string; duration: nu
 function pagesAt(names: readonly string[], atlasDir: string, absent: (page: string) => Error): Map<string, Plate> {
   const pages = new Map<string, Plate>();
   for (const name of names) {
-    const path = join(atlasDir, name);
+    const path = atlasPagePath(atlasDir, name);
     if (!existsSync(path)) throw absent(resolve(path));
     pages.set(name, readPlate(path));
   }
@@ -1132,7 +1138,8 @@ export function loadCandidate(
     const by = named === null || paths === null ? null : join(dirname(resolve(paths.skeleton)), MODEL_DOCUMENT_FILE);
     const reading = { by, draws: 'the core draws this build from it', refusedBuild: false };
     const accepted = choice.why;
-    const pages = pagesAt(names, input.atlasDir, (page) => pageRefusal(page, paths, accepted, reading));
+    const pageDir = by === null ? input.atlasDir : dirname(by);
+    const pages = pagesAt(names, pageDir, (page) => pageRefusal(page, paths, accepted, reading));
     return { choice, facts: coreFacts(input.skeletonText, input.atlasText, choice.core, chosen.document), pages };
   }
   const text = atlasText(choice.why);
@@ -2118,7 +2125,7 @@ export function textureSubstitutionFromText(atlasText: string, atlasDir: string,
     if (name.startsWith(SUBSTITUTE_PAGE)) {
       throw new Error(`atlas page "${name}" starts with the reserved prefix ${JSON.stringify(SUBSTITUTE_PAGE)}`);
     }
-    pages.set(SUBSTITUTE_PAGE + name, readPlate(join(atlasDir, name)));
+    pages.set(SUBSTITUTE_PAGE + name, readPlate(atlasPagePath(atlasDir, name)));
   }
   return { pages, regions, scales: atlasScales(atlasText) };
 }

@@ -68088,7 +68088,7 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
   // A minimal copy of the receipt module gives metadata plants their own package.
   const root = join(work, 'package');
   mkdirSync(join(root, 'src', 'cli'), { recursive: true });
-  for (const file of ['src/cli/run_stamp.ts', 'src/errors.ts', 'src/package_meta.ts']) cpSync(join(import.meta.dir, file), join(root, file));
+  for (const file of ['src/cli/run_stamp.ts', 'src/errors.ts', 'src/package_meta.ts', 'src/written_path.ts']) cpSync(join(import.meta.dir, file), join(root, file));
   for (const metadata of [{ name: '@rig-c/core' }, { name: '', version }, { name: '@rig-c/core', version: '' }]) {
     writeFileSync(join(root, 'package.json'), JSON.stringify(metadata));
     const planted = spawnSync(process.execPath, ['-e', "import {runStampPackage} from './src/cli/run_stamp.ts'; runStampPackage();"], { cwd: root, encoding: 'utf8' });
@@ -68445,10 +68445,52 @@ function linkedOutControls(say: (name: string, ok: boolean, detail: string, why:
     const winTree = absentTree(join(realWork, 'win-tree'));
     rmSync(join(winTree, 'node_modules'), { recursive: true });
     symlinkSync(join(import.meta.dir, 'node_modules'), join(winTree, 'node_modules'), 'dir');
-    const runStampPath = join(winTree, 'src', 'cli', 'run_stamp.ts');
-    const runStampSource = readFileSync(runStampPath, 'utf8');
+    const rulesPath = join(winTree, 'src', 'written_path.ts');
+    const rulesSource = readFileSync(rulesPath, 'utf8');
     const ruleLine = 'export const LINK_RULE: LinkRule = linkRuleFor(process.platform);';
-    const winApplied = runStampSource.split(ruleLine).length === 2;
+    const winApplied = rulesSource.split(ruleLine).length === 2;
+
+    // A sibling alias keeps the writer's lexical depth on Windows. On POSIX the alias's depth differs
+    // from the physical directory's, so an old lexical reader climbs past the only copy of the art.
+    const peer = join(realWork, 'link-peer');
+    symlinkSync(realDeep, peer, process.platform === 'win32' ? 'junction' : 'dir');
+    const readBuild = (root: string, candidate: string, tag: string) => {
+      const render = (entry: string, poser: string) => {
+        const out = join(realWork, `${tag}-${poser}`);
+        const run = runEntryIn(root, entry, ['render', '--candidate', candidate, '--poser', poser, '--animation', 'idle', '--fps', '1', '--max', '32', '--out', out], realWork);
+        return { run, out };
+      };
+      const core = render('cli_core.ts', 'core');
+      const spine = render('cli.ts', 'spine');
+      const out = join(realWork, `${tag}-repack`);
+      const run = runEntryIn(root, 'cli_core.ts', ['repack', candidate, '--out', out], realWork);
+      return { core, spine, repack: { run, out } };
+    };
+    type BuildReads = ReturnType<typeof readBuild>;
+    const readExits = ({ core, spine, repack }: BuildReads): string =>
+      `core render=${core.run.status}, Spine render=${spine.run.status}, repack=${repack.run.status}`;
+    const readsGreen = ({ core, spine, repack }: BuildReads): boolean =>
+      [core, spine].every(({ run, out }) => run.status === 0 && renderHashedFiles(out).some((file) => file.endsWith('.png'))) &&
+      repack.run.status === 0 && /\(a\) regions: (\d+) of \1 pixel-identical/.test(repack.run.stdout) &&
+      repack.run.stdout.includes('(b) skeleton.json: byte-identical') &&
+      repack.run.stdout.includes('(c) gate: green') && existsSync(join(repack.out, MODEL_DOCUMENT_FILE));
+    const sameReads = (a: BuildReads, b: BuildReads): boolean =>
+      readsGreen(a) && readsGreen(b) && contents(a.core.out) === contents(b.core.out) && contents(a.spine.out) === contents(b.spine.out) &&
+      bytesApart(buildBytes(a.repack.out), buildBytes(b.repack.out)).length === 0;
+    const pageMissing = (reads: BuildReads, path: string): boolean =>
+      reads.core.run.status === 2 && reads.spine.run.status === 2 && reads.repack.run.status === 1 &&
+      [reads.core, reads.spine, reads.repack].every(({ run, out }) =>
+        run.stderr.includes(path) && !existsSync(out));
+    const firstPage = (candidate: string): string => {
+      const atlas = join(candidate, 'skeleton.atlas');
+      return existsSync(atlas) ? parseAtlasText(readFileSync(atlas, 'utf8')).pages[0]?.name ?? '' : '';
+    };
+    const pageAtOnly = (goodBase: string, badBase: string, page: string): boolean =>
+      page.startsWith('../') && existsSync(resolve(goodBase, page)) && !existsSync(resolve(badBase, page));
+    const validateBuild = (root: string, candidate: string): ReturnType<typeof runEntryIn> =>
+      runEntryIn(root, 'cli.ts', ['validate', candidate], realWork);
+    const validationGreen = (validated: ReturnType<typeof runEntryIn>): boolean =>
+      validated.status === 0 && validated.stdout.includes('PASS  A17_ATLAS_PAGE_FILES_EXIST') && validated.stdout.includes('PASS  A06_ATLAS_PAGE_SIZE_MATCHES_PNG');
 
     const exerciseAsSpelled = (root: string, tag: string, entries: readonly string[]): { buildOk: boolean; ingestOk: boolean; renderOk: boolean } => {
       let buildOk = true;
@@ -68483,17 +68525,101 @@ function linkedOutControls(say: (name: string, ok: boolean, detail: string, why:
       return { buildOk, ingestOk, renderOk };
     };
 
-    writeFileSync(runStampPath, runStampSource.replace(ruleLine, "export const LINK_RULE: LinkRule = linkRuleFor('win32');"));
+    writeFileSync(rulesPath, rulesSource.replace(ruleLine, "export const LINK_RULE: LinkRule = linkRuleFor('win32');"));
     const win = exerciseAsSpelled(winTree, 'win32', ['cli.ts', 'cli_core.ts']);
     say('LO05_THE_WIN32_LINK_RULE_MODELS_AS_SPELLED_ACROSS_BUILD_INGEST_AND_RENDER', winApplied && win.buildOk && win.ingestOk && win.renderOk,
       `applied=${winApplied}, build=${win.buildOk}, ingest=${win.ingestOk}, render+replay=${win.renderOk}`,
       'on Windows `..` resolves textually beside a junction, so written relative paths must be computed from the paths as spelled');
-
-    writeFileSync(runStampPath, runStampSource.replace(ruleLine, "export const LINK_RULE: LinkRule = linkRuleFor('linux');"));
+    const modeledName = 'win32-build-cli_core.ts';
+    const modeled = join(peer, modeledName);
+    const modeledPhysical = join(realDeep, modeledName);
+    const modeledPage = firstPage(modeled);
+    const asSpelledOnly = pageAtOnly(modeled, modeledPhysical, modeledPage);
+    const winReads = readBuild(winTree, modeled, 'read-win32');
+    const winValidation = validateBuild(winTree, modeled);
+    writeFileSync(rulesPath, rulesSource.replace(ruleLine, "export const LINK_RULE: LinkRule = linkRuleFor('linux');"));
     const other = exerciseAsSpelled(winTree, 'other', ['cli_core.ts']);
     say('LO06_THE_OTHER_PLATFORM_RULE_PLANTED_FAILS_THE_WIN32_MODEL', winApplied && !other.buildOk && !other.ingestOk && !other.renderOk,
       `applied=${winApplied}, build=${other.buildOk}, ingest=${other.ingestOk}, render+replay=${other.renderOk}`,
       'planting through-links into the win32 model climbs one level too many on build, ingest and render replay, reproducing issue #1775');
+
+    const hostName = 'host-cli_core.ts';
+    const hostWritten = join(realLink, hostName);
+    const hostAlias = join(peer, hostName);
+    const hostPhysical = join(realDeep, hostName);
+    const hostPage = firstPage(hostWritten);
+    const hostHasArt = LINK_RULE === 'as-spelled' ? pageAtOnly(hostWritten, hostPhysical, hostPage) : pageAtOnly(hostPhysical, hostAlias, hostPage);
+    const hostRead = readBuild(import.meta.dir, hostWritten, 'read-host-linked');
+    const aliasRead = readBuild(import.meta.dir, hostAlias, 'read-host-peer');
+    const sameHost = sameReads(hostRead, aliasRead);
+    say('LO07_READERS_FOLLOW_THE_HOST_BASE_OF_A_LINK_WRITTEN_BUILD', hostHasArt && sameHost,
+      `${LINK_RULE}: page at writer's base only=${hostHasArt}, writer (${readExits(hostRead)}), sibling alias (${readExits(aliasRead)}), outputs identical=${sameHost}`,
+      'a linked --out writes page names using the host rule, and the sibling alias resolves those same names from the corresponding base');
+
+    if (LINK_RULE === 'through-links') {
+      const physicalName = 'build-cli_core.ts';
+      const physical = join(realDeep, physicalName);
+      const alias = join(peer, physicalName);
+      const separated = pageAtOnly(physical, alias, firstPage(physical));
+      const physicalRead = readBuild(import.meta.dir, physical, 'read-host-physical');
+      const physicalAliasRead = readBuild(import.meta.dir, alias, 'read-host-physical-peer');
+      const same = sameReads(physicalRead, physicalAliasRead);
+      say('LO08_A_PHYSICAL_BUILD_READ_THROUGH_AN_ALIAS_KEEPS_ITS_PAGES', separated && same,
+        `page at physical base only=${separated}, physical (${readExits(physicalRead)}), alias (${readExits(physicalAliasRead)}), outputs identical=${same}`,
+        'a POSIX reader can enter an existing build through an alias because the writer used the physical directory');
+    }
+
+    const hostValidation = validateBuild(import.meta.dir, hostAlias);
+    const editorOut = join(realWork, 'read-host-editor');
+    const editor = runEntryIn(import.meta.dir, 'tools/editor_roundtrip.ts', ['--build', hostAlias, '--out', editorOut, '--editor', join(realWork, 'missing-editor')], realWork);
+    const editorFoundImages = editor.status === 1 && editor.stderr.includes('atlas names its pages by path, not by filename') && !existsSync(editorOut);
+    say('LO09_VALIDATE_AND_EDITOR_IMAGES_PREFLIGHT_FOLLOW_THE_HOST_BASE', hostHasArt && validationGreen(hostValidation) && editorFoundImages,
+      `validate exit=${hostValidation.status}, editor preflight exit=${editor.status}: ${editor.stderr.trim().split('\n')[0]}`,
+      'validate measures page presence and size, and the editor tool finds the loose images before refusing an atlas whose external pages cannot travel with the export');
+
+    say('LO10_THE_WIN32_MODEL_READS_PAGES_FROM_THE_JUNCTION_SPELLING', winApplied && win.buildOk && asSpelledOnly && readsGreen(winReads) && validationGreen(winValidation),
+      `rule planted=${winApplied}, page at lexical base only=${asSpelledOnly}, ${readExits(winReads)}, validate=${winValidation.status}`,
+      'reading through a junction on Windows keeps the lexical base even when the physical directory is at another depth');
+
+    const otherReads = readBuild(winTree, modeled, 'read-other');
+    const wrongWinPage = resolve(modeledPhysical, modeledPage);
+    const otherValidation = validateBuild(winTree, modeled);
+    const validationRed = otherValidation.status === 1 &&
+      otherValidation.stdout.includes('FAIL  A17_ATLAS_PAGE_FILES_EXIST') && otherValidation.stdout.includes(wrongWinPage);
+    say('LO11_THROUGH_LINKS_READERS_REFUSE_THE_SAME_FROZEN_WIN32_BUILD',
+      winApplied && asSpelledOnly && readsGreen(winReads) && pageMissing(otherReads, wrongWinPage) && validationRed,
+      `${readExits(otherReads)}, all name the missing page ${wrongWinPage} and leave no output=${pageMissing(otherReads, wrongWinPage)}, A17 red=${validationRed}`,
+      'switching only the reader to through-links makes it look for the same written page names beside the physical target');
+
+    // Keep LO06's through-links build frozen, even on Windows. Change only the two read sites in a separate copy.
+    const lexicalTree = absentTree(join(realWork, 'lexical-tree'));
+    rmSync(join(lexicalTree, 'node_modules'), { recursive: true });
+    symlinkSync(join(import.meta.dir, 'node_modules'), join(lexicalTree, 'node_modules'), 'dir');
+    if (process.platform === 'win32') {
+      writeFileSync(join(lexicalTree, 'src', 'written_path.ts'), rulesSource.replace(ruleLine, "export const LINK_RULE: LinkRule = linkRuleFor('linux');"));
+    }
+    const through = join(peer, 'other-build-cli_core.ts');
+    const throughPhysical = join(realDeep, 'other-build-cli_core.ts');
+    const throughPage = firstPage(through);
+    const throughOnly = pageAtOnly(throughPhysical, through, throughPage);
+    const before = readBuild(lexicalTree, through, 'read-through');
+    const plantLine = (file: string, line: string, lexical: string, addResolve = false): boolean => {
+      const path = join(lexicalTree, 'src', file);
+      const source = readFileSync(path, 'utf8');
+      const anchor = `\n${line}\n`;
+      if (source.split(anchor).length !== 2) return false;
+      const changed = source.replace(anchor, `\n${lexical}\n`);
+      writeFileSync(path, addResolve ? `import { resolve } from 'node:path';\n${changed}` : changed);
+      return true;
+    };
+    const renderPlanted = plantLine('render_shared.ts', '    const path = atlasPagePath(atlasDir, name);', '    const path = join(atlasDir, name);');
+    const repackPlanted = plantLine('repack.ts', '    const path = resolveWrittenPath(atlasDir, page.name);', '    const path = resolve(atlasDir, page.name);', true);
+    const lexical = readBuild(lexicalTree, through, 'read-lexical');
+    const wrongPage = resolve(through, throughPage);
+    say('LO12_LEXICAL_LOOKUP_PLANTED_IN_A_COPY_REFUSES_THE_THROUGH_LINKS_BUILD',
+      winApplied && renderPlanted && repackPlanted && throughOnly && readsGreen(before) && pageMissing(lexical, wrongPage),
+      `render plant=${renderPlanted}, repack plant=${repackPlanted}, baseline (${readExits(before)}), lexical (${readExits(lexical)}), all name the missing page and leave no output=${pageMissing(lexical, wrongPage)}`,
+      'restoring either reader\'s lexical lookup misses the existing page through the alias');
   }
   rmSync(work, { recursive: true, force: true });
 }
@@ -73662,6 +73788,9 @@ function runEditorRoundtripSuite(): number {
     const anchors = original.split(anchor).length - 1;
     const plantedTool = join(root, 'planted-tool', 'editor_roundtrip.ts');
     mkdirSync(dirname(plantedTool), { recursive: true });
+    // ERT83, ERT86 and ERT89 all import this sibling of their planted tool directories.
+    mkdirSync(join(root, 'src'), { recursive: true });
+    copyFileSync(join(import.meta.dir, 'src', 'written_path.ts'), join(root, 'src', 'written_path.ts'));
     writeFileSync(
       plantedTool,
       original.replace(anchor, "const read = { skeleton: JSON.parse(readFileSync(source, 'utf8')) as Record<string, unknown> };"),

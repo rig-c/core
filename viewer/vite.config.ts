@@ -21,13 +21,10 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vite';
-import { REPO_MOUNT, scanInventory } from './inventory.ts';
+import { isServedRepoPath, REPO_MOUNT, scanInventory } from './inventory.ts';
 
 const viewerDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(viewerDir, '..');
-
-/** The only two trees a request may reach. */
-const SERVED_ROOTS = ['bench', 'examples'];
 
 const MIME: Record<string, string> = {
   '.png': 'image/png',
@@ -58,11 +55,10 @@ function runViewer(): Plugin {
         const requested = decodeURIComponent(url.slice(REPO_MOUNT.length + 1).split('?')[0]);
         const file = path.resolve(repoRoot, requested);
         const rel = path.relative(repoRoot, file);
-        const top = rel.split(path.sep)[0];
         // Refuse anything that climbs out of the repository or out of the two
         // trees the viewer is allowed to read. `path.resolve` has already
         // normalised the `..` segments a run's atlas legitimately contains.
-        if (rel.startsWith('..') || path.isAbsolute(rel) || !SERVED_ROOTS.includes(top)) {
+        if (!isServedRepoPath(rel)) {
           response.statusCode = 403;
           response.end('forbidden');
           return;

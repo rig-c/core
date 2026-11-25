@@ -128,12 +128,13 @@ import {
 import { readFileSync } from 'node:fs';
 // `dirname` is read by no body here today: RC23's `bonedist-pages` plant puts a `loadPosable(…, dirname(atlasPath))` back into
 // `loadPosedSkeleton`, and kept, the plant reads red for its own reason rather than for a missing name.
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { Plate, readPlate } from '../tools/plate.ts';
 import { clipSourceOf, corePoser, inactiveBoneSnapshot, physicsClockStep, subsetOver, unposedBones } from './render_core.ts';
 import { type PosedVertices, type WorldTransform } from './nonfinite.ts';
 import type { EnvironmentChange } from './environment.ts';
 import {
+  atlasPagePath,
   atlasScales,
   choosePosers,
   pairRefusal,
@@ -406,7 +407,7 @@ export function atlasPageNames(atlasText: string): string[] {
 export function posableFromText(skeletonText: string, atlasText: string, atlasDir: string): Posable {
   const atlas = new TextureAtlas(atlasText);
   const pages = new Map<string, Plate>();
-  for (const page of atlas.pages) pages.set(page.name, readPlate(join(atlasDir, page.name)));
+  for (const page of atlas.pages) pages.set(page.name, readPlate(atlasPagePath(atlasDir, page.name)));
   const data = new SkeletonJson(new AtlasAttachmentLoader(atlas)).readSkeletonData(JSON.parse(skeletonText));
   return { data, pages };
 }

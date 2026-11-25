@@ -16,9 +16,16 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { resolveWrittenPath, spelledDir } from '../src/written_path.ts';
 
 /** Every repository file the viewer serves hangs under this URL prefix. */
 export const REPO_MOUNT = '/repo';
+
+/** Repository-relative paths the dev server can serve. */
+export function isServedRepoPath(relativePath: string): boolean {
+  const top = relativePath.split(path.sep)[0];
+  return !relativePath.startsWith('..') && !path.isAbsolute(relativePath) && (top === 'bench' || top === 'examples');
+}
 
 export interface Viewport {
   x: number;
@@ -205,28 +212,30 @@ export function parseAtlasPages(text: string): string[] {
  *
  * rigc writes the source art's own path into the atlas rather than packing a
  * page, so the names in a run's `skeleton.atlas` are relative paths that climb
- * out of `bench/runs/…` back to `examples/<example>/images/…`. Resolving them
- * against the atlas's own directory is therefore the rule — and it is the same
- * rule the Spine editor uses, so a pre-packed page sitting next to the atlas
- * (a bare `skeleton.png`) resolves by it too. The `examples/<example>` lookups
+ * out of `bench/runs/…` back to `examples/<example>/images/…`. Read them from
+ * the directory spelling used to write them, including a pre-packed page
+ * sitting next to the atlas (a bare `skeleton.png`). The `examples/<example>` lookups
  * are the fallback for a bare name that is *not* beside the atlas: the packed
  * pages of the official exports live in `export/`, the loose art in `images/`.
  */
 function resolvePage(
   repoRoot: string,
+  writtenRepoRoot: string,
   atlasDir: string,
   example: string | null,
   name: string,
 ): string | null {
-  const tried: string[] = [path.resolve(atlasDir, name)];
+  // A relative page and the repository root need the same spelling to produce
+  // a serveable URL when the repository itself is reached through an alias.
+  const pageRoot = path.isAbsolute(name) ? repoRoot : writtenRepoRoot;
+  const tried = [path.relative(pageRoot, resolveWrittenPath(atlasDir, name))];
   if (!name.includes('/') && example) {
-    tried.push(path.join(repoRoot, 'examples', example, 'images', name));
-    tried.push(path.join(repoRoot, 'examples', example, 'export', name));
+    tried.push(path.relative(repoRoot, path.join(repoRoot, 'examples', example, 'images', name)));
+    tried.push(path.relative(repoRoot, path.join(repoRoot, 'examples', example, 'export', name)));
   }
-  for (const file of tried) {
-    // Never serve outside the repository, whatever an atlas asks for.
-    const rel = path.relative(repoRoot, file);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
+  for (const rel of tried) {
+    if (!isServedRepoPath(rel)) continue;
+    const file = path.resolve(repoRoot, rel);
     if (existsSync(file)) return served(repoRoot, file);
   }
   return null;
@@ -339,6 +348,7 @@ function findBench(runDir: string, candidateDir: string, name: string): string |
 
 function buildCandidate(
   repoRoot: string,
+  writtenRepoRoot: string,
   runName: string,
   runDir: string,
   candidateDir: string,
@@ -379,7 +389,7 @@ function buildCandidate(
   const atlasText = readFileSync(atlasFile, 'utf8');
   candidate.pages = parseAtlasPages(atlasText).map((pageName) => ({
     name: pageName,
-    url: resolvePage(repoRoot, skeletonDir, example, pageName),
+    url: resolvePage(repoRoot, writtenRepoRoot, skeletonDir, example, pageName),
   }));
   const missing = candidate.pages.filter((page) => page.url === null);
   if (candidate.pages.length === 0) {
@@ -408,6 +418,7 @@ function buildCandidate(
  */
 export function scanInventory(repoRoot: string): Inventory {
   const runsRoot = path.join(repoRoot, 'bench', 'runs');
+  const writtenRepoRoot = spelledDir(repoRoot);
   const runs: RunInfo[] = [];
   for (const runName of listDirs(runsRoot)) {
     const runDir = path.join(runsRoot, runName);
@@ -421,7 +432,7 @@ export function scanInventory(repoRoot: string): Inventory {
           ? dir
           : null;
       if (!skeletonDir) continue;
-      candidates.push(buildCandidate(repoRoot, runName, runDir, dir, skeletonDir));
+      candidates.push(buildCandidate(repoRoot, writtenRepoRoot, runName, runDir, dir, skeletonDir));
     }
     if (candidates.length === 0) {
       candidates.push({

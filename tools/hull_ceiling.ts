@@ -131,6 +131,7 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pageFootprint, parseAtlasText, type AtlasPage, type AtlasRegion } from '../src/atlas.ts';
+import { resolveWrittenPath } from '../src/written_path.ts';
 import { findSelfIntersection, prunePolygon, signedArea, type AlphaMask } from '../src/mesh.ts';
 import { traceOutline } from './trace_footprint.ts';
 import { readPlate, type Plate } from './plate.ts';
@@ -491,7 +492,7 @@ function sameHull(a: Point[], b: Point[]): boolean {
 function readPages(atlasPath: string, pages: readonly AtlasPage[]): Map<string, Plate> {
   const out = new Map<string, Plate>();
   for (const page of pages) {
-    const file = resolve(dirname(atlasPath), page.name);
+    const file = resolveWrittenPath(dirname(atlasPath), page.name);
     if (!existsSync(file)) throw new CeilingInputError(`page "${page.name}" is not on disk`);
     const plate = readPlate(file);
     if (plate.width !== page.width || plate.height !== page.height) {

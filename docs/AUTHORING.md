@@ -2152,7 +2152,7 @@ that is a defect in this guide: report it.
 | `width`, `height` | the **stage**'s size, **or both `null` for "this skeleton declares no stage"** | falls back to the manifest's crop; **with neither the number nor the `null`, the compile fails** |
 | `fps` | nonessential editor hint | `SkeletonData.fps` stays 30 |
 | `referenceScale` | 4.2+ physics/scale reference: a physics constraint's `wind` and `gravity` act over it | parser default 100. Carried as stated — never rounded — and the header leaves it out at exactly 100. `skeleton.model.json` always states it, as `referenceScale` after `spec`: the number stated, or 100 when none is — the value the Spine file is read as — and rigc's posing core steps wind and gravity over it (issue #958) |
-| `images` | where the editor's import looks for the part PNGs, as a path from the skeleton file | **written for you**: under `--copy-images` the `--out` directory itself, spelled `../<its basename>/` (a literal `./` is dropped by the editor on import; a named directory is kept and every part is found — measured on 4.3.23); otherwise the relative path from `--out` to the one directory the spec names every part PNG in (the rig's images directory, or the manifest's plates). A declared value is carried through verbatim — and overridden by `--copy-images`, which moved the parts. Parts spread over several directories have no single true path, so nothing is written |
+| `images` | where the editor's import looks for the part PNGs, as a path from the skeleton file | **written for you**: under `--copy-images` the `--out` directory itself, spelled `../<its basename>/` (a literal `./` is dropped by the editor on import; a named directory is kept and every part is found — measured on 4.3.23); otherwise the relative path from `--out` to the one directory the spec names every part PNG in (the rig's images directory, or the manifest's plates). Both ends are resolved through symbolic links first, as the atlas's page names are, so an `--out` given through a link writes the same bytes as its real path and the value resolves from where the skeleton really is; the basename under `--copy-images` is the real directory's. A declared value is carried through verbatim — and overridden by `--copy-images`, which moved the parts. Parts spread over several directories have no single true path, so nothing is written |
 | `audio` | nonessential: where the editor looks for the skeleton's audio files, as a path from the skeleton file — a string, or `null` for none | **not written unless you state it.** rigc has no audio to point at, so this is a value a spec states or does not; stated, it is carried verbatim, `null` included, because `null` is what an editor export writes when no audio folder is set (all twelve under `examples/` do) and `ingest` carries it from there. Anything but a string or `null` is a compile error naming the value |
 | `stageBox` | **rigc's own field**: carry the stage in the Spine files as a bounding-box attachment — `{ "slot": …, "attachment": … }`, see *The stage in the shipped files* below | absent: no box, and no byte of any build moves. Both names required; the numbers are never yours to write |
 
@@ -8128,7 +8128,9 @@ files. Image and imported-atlas content remains governed by the existing
 compiler and gate.
 
 Every path is relative to the output directory, uses `/`, and may start with
-`../` for a file outside that directory. If `path.relative` still returns an
+`../` for a file outside that directory. The output directory and every recipe
+file are resolved through symbolic links first (a file keeps its own name), so
+the paths resolve from where the output really is. If `path.relative` still returns an
 absolute path, as on Windows across drives, `CE_RUN_STAMP_PATH_VOLUME` refuses
 before output writes or removals. Recipe and report paths are checked before
 compilation. Keep those files on the output directory's volume. Output rows have `path`, `sha256`,

@@ -15,7 +15,7 @@
  * `./spine_commands.ts`'s, which only `cli.ts` imports.
  */
 import { type AtlasRegion, DEFAULT_PACK_SHAPE, DEFAULT_PADDING, DEFAULT_PAGE_EDGES, DEFAULT_PAGE_SIZE, PACK_SHAPES, packAtlas, type PackInput, packFootprints, type PackShape, PAGE_EDGES, type PageEdges, pageFootprint } from '../atlas.ts';
-import { RUN_STAMP_FILE, readRunInputs, type RunInput, runStampClock, runStampPackage, runStampPath, writeRunStamp } from './run_stamp.ts';
+import { realDir, realInput, realKeepingName, RUN_STAMP_FILE, readRunInputs, type RunInput, runStampClock, runStampPackage, runStampPath, writeRunStamp } from './run_stamp.ts';
 import { copyAtlasPages, plannedPageCopies } from '../emit.ts';
 import {
   BUILD_REPORT_SPEC,
@@ -271,12 +271,12 @@ function entryToOptions(dir: string, name: string, entry: CutEntry): CompileOpti
     if (typeof entry?.[key] !== 'string') throw new UsageError(`cut ${JSON.stringify(name)} has no "${key}" path`);
   }
   const opts: CompileOptions = {
-    rigPath: resolve(dir, entry.rig),
-    motionPath: resolve(dir, entry.motion),
-    outDir: resolve(dir, entry.out),
+    rigPath: realInput(resolve(dir, entry.rig), 'file'),
+    motionPath: realInput(resolve(dir, entry.motion), 'file'),
+    outDir: realDir(resolve(dir, entry.out)),
   };
-  if (entry.manifest !== undefined) opts.manifestPath = resolve(dir, entry.manifest);
-  if (entry.images !== undefined) opts.imagesDir = resolve(dir, entry.images);
+  if (entry.manifest !== undefined) opts.manifestPath = realInput(resolve(dir, entry.manifest), 'file');
+  if (entry.images !== undefined) opts.imagesDir = realInput(resolve(dir, entry.images), 'dir');
   return opts;
 }
 
@@ -294,14 +294,19 @@ export function resolveCut(flags: Record<string, string>, command: 'build' | 'ex
     for (const key of ['rig', 'motion', 'out'] as const) {
       if (flags[key] === undefined) throw new MissingFlagError(`${command} needs --${key} ${CUT_FLAG_VALUES[key]} (or --cut <name> --cuts <cuts.json>)`);
     }
+    // Every path through the filesystem's links (issue #1773): the compiler spells `skeleton.images` and the atlas's
+    // page names as `relative` paths from `outDir`, by arithmetic on the text, and `..` climbed out of a linked
+    // directory lands beside the link's target rather than beside the link. Spelled here, at the one door every path
+    // comes in by, so `src/compile.ts` keeps reading nothing off the disk to name a path. An input that is not a file
+    // is handed on as given, so its refusal names it as the caller spelled it (`realInput`).
     const opts: CompileOptions = {
-      rigPath: resolve(flags.rig),
-      motionPath: resolve(flags.motion),
-      outDir: resolve(flags.out),
+      rigPath: realInput(flags.rig, 'file'),
+      motionPath: realInput(flags.motion, 'file'),
+      outDir: realDir(flags.out),
     };
-    if (flags.manifest !== undefined) opts.manifestPath = resolve(flags.manifest);
-    if (flags.images !== undefined) opts.imagesDir = resolve(flags.images);
-    if (flags['atlas-in'] !== undefined) opts.atlasInPath = resolve(flags['atlas-in']);
+    if (flags.manifest !== undefined) opts.manifestPath = realInput(flags.manifest, 'file');
+    if (flags.images !== undefined) opts.imagesDir = realInput(flags.images, 'dir');
+    if (flags['atlas-in'] !== undefined) opts.atlasInPath = realInput(flags['atlas-in'], 'file');
     return { label: flags.rig, opts };
   }
   if (flags.cut === undefined) throw new UsageError('give either --cut <name> --cuts <cuts.json>, or --rig/--motion/--out');
@@ -318,7 +323,7 @@ export function resolveCut(flags: Record<string, string>, command: 'build' | 'ex
   // manifest, and where the pixels are delivered from is a property of the BUILD.
   // Resolved against the working directory, like every other path on the command
   // line, rather than against the table's directory.
-  if (flags['atlas-in'] !== undefined) opts.atlasInPath = resolve(flags['atlas-in']);
+  if (flags['atlas-in'] !== undefined) opts.atlasInPath = realInput(flags['atlas-in'], 'file');
   return { label: flags.cut, opts };
 }
 
@@ -2649,8 +2654,10 @@ export function writeBuildReport(record: BuildReport): void {
 export function readReportFlag(flags: Record<string, string>, command: BuildReport['command'], outDir: string, supplier: BuildReportSupplier): BuildReport | null {
   const raw = flags.report;
   if (raw === undefined) return null;
-  const path = resolve(raw);
-  const out = resolve(outDir);
+  // Both ends through their links, as `outDir` already is: a report named through a linked spelling of `--out` is
+  // still inside it (issue #1773).
+  const path = realKeepingName(raw);
+  const out = realDir(outDir);
   const within = relative(out, path);
   if (within === '' || (!within.startsWith('..') && !isAbsolute(within))) {
     throw new UsageError(
@@ -2773,7 +2780,7 @@ export function runBuild(flags: Record<string, string>, gate: BuildGate, caller:
     { role: 'rig', path: opts.rigPath },
     { role: 'motion', path: opts.motionPath },
     ...(opts.manifestPath === undefined ? [] : [{ role: 'manifest' as const, path: opts.manifestPath }]),
-    ...(flags.cuts === undefined ? [] : [{ role: 'cuts' as const, path: resolve(flags.cuts) }]),
+    ...(flags.cuts === undefined ? [] : [{ role: 'cuts' as const, path: realInput(flags.cuts, 'file') }]),
   ];
   if (now !== undefined) {
     for (const input of inputFiles) runStampPath(opts.outDir, input.path);

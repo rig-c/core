@@ -68061,7 +68061,8 @@ function runStampControls(say: (name: string, ok: boolean, detail: string, why: 
       const out = join(fixture, `${entry}-${target}-volume`);
       const report = join(fixture, `${entry}-${target}-volume.report.json`);
       writeFileSync(report, 'earlier report');
-      const file = target === 'rig' ? rig : report;
+      // `build` hands its inputs on through their links (issue #1773), so the plant names the rig by its real path.
+      const file = target === 'rig' ? realpathSync(rig) : report;
       const planted = `  const path = file === ${JSON.stringify(file)} ? resolve('planted-other-volume') : relative(resolve(out), resolve(file));`;
       const applied = source.split(relativeLine).length === 2;
       writeFileSync(modulePath, source.replace(relativeLine, planted));
@@ -68267,6 +68268,79 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
   rmSync(work, { recursive: true, force: true });
 }
 
+/**
+ * An output directory named through a link (issue #1773). `build` spells `skeleton.images` and the atlas's page names,
+ * and `ingest` the rig spec's `images`, as relative paths from `--out`; computed on the text, `..` climbed out of the
+ * linked directory and named a path that did not resolve from the real one, and the two spellings of one directory
+ * wrote different bytes. The control makes its own link — two levels shallower than its target, so a climb through it
+ * lands somewhere else — and holds both spellings to one set of bytes that resolves from the real directory.
+ */
+function linkedOutControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-linked-out-'));
+  const fixture = join(work, 'fixture');
+  cpSync(join(import.meta.dir, 'gallery', 'nod'), fixture, { recursive: true });
+  const deep = join(work, 'real', 'deep');
+  mkdirSync(deep, { recursive: true });
+  const link = join(work, 'link');
+  symlinkSync(deep, link, 'dir');
+  const FILES = ['skeleton.json', 'skeleton.atlas', 'skeleton.model.json'];
+  const bytesOf = (dir: string, files: readonly string[]): string[] => files.map((file) => existsSync(join(dir, file)) ? readFileSync(join(dir, file), 'utf8') : '(absent)');
+  // What a reader in the real directory finds: the parts directory `images` names, and the first page the atlas names.
+  const resolves = (dir: string): boolean => {
+    if (!existsSync(join(dir, 'skeleton.json'))) return false;
+    const images = (JSON.parse(readFileSync(join(dir, 'skeleton.json'), 'utf8')) as { skeleton: { images?: string } }).skeleton.images;
+    const page = readFileSync(join(dir, 'skeleton.atlas'), 'utf8').split('\n')[0];
+    return images !== undefined && existsSync(join(dir, images, 'head.png')) && existsSync(join(dir, page));
+  };
+  const buildBoth = (root: string, entry: string, name: string): { linked: number | null; real: number | null; same: boolean; found: boolean } => {
+    const args = (out: string): string[] => ['build', '--rig', join(fixture, 'rig.json'), '--motion', join(fixture, 'motion.json'), '--out', out];
+    const linked = runEntryIn(root, entry, args(join(link, name)), import.meta.dir);
+    const viaLink = bytesOf(join(deep, name), FILES);
+    const found = resolves(join(deep, name));
+    rmSync(join(deep, name), { recursive: true, force: true });
+    const real = runEntryIn(root, entry, args(join(deep, name)), import.meta.dir);
+    const same = JSON.stringify(viaLink) === JSON.stringify(bytesOf(join(deep, name), FILES)) && !viaLink.includes('(absent)');
+    return { linked: linked.status, real: real.status, same, found };
+  };
+  for (const entry of ['cli.ts', 'cli_core.ts']) {
+    const r = buildBoth(import.meta.dir, entry, `build-${entry}`);
+    say('LO01_A_BUILD_THROUGH_A_LINKED_OUT_WRITES_THE_BYTES_OF_THE_REAL_PATH', r.linked === 0 && r.real === 0 && r.same && r.found,
+      `${entry}: exit through the link=${String(r.linked)}, through the real path=${String(r.real)}, ${FILES.join(', ')} identical=${r.same}, images and first page resolve from the real directory=${r.found}`,
+      'one directory under two spellings is one build: the paths it writes are read from where the files really are');
+  }
+  // `ingest` restates the rig spec's `images` from its `--out` by the same arithmetic.
+  {
+    const built = join(work, 'built');
+    const ran = runEntryIn(import.meta.dir, 'cli.ts', ['build', '--rig', join(fixture, 'rig.json'), '--motion', join(fixture, 'motion.json'), '--out', built], import.meta.dir);
+    const ingestTo = (out: string): { status: number | null; rig: string } => {
+      const run = runEntryIn(import.meta.dir, 'cli.ts', ['ingest', join(built, 'skeleton.json'), '--images', join(fixture, 'parts'), '--out', out], import.meta.dir);
+      return { status: run.status, rig: existsSync(join(out, 'rig.json')) ? readFileSync(join(out, 'rig.json'), 'utf8') : '(absent)' };
+    };
+    const viaLink = ingestTo(join(link, 'specs'));
+    const images = viaLink.rig === '(absent)' ? undefined : (JSON.parse(viaLink.rig) as { images?: string }).images;
+    const found = images !== undefined && existsSync(join(deep, 'specs', images, 'head.png'));
+    rmSync(join(deep, 'specs'), { recursive: true, force: true });
+    const viaReal = ingestTo(join(deep, 'specs'));
+    say('LO02_INGEST_THROUGH_A_LINKED_OUT_WRITES_THE_IMAGES_OF_THE_REAL_PATH', ran.status === 0 && viaLink.status === 0 && viaReal.status === 0 && viaLink.rig === viaReal.rig && found,
+      `build exit=${String(ran.status)}, ingest exit through the link=${String(viaLink.status)}, through the real path=${String(viaReal.status)}, rig.json identical=${viaLink.rig === viaReal.rig}, images ${JSON.stringify(images ?? null)} resolves from the real directory=${found}`,
+      'the rig spec\'s images is a path from the directory it is written in, so it is computed from where that directory really is');
+  }
+  // Planted: the plain arithmetic restored at the door `build`'s paths come in by makes LO01 fail.
+  const plantTree = absentTree(join(work, 'plant-tree'));
+  rmSync(join(plantTree, 'node_modules'), { recursive: true });
+  symlinkSync(join(import.meta.dir, 'node_modules'), join(plantTree, 'node_modules'), 'dir');
+  const modulePath = join(plantTree, 'src', 'cli', 'shared.ts');
+  const source = readFileSync(modulePath, 'utf8');
+  const doorLine = '      outDir: realDir(flags.out),\n';
+  const applied = source.split(doorLine).length === 2;
+  writeFileSync(modulePath, source.replace(doorLine, '      outDir: resolve(flags.out),\n'));
+  const planted = buildBoth(plantTree, 'cli_core.ts', 'build-planted');
+  say('LO03_THE_PLAIN_ARITHMETIC_RESTORED_FAILS_LO01', applied && planted.linked === 0 && planted.real === 0 && !planted.same && !planted.found,
+    `plant applied=${applied}, exit through the link=${String(planted.linked)}, through the real path=${String(planted.real)}, identical=${planted.same}, resolves=${planted.found}`,
+    'the control must be seen failing on the fault it was written for, or a pass says nothing');
+  rmSync(work, { recursive: true, force: true });
+}
+
 function runCliSuite(): number {
   console.log('\n── cli ergonomics (subprocess: bun cli.ts …) ──');
   let bad = 0;
@@ -68276,6 +68350,7 @@ function runCliSuite(): number {
 
   runStampControls(say);
   renderRunControls(say);
+  linkedOutControls(say);
 
   {
     const { status, stderr } = runCli(['init']);
@@ -69812,7 +69887,8 @@ function runCliSuite(): number {
         : [`the loose build's refusal reads ${JSON.stringify(looseBuild.stderr.split('\n').find((l) => l.startsWith('rigc')) ?? looseBuild.stderr.slice(0, 160))}`]),
       ...(existsSync(join(looseRoot, 'out', 'skeleton.json')) ? ['the loose build wrote a skeleton anyway'] : []),
       ...(explained.status === 1 ? [] : [`explain --atlas-in exited ${String(explained.status)}`]),
-      ...(explained.stderr.includes(`rigc compile error: --atlas-in ${webpPack.atlasPath}`) && explained.stderr.includes(`${webpPack.pagePath} is a WebP image`)
+      // `explain` reads the pack it was handed through its links (issue #1773), and names it where it read it.
+      ...(explained.stderr.includes(`rigc compile error: --atlas-in ${realpathSync(webpPack.atlasPath)}`) && explained.stderr.includes(`${realpathSync(webpPack.pagePath)} is a WebP image`)
         ? []
         : [`explain's refusal reads ${JSON.stringify(explained.stderr.split('\n').find((l) => l.startsWith('rigc')) ?? explained.stderr.slice(0, 160))}`]),
       ...firstFew(
@@ -71224,7 +71300,8 @@ function runCliSuite(): number {
     ]);
 
     // CLI106
-    const handOff = `rigc: look at it: rigc preview --candidate ${resolve(green.outDir)}`;
+    // `build` hands its output directory on through its links (issue #1773), so the hand-off names the real one.
+    const handOff = `rigc: look at it: rigc preview --candidate ${realpathSync(green.outDir)}`;
     const named = lastLine(greenBuild.stdout).startsWith('rigc: look at it: ')
       ? lastLine(greenBuild.stdout).slice('rigc: look at it: rigc preview --candidate '.length)
       : null;

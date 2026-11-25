@@ -86,9 +86,23 @@ export const RENDER_PATH_FLAGS: readonly string[] = ['candidate', 'atlas', 'envi
 export type RenderInputRole = 'skeleton' | 'atlas' | 'model' | 'environment' | 'viewport' | 'boundary';
 export interface RenderInput { role: RenderInputRole; path: string; sha256: string }
 
-/** A directory through every link, so a rerun whose working directory the process reports by its real path agrees. */
-function realDir(path: string): string {
-  return existsSync(path) ? realpathSync(path) : resolve(path);
+/**
+ * A path through every link whether or not it exists yet: the real path of its nearest existing ancestor with the rest
+ * appended, so a rerun whose working directory the process reports by its real path agrees, and an output directory a
+ * command is about to create is spelled from where it will really be. A relative path is only true when it is computed
+ * between two paths spelled this way: climbing `..` out of a linked directory lands beside the link's target, not
+ * beside the link (issues #1770, #1773).
+ */
+export function realDir(path: string): string {
+  const rest: string[] = [];
+  let at = resolve(path);
+  while (!existsSync(at)) {
+    const up = dirname(at);
+    if (up === at) break;
+    rest.unshift(basename(at));
+    at = up;
+  }
+  return join(realpathSync(at), ...rest);
 }
 
 /**
@@ -96,10 +110,24 @@ function realDir(path: string): string {
  * (issue #1770, review): a `--candidate` naming a linked `skeleton.json` was followed to its target, and the rerun
  * looked for the atlas and model beside the target rather than beside the link.
  */
-function realKeepingName(path: string): string {
+export function realKeepingName(path: string): string {
   const absolute = resolve(path);
   if (!existsSync(absolute) || statSync(absolute).isDirectory()) return realDir(absolute);
   return join(realDir(dirname(absolute)), basename(absolute));
+}
+
+/**
+ * An input a command hands on through its links when it is what the command asks for — a file through the links of
+ * its directory (`realKeepingName`), a directory through all of them — and as given otherwise: a path that names
+ * nothing, or the wrong kind of thing, is refused downstream by name, and the refusal names it as the caller spelled
+ * it. Only an input that is read has its path spelled into anything written (issue #1773).
+ */
+export function realInput(path: string, kind: 'file' | 'dir'): string {
+  const absolute = resolve(path);
+  if (!existsSync(absolute)) return absolute;
+  const stat = statSync(absolute);
+  if (kind === 'file') return stat.isFile() ? realKeepingName(absolute) : absolute;
+  return stat.isDirectory() ? realDir(absolute) : absolute;
 }
 
 /**

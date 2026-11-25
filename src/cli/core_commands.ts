@@ -53,7 +53,7 @@ import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
 import { writeWhole } from './write_whole.ts';
-import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampPackage, writeRenderRunStamp } from './run_stamp.ts';
+import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, realDir, realInput, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampPackage, writeRenderRunStamp } from './run_stamp.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
 import { ATLAS_ABSENT, BOOLEAN_FLAGS, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -760,7 +760,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
   const sheetFormat = wantsSheet ? readSheetFormat(flags) : undefined;
   const sheetPageEdges = wantsSheet ? readPageEdges(flags) : undefined;
   const outRoot = resolve(flags.out ?? 'render');
-  if (flags['boundary-from'] !== undefined && realpathAhead(flags['boundary-from']) === realpathAhead(outRoot)) throw new UsageError('--boundary-from must name an earlier render directory different from --out');
+  if (flags['boundary-from'] !== undefined && realDir(flags['boundary-from']) === realDir(outRoot)) throw new UsageError('--boundary-from must name an earlier render directory different from --out');
   const geometry = flags.geometry !== undefined;
   const extremes = extremesOnly || flags.extremes !== undefined;
   // The fold reading (issue #1383) is its own flag rather than a part of --geometry, so a caller that asked for
@@ -1457,7 +1457,7 @@ export function cmdTextureScale(flags: Record<string, string>): void {
   const fps = readPositiveNumber(flags, 'fps', TEXTURE_SCALE_FPS, 1);
   const { skeletonPath, atlasPath, atlasText } = resolveDrawable(flags.candidate, flags.atlas);
   if (flags.json !== undefined) {
-    const target = realpathAhead(flags.json);
+    const target = realDir(flags.json);
     const within = relative(realpathSync(dirname(skeletonPath)), target);
     if (within === '' || (within !== '..' && !within.startsWith(`..${sep}`) && !isAbsolute(within))) {
       throw new UsageError('--json must name a report outside the candidate directory; texture-scale never writes into a build');
@@ -2256,7 +2256,8 @@ export function cmdIngest(flags: Record<string, string>, positional: string[]): 
     }
     stage = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
   }
-  const outDir = resolve(flags.out);
+  // Through its links, as `build`'s is (issue #1773): `images` below is spelled from it as a relative path.
+  const outDir = realDir(flags.out);
   /**
    * The rig spec's own `images`, spelled from `--out` the way `build` spells
    * `skeleton.images` from its own output directory — the SAME function, so the
@@ -2284,7 +2285,7 @@ export function cmdIngest(flags: Record<string, string>, positional: string[]): 
     // nothing else, so the parts may well be extracted AFTER the specs are
     // written, and refusing a directory this command never opens would refuse a
     // legitimate order of work. `build` is where a missing PNG is named.
-    specImages = relativeImagesPath(outDir, resolve(flags.images));
+    specImages = relativeImagesPath(outDir, realDir(flags.images));
   }
   console.log(`rigc ingest ${skeletonPath}`);
   console.log(`  ..    out  ${outDir}`);
@@ -2530,24 +2531,6 @@ export function discoverSkillSources(cwd: string, packageRoot: string): Discover
   return sources;
 }
 
-/**
- * The real path of `path` whether or not it exists yet: the real path of its
- * nearest existing ancestor with the rest appended. A relative link has to be
- * computed between two paths spelled the same way, and on macOS the temp
- * directory alone is reached as `/var/…` and is really `/private/var/…`.
- */
-function realpathAhead(path: string): string {
-  const rest: string[] = [];
-  let at = resolve(path);
-  while (!existsSync(at)) {
-    const up = dirname(at);
-    if (up === at) break;
-    rest.unshift(basename(at));
-    at = up;
-  }
-  return join(realpathSync(at), ...rest);
-}
-
 /** Every file under `root`, relative and sorted, so two trees compare in one order. */
 function filesUnder(root: string, prefix = ''): string[] {
   const out: string[] = [];
@@ -2650,13 +2633,13 @@ function installSkills(sources: readonly DiscoveredSkillSource[], dir: string, c
       };
     })
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  const realDir = realpathAhead(dir);
+  const realHome = realDir(dir);
   const planned: SkillsInstallEntry[] = [];
   const refused: string[] = [];
   for (const item of discovered) {
     const { name, packageName, source: from, realFrom, chosenOver } = item;
     const target = join(dir, name);
-    const link = relative(realDir, realFrom);
+    const link = relative(realHome, realFrom);
     let action: SkillsInstallAction = copy ? 'copied' : 'linked';
     let found: string | null = null;
     const stat = existsSync(target) || isLink(target) ? lstatSync(target) : null;
@@ -2664,7 +2647,7 @@ function installSkills(sources: readonly DiscoveredSkillSource[], dir: string, c
       // absent: this command writes it
     } else if (stat.isSymbolicLink()) {
       const text = readlinkSync(target);
-      const pointsAt = resolve(realDir, text);
+      const pointsAt = resolve(realHome, text);
       const lands = existsSync(pointsAt) ? realpathSync(pointsAt) : null;
       if (lands === realFrom && !copy) action = 'already linked';
       else if (lands === realFrom) found = `a symlink to ${text}, the package's own folder, and --copy asks for a directory in its place`;
@@ -3056,9 +3039,11 @@ function cmdSplit(flags: Record<string, string>): void {
   for (const flag of ['rig', 'motion', 'slot', 'out'] as const) {
     if (flags[flag] === undefined) throw new UsageError(`split needs --${flag}`);
   }
-  const rigPath = resolve(flags.rig);
-  const motionPath = resolve(flags.motion);
-  const outDir = resolve(flags.out);
+  // Through their links, as `build`'s are (issue #1773): `images` below is spelled from `outDir` to the rig file's
+  // directory as a relative path.
+  const rigPath = realInput(flags.rig, 'file');
+  const motionPath = realInput(flags.motion, 'file');
+  const outDir = realDir(flags.out);
   for (const [flag, path] of [['rig', rigPath], ['motion', motionPath]] as const) {
     if (!existsSync(path) || !statSync(path).isFile()) throw new SplitError(`--${flag} ${path}: no file there`, 2);
   }

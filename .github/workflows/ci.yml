@@ -212,7 +212,7 @@ jobs:
 
   # Whether the PACKAGE runs, which no other instrument here asks (issue #556).
   #
-  # ROADMAP.md's fourth condition for 1.0 is that the published package works on
+  # docs/ROADMAP_TO_1.0.md's fourth condition for 1.0 is that the published package works on
   # a machine that has never seen this repository, "checked mechanically, every
   # release". Everything that existed reads a LIST: `prepublishOnly` gates the
   # source tree, the `ships` job (squash-text.yml) reads `npm pack --dry-run` path lists at

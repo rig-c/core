@@ -403,7 +403,7 @@ jobs:
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name spine-rigc --out "$RUNNER_TEMP/alias-spine-rigc")"
           npm publish "$alias_tgz" --provenance --access public
 
-      # ROADMAP.md's fourth condition for 1.0 says "installing FROM THE REGISTRY
+      # docs/ROADMAP_TO_1.0.md's fourth condition for 1.0 says "installing FROM THE REGISTRY
       # and running a build is checked mechanically, every release" — this is
       # that sentence, and it is deliberately the smaller half of issue #556.
       #

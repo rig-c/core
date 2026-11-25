@@ -8151,6 +8151,59 @@ bytes keep their existing determinism contract.
 **Stability promise.** The keys, key order and meanings of `rigc-run/1` are
 fixed. Adding, removing or redefining a key requires a new spec version.
 
+**Render run record (`render-run.json`, `rigc-run/2`)**
+
+Both CLI entries write `render-run.json` at the root of `render --out` after the
+last file that invocation writes, in every mode: ordinary frame sets,
+`--extremes-only` and `--parallax`. It is one record per invocation. Its name is
+not `run.json` because nothing stops `--out` from naming a `build` directory,
+and a render there must leave the build's `rigc-run/1` stamp alone.
+
+**What it promises:** the tokens in `argv`, run by `rigc render` from the output
+directory with the **same package version**, render the same files again. The
+`package` key names that version. A later version with different defaults is a
+different producer. Telling the two apart is the reader's job, not the record's.
+
+The fixed top-level key order is `spec`, `package`, `command`, `argv`,
+`started_at`, `finished_at`, `inputs`, `outputs`. `spec` is `rigc-run/2`,
+`command` is `render`, and `package`, the two times and the row shapes are
+those of `rigc-run/1` above. The times come from the entry's wall clock.
+`render` does not read `SOURCE_DATE_EPOCH`.
+
+`argv` is an array of strings: the tokens `render` received after its name, in
+the order given. One normalisation is applied. The value of every path-valued
+flag is rewritten relative to the output directory, with `/` separators, and
+written `.` when it is that directory. The path-valued flags are `--candidate`,
+`--atlas`, `--environment`, `--viewport-from`, `--boundary-from` and `--out`,
+spelled either `--flag value` or `--flag=value`. `render` takes no positional
+argument, so any other token is kept as it was given. An option that was not
+given is not written: nothing is expanded and no default is filled in. If a
+path has no relative spelling from the output directory, as on Windows across
+drives, that token is written as given. The render is never refused over its
+record. When `--out` was not given, `argv` holds no `--out`, so a rerun from
+the output directory writes into `render/` under it: the same files, one level
+down.
+
+Each input row has `role`, `path`, `sha256`, in that order. The roles are, in
+this order: `skeleton`, plus `atlas` when the atlas file was read, `model` when
+a `skeleton.model.json` sits beside the skeleton, `environment` for
+`--environment`, `viewport` for the `frames.json` that `--viewport-from` read,
+and `boundary` for the `frames.json` of the `--boundary-from` render. The
+hashes are taken before anything is posed. Atlas page images and an earlier
+render's frames are pictures and are not bound, just as `rigc-run/1` binds no
+image. Output rows are the files this invocation wrote, sorted by path in
+UTF-16 code-unit order. These are every file in each frame-set directory it
+cleared and rewrote, plus `frames.json` and `boundary.json` when it wrote them
+(or `parallax.json` and `parallax.png`). Files left by an earlier render are
+not listed. Paths follow the `argv` rule.
+
+An earlier record is removed before the first write. A render that stops part
+way leaves none. A usage error stops before that and keeps the earlier record.
+An in-process call to the render body, with no entry clock, writes no record.
+The record is excluded from `render_hashes` and from every byte comparison.
+Every other file keeps its determinism contract. The keys, key order and
+meanings of `rigc-run/2` are fixed under the same promise as `rigc-run/1`.
+
 ### 5.3 The report as a document — `--report <file>`
 
 The lines above are written for an agent to read. A program that acts on a build —

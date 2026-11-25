@@ -153,7 +153,7 @@ export { PACKAGE_ROOT, readPackageMeta, readVersion };
  * needs a value` (issue #328). `CLI10`/`CLI11` in `selftest.ts` now hold the two
  * halves together by reading `--help` rather than by naming a flag.
  */
-const BOOLEAN_FLAGS = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'seam-cells', 'folds', 'extremes', 'extremes-only', 'overlaps', 'sheet', 'accept-skeleton-differences', 'keep-pages', 'dim']);
+export const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'seam-cells', 'folds', 'extremes', 'extremes-only', 'overlaps', 'sheet', 'accept-skeleton-differences', 'keep-pages', 'dim']);
 
 /**
  * The flags a command is allowed to spell more than once.

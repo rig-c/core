@@ -53,8 +53,9 @@ import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
 import { writeWhole } from './write_whole.ts';
+import { filesWrittenUnder, readRenderInputs, RENDER_RUN_FILE, renderRunArgv, runStampPackage, writeRenderRunStamp } from './run_stamp.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
-import { ATLAS_ABSENT, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
+import { ATLAS_ABSENT, BOOLEAN_FLAGS, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -712,7 +713,10 @@ function readGivenViewport(flags: Record<string, string>): GivenViewport | undef
  * a property of the shot, so two animations of one rig — and the same animation at
  * two rates — land on one pixel grid and stay comparable.
  */
-export function cmdRender(flags: Record<string, string>): void {
+export function cmdRender(flags: Record<string, string>, record?: { raw: readonly string[]; now: () => string }): void {
+  // The receipt's clock and producer, read first like `build`'s (issue #1770); an in-process call passes no clock and writes none.
+  const startedAt = record?.now();
+  const pkg = record === undefined ? undefined : runStampPackage();
   if (flags.candidate === undefined) {
     throw new UsageError('needs --candidate <dir | skeleton.json> — the directory `build --out` wrote');
   }
@@ -850,6 +854,23 @@ export function cmdRender(flags: Record<string, string>): void {
   // subset roster and its pages without loading spine-core at all, and with a
   // rigc-compiled/2 document without its atlas either (issue #1020).
   const skeletonText = readSkeletonText(skeletonPath);
+  // What this render reads, hashed before it poses anything (issue #1770). Atlas pages and an earlier render's frames
+  // are pictures and are not bound, as `build`'s receipt binds no image.
+  const modelBeside = join(dirname(skeletonPath), MODEL_DOCUMENT_FILE);
+  const boundarySidecar = flags['boundary-from'] === undefined ? undefined : join(resolve(flags['boundary-from']), FRAMES_SIDECAR);
+  const runInputs = record === undefined ? [] : readRenderInputs([
+    { role: 'skeleton', path: skeletonPath },
+    ...(atlasText === null ? [] : [{ role: 'atlas' as const, path: atlasPath }]),
+    ...(existsSync(modelBeside) ? [{ role: 'model' as const, path: modelBeside }] : []),
+    ...(environment === undefined ? [] : [{ role: 'environment' as const, path: environment.path }]),
+    ...(given?.by === '--viewport-from' ? [{ role: 'viewport' as const, path: given.path }] : []),
+    ...(boundarySidecar !== undefined && existsSync(boundarySidecar) ? [{ role: 'boundary' as const, path: boundarySidecar }] : []),
+  ]);
+  // One record per invocation, at the root of --out, written after the last output of whichever mode ran.
+  const stampRun = (outputs: readonly string[]): void => {
+    if (record === undefined || startedAt === undefined || pkg === undefined) return;
+    writeRenderRunStamp(outRoot, renderRunArgv(record.raw, outRoot, BOOLEAN_FLAGS), runInputs, outputs, pkg, startedAt, record.now);
+  };
   const { choice, facts, pages } = loadCandidate(
     { skeletonText, atlasText, atlasDir, label: skeletonPath },
     { skeleton: skeletonPath, atlas: atlasPath },
@@ -875,9 +896,11 @@ export function cmdRender(flags: Record<string, string>): void {
       if (picture !== null) result.reading.picture = { status: 'READ', reason: 'setup, dial extremes, diff and affine residual heat maps', file: 'parallax.png' };
     } catch (error) { result.reading.picture.reason = `picture unavailable: ${error instanceof Error ? error.message : String(error)}`; }
     mkdirSync(outRoot, { recursive: true });
+    rmSync(join(outRoot, RENDER_RUN_FILE), { force: true });
     writeFileSync(join(outRoot, 'parallax.json'), JSON.stringify(result.reading, null, 2) + '\n');
     if (picture !== null) picture.writePng(join(outRoot, 'parallax.png'));
     else rmSync(join(outRoot, 'parallax.png'), { force: true });
+    stampRun([join(outRoot, 'parallax.json'), ...(picture === null ? [] : [join(outRoot, 'parallax.png')])]);
     console.log(`  ..    poser core — named dial ${JSON.stringify(flags.parallax)}, independent reset poses`);
     console.log(`  ..    PARALLAX ${JSON.stringify(flags.parallax)} ${result.reading.status}: ${result.reading.reason} -> ${outRoot}`);
     for (const sample of result.reading.samples) {
@@ -1211,6 +1234,8 @@ export function cmdRender(flags: Record<string, string>): void {
   }
 
   mkdirSync(outRoot, { recursive: true });
+  // An earlier receipt cannot describe this render: removed before the first write, so a render that stops leaves none.
+  rmSync(join(outRoot, RENDER_RUN_FILE), { force: true });
   // A prior observation cannot describe the new frames, including an observation-only render.
   rmSync(join(outRoot, 'boundary.json'), { force: true });
   if (extremesOnly) {
@@ -1227,6 +1252,7 @@ export function cmdRender(flags: Record<string, string>): void {
     }
     // A prior ordinary render's index would falsely advertise now-removed frames.
     rmSync(join(outRoot, FRAMES_SIDECAR), { force: true });
+    stampRun([...extremeReadings.keys()].flatMap((name) => filesWrittenUnder(join(outRoot, frameSetDir(name, fps)))));
     return;
   }
   const sets: FrameSet[] = [];
@@ -1367,6 +1393,11 @@ export function cmdRender(flags: Record<string, string>): void {
     console.log(`  ..    boundary ${reading.status}: ${detail}`);
     console.log(`rigc: wrote ${join(outRoot, 'boundary.json')}`);
   }
+  stampRun([
+    ...sets.flatMap((set) => filesWrittenUnder(join(outRoot, set.dir))),
+    join(outRoot, FRAMES_SIDECAR),
+    ...(flags['boundary-from'] === undefined ? [] : [join(outRoot, 'boundary.json')]),
+  ]);
 }
 
 /**
@@ -3073,7 +3104,7 @@ export const CORE_COMMAND_RUNS: Readonly<Record<string, CommandRun>> = {
   split: ({ flags }) => cmdSplit(flags),
   diff: ({ flags, lists, positional }) => cmdDiff(flags, lists, positional),
   check: ({ flags }) => cmdCheck(flags),
-  render: ({ flags }) => cmdRender(flags),
+  render: ({ flags, raw, now }) => cmdRender(flags, now === undefined ? undefined : { raw, now }),
   inspect: ({ flags }) => cmdInspect(flags),
   'texture-scale': ({ flags }) => cmdTextureScale(flags),
   pose: ({ flags }) => cmdPose(flags),

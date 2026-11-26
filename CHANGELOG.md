@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.10.0
+
+For the 19 measured recipes with no declared slider combinations, the skeleton, atlas and model files written by `build` are byte-identical to v3.9.2's.
+
+**Read before upgrading:**
+
+* Under `rig-play`, a rig that declares `invariants.deformSliderCombinations` can now fail `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING` even if it built on 3.9.2. When a visible triangle reverses winding, the failure names the combination, slider inputs, mapped animations and their sampled times and keys or brackets, skin, slot and attachment, and the reversed triangle count and signed areas.
+* A rig with no declared combinations reports `SKIP` for A53 with the reason `rig declares no invariants.deformSliderCombinations`.
+* Build assertion reports and gate summaries count one additional assertion. For rigs with no declared combinations, the skipped count also rises by one. Readers that compare reports or gate text byte for byte across versions will see a difference even when the skeleton, atlas and model bytes match.
+* The assertion registry contains 51 assertions. The core build prints 53 assertion rows. On the undeclared Look recipe, the core entry prints A53 in the `SKIP` block between `A15_IDLE_NO_MESH_BONE_KEYS` and `A36_PATH_CONSTRAINT_EFFECTIVE`. The `spine` profile reports `PROF` for A53.
+* A malformed input value is a compile refusal before emission. The diagnostic names the combination and input indices, the slider and the rejected value. Other malformed declaration shapes identify the offending path and the required shape.
+
+### Features
+
+* Check winding for declared slider combinations (#1787) (cb8e1cd0)
+
 ## 3.9.2
 
 Every file `build` writes is byte-identical to v3.9.1's.

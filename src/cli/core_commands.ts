@@ -53,7 +53,7 @@ import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
 import { writeWhole } from './write_whole.ts';
-import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, realDir, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampPackage, spelledDir, spelledInput, writeRenderRunStamp } from './run_stamp.ts';
+import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, realDir, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampClock, runStampPackage, spelledDir, spelledInput, writeRenderRunStamp } from './run_stamp.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
 import { ATLAS_ABSENT, BOOLEAN_FLAGS, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -3100,7 +3100,7 @@ export const CORE_COMMAND_RUNS: Readonly<Record<string, CommandRun>> = {
   split: ({ flags }) => cmdSplit(flags),
   diff: ({ flags, lists, positional }) => cmdDiff(flags, lists, positional),
   check: ({ flags }) => cmdCheck(flags),
-  render: ({ flags, raw, now }) => cmdRender(flags, now === undefined ? undefined : { raw, now }),
+  render: ({ flags, raw, now, sourceDateEpoch }) => cmdRender(flags, now === undefined ? undefined : { raw, now: runStampClock(sourceDateEpoch, now) }),
   inspect: ({ flags }) => cmdInspect(flags),
   'texture-scale': ({ flags }) => cmdTextureScale(flags),
   pose: ({ flags }) => cmdPose(flags),

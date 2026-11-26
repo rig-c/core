@@ -68127,8 +68127,14 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
     outputs: Array<{ path: string; sha256: string }>;
   }
   const KEYS = 'spec,package,command,argv,started_at,finished_at,inputs,outputs';
+  const epoch = '1762560000';
+  const fixedIso = '2025-11-08T00:00:00.000Z';
+  const nextIso = '2025-11-08T00:00:01.000Z';
+  const unsetEnv = { ...process.env };
+  delete unsetEnv.SOURCE_DATE_EPOCH;
   const version = (JSON.parse(readFileSync(join(import.meta.dir, 'package.json'), 'utf8')) as { version: string }).version;
-  const built = spawnSync(process.execPath, ['cli.ts', 'build', '--rig', join(fixture, 'rig.json'), '--motion', join(fixture, 'motion.json'), '--out', join(work, 'build')], { cwd: import.meta.dir, encoding: 'utf8' });
+  const buildIn = (entry: string, out: string, env = unsetEnv) => spawnSync(process.execPath, [entry, 'build', '--rig', join(fixture, 'rig.json'), '--motion', join(fixture, 'motion.json'), '--out', out], { cwd: import.meta.dir, encoding: 'utf8', env });
+  const built = buildIn('cli.ts', join(work, 'build'));
   if (built.status !== 0) {
     say('RR01_RENDER_WRITES_ONE_RIGC_RUN_2_RECORD', false, `the fixture build exited ${String(built.status)}: ${built.stderr.slice(-300)}`, 'nothing to render');
     rmSync(work, { recursive: true, force: true });
@@ -68148,12 +68154,27 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
     if (JSON.stringify((stamp.outputs ?? []).map((row) => row.path)) !== JSON.stringify(files)) faults.push('output inventory');
     return faults;
   };
-  const renderIn = (root: string, entry: string, args: string[], cwd: string): ReturnType<typeof runEntryIn> => runEntryIn(root, entry, ['render', ...args], cwd);
+  const renderIn = (root: string, entry: string, args: string[], cwd: string, sourceDateEpoch?: string): ReturnType<typeof runEntryIn> => {
+    const env = sourceDateEpoch === undefined ? unsetEnv : { ...unsetEnv, SOURCE_DATE_EPOCH: sourceDateEpoch };
+    const { status, stdout, stderr } = spawnSync(process.execPath, [join(root, entry), 'render', ...args], { cwd, encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 });
+    return { status, stdout, stderr };
+  };
   const contents = (dir: string): string => JSON.stringify(renderHashedFiles(dir).map((file) => [file, digest(join(dir, file))]));
+  const text = (dir: string): string => readFileSync(join(dir, RENDER_RUN_FILE), 'utf8');
+  const timeless = (receipt: string): string => receipt.replace(/^  "(started_at|finished_at)": "[^"]*",$/gm, '  "$1": "T",');
+  const at = (stamp: RenderStamp | null, iso: string): boolean => stamp?.started_at === iso && stamp.finished_at === iso;
+  const validTimes = (stamp: RenderStamp | null): boolean => stamp !== null && [stamp.started_at, stamp.finished_at].every(
+    (value) => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) &&
+      Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value,
+  );
+  const badEpoch = '01';
+  const refusedEpoch = (result: ReturnType<typeof runEntryIn>, out: string, diagnostic: string): boolean =>
+    result.status === 1 && diagnostic.includes('CE_RUN_STAMP_EPOCH') && result.stderr === diagnostic && !existsSync(out);
   for (const entry of ['cli.ts', 'cli_core.ts']) {
     // The candidate relative to the working directory, the output absolute: both must come back relative to the output.
     const out = join(work, `${entry}-a`);
-    const first = renderIn(import.meta.dir, entry, ['--candidate', 'build', '--max', '64', '--geometry', '--out', out], work);
+    const args = ['--candidate', 'build', '--max', '64', '--geometry', '--out', out];
+    const first = renderIn(import.meta.dir, entry, args, work, epoch);
     const stamp = read(out);
     const faults = audit(stamp, out);
     const argvSaid = JSON.stringify(stamp?.argv ?? null);
@@ -68174,14 +68195,42 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
     const copy = join(work, `${entry}-b`);
     mkdirSync(copy);
     cpSync(join(out, RENDER_RUN_FILE), join(copy, RENDER_RUN_FILE));
-    const again = renderIn(import.meta.dir, entry, stamp.argv, copy);
+    const again = renderIn(import.meta.dir, entry, stamp.argv, copy, epoch);
     const second = read(copy);
-    const timeless = (r: RenderStamp | null): string => r === null ? '(none)' : JSON.stringify({ ...r, started_at: 'T', finished_at: 'T' });
     const sameBytes = renderHashedFiles(out).length > 0 && contents(out) === contents(copy);
-    const sameRecord = timeless(stamp) === timeless(second);
+    const fixedText = text(out);
+    const sameRecord = second !== null && fixedText === text(copy);
     say('RR03_THE_RECORDED_ARGV_RUN_FROM_THE_OUTPUT_DIRECTORY_RENDERS_THE_SAME_BYTES', again.status === 0 && sameBytes && sameRecord,
-      `${entry}: exit=${String(again.status)}, ${renderHashedFiles(out).length} compared file(s) identical=${sameBytes}, records equal but for the two times=${sameRecord}`,
+      `${entry}: exit=${String(again.status)}, ${renderHashedFiles(out).length} compared file(s) identical=${sameBytes}, records byte-identical=${sameRecord}`,
       'what the record promises: the same package version, run from the output directory with those tokens, writes every compared artefact again byte for byte');
+    const changed = renderIn(import.meta.dir, entry, args, work, '1762560001');
+    const changedStamp = read(out);
+    const otherBytesSame = changedStamp !== null && timeless(text(out)) === timeless(fixedText);
+    say('RR14_SOURCE_DATE_EPOCH_FIXES_ONLY_THE_TWO_TIMES',
+      first.status === 0 && again.status === 0 && sameRecord && at(stamp, fixedIso) && changed.status === 0 && at(changedStamp, nextIso) && otherBytesSame,
+      `${entry}: exits=${first.status}/${again.status}/${changed.status}, same epoch byte-identical=${sameRecord}, changed epoch times=${changedStamp?.started_at}/${changedStamp?.finished_at}, other bytes identical=${otherBytesSame}`,
+      'two renders at the same epoch reproduce the whole receipt, and one second later changes only the two times');
+    const wall = renderIn(import.meta.dir, entry, args, work);
+    const wallStamp = read(out);
+    const wallShape = wallStamp !== null && timeless(text(out)) === timeless(fixedText);
+    const badStart = { ...stamp, started_at: fixedIso.replace('.000', '') };
+    const badFinish = { ...stamp, finished_at: fixedIso.replace('Z', '+00:00') };
+    say('RR15_FIXED_AND_UNSET_TIMES_KEEP_THE_CONSUMER_ISO_FORMAT',
+      wall.status === 0 && audit(wallStamp, out).length === 0 && wallShape && validTimes(wallStamp) && validTimes(stamp) &&
+        !validTimes(badStart) && !validTimes(badFinish),
+      `${entry}: unset exit=${wall.status}, fixed ISO=${validTimes(stamp)}, unset ISO=${validTimes(wallStamp)}, other bytes identical=${wallShape}, malformed start/finish rejected=${!validTimes(badStart) && !validTimes(badFinish)}`,
+      'Create reads canonical UTC millisecond timestamps in both fields, with or without a fixed epoch');
+    const badOut = join(work, `bad-epoch-${entry}`);
+    const badArgs = ['--candidate', 'build', '--max', '32', '--out', badOut];
+    const badBuild = buildIn(entry, badOut, { ...unsetEnv, SOURCE_DATE_EPOCH: badEpoch });
+    const badRender = renderIn(import.meta.dir, entry, badArgs, work, badEpoch);
+    const kept = text(out);
+    const refusedOver = renderIn(import.meta.dir, entry, args, work, badEpoch);
+    say('RR16_BAD_EPOCH_REFUSES_LIKE_BUILD_BEFORE_THE_FIRST_WRITE',
+      badBuild.status === 1 && refusedEpoch(badRender, badOut, badBuild.stderr) &&
+        refusedOver.status === 1 && refusedOver.stderr === badBuild.stderr && text(out) === kept,
+      `${entry}: build/render exits=${badBuild.status}/${badRender.status}, same diagnostic=${badRender.stderr === badBuild.stderr}, fresh output absent=${!existsSync(badOut)}, existing record kept=${text(out) === kept}`,
+      'a malformed epoch has the same named refusal as build and stops before the render creates or removes output');
     // The receipt is outside the compared set: render_hashes' file list leaves it out while it is on disk.
     const listed = renderHashedFiles(out);
     say('RR04_THE_RECORD_IS_OUTSIDE_THE_RENDER_HASHES_SET', existsSync(join(out, RENDER_RUN_FILE)) && !listed.includes(RENDER_RUN_FILE) && listed.includes('frames.json'),
@@ -68194,10 +68243,10 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
       `${entry}: exit=${String(usage.status)}, earlier record kept byte for byte=${readFileSync(join(out, RENDER_RUN_FILE), 'utf8') === before}`,
       'a refused render writes nothing, so the directory still describes the render that wrote it');
     const only = join(work, `${entry}-extremes-only`);
-    const extremes = renderIn(import.meta.dir, entry, ['--candidate', 'build', '--max', '64', '--extremes-only', '--out', only], work);
+    const extremes = renderIn(import.meta.dir, entry, ['--candidate', 'build', '--max', '64', '--extremes-only', '--out', only], work, epoch);
     const onlyStamp = read(only);
     const onlyFaults = audit(onlyStamp, only);
-    say('RR06_EVERY_MODE_WRITES_ONE_RECORD_OF_ITS_OWN_OUTPUTS', extremes.status === 0 && onlyFaults.length === 0 && (onlyStamp?.outputs.every((row) => /\/extremes\.(json|png)$/.test(row.path)) ?? false),
+    say('RR06_EVERY_MODE_WRITES_ONE_RECORD_OF_ITS_OWN_OUTPUTS', extremes.status === 0 && onlyFaults.length === 0 && at(onlyStamp, fixedIso) && (onlyStamp?.outputs.every((row) => /\/extremes\.(json|png)$/.test(row.path)) ?? false),
       `${entry} --extremes-only: exit=${String(extremes.status)}, faults=${onlyFaults.join(',') || 'none'}, ${onlyStamp?.outputs.length ?? 0} output(s)`,
       'an observation-only render writes no frames.json and is still one invocation with one receipt');
   }
@@ -68213,7 +68262,7 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
     const renamedMotion = join(work, `motion-${name}.json`);
     writeFileSync(renamedMotion, JSON.stringify({ ...motion, animations }));
     const renamedBuild = join(work, `build-${name}`);
-    const rebuilt = spawnSync(process.execPath, ['cli.ts', 'build', '--rig', join(fixture, 'rig.json'), '--motion', renamedMotion, '--out', renamedBuild], { cwd: import.meta.dir, encoding: 'utf8' });
+    const rebuilt = spawnSync(process.execPath, ['cli.ts', 'build', '--rig', join(fixture, 'rig.json'), '--motion', renamedMotion, '--out', renamedBuild], { cwd: import.meta.dir, encoding: 'utf8', env: unsetEnv });
     for (const entry of ['cli.ts', 'cli_core.ts']) {
       const out = join(work, `named-${entry}-${name}`);
       const run = renderIn(import.meta.dir, entry, ['--candidate', renamedBuild, '--max', '32', '--out', out], work);
@@ -68298,6 +68347,30 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
   say('RR12_THE_LEFTOVER_REMOVAL_TAKEN_OUT_FAILS_RR11', removalApplied && unremoved.status !== 0 && unremoved.faults.includes('record missing on green'),
     `plant applied=${removalApplied}, exit=${String(unremoved.status)}, faults=${unremoved.faults.join(',') || 'none'}`,
     'the control must be seen failing on the fault it was written for, or a pass says nothing');
+  writeFileSync(modulePath, source);
+
+  // Restore the 3.9.1 render clock in the copy. The same render succeeds but
+  // loses both fixed times and accepts malformed input.
+  const commandPath = join(plantTree, 'src', 'cli', 'core_commands.ts');
+  const commands = readFileSync(commandPath, 'utf8');
+  const fixedClock = 'now: runStampClock(sourceDateEpoch, now)';
+  const clockPlant = commands.split(fixedClock).length === 2;
+  writeFileSync(commandPath, commands.replace(fixedClock, 'now'));
+  const clockOut = join(work, 'clock-plant');
+  const clockArgs = ['--candidate', 'build', '--max', '32', '--out', clockOut];
+  const pinned = renderIn(import.meta.dir, 'cli_core.ts', clockArgs, work, epoch);
+  const pinnedText = pinned.status === 0 && read(clockOut) !== null ? text(clockOut) : null;
+  const old = renderIn(plantTree, 'cli_core.ts', clockArgs, work, epoch);
+  const oldStamp = read(clockOut);
+  const oldOtherBytesMatch = pinnedText !== null && oldStamp !== null && timeless(text(clockOut)) === timeless(pinnedText);
+  const clockBad = join(work, 'clock-plant-bad');
+  const badBuild = buildIn('cli_core.ts', clockBad, { ...unsetEnv, SOURCE_DATE_EPOCH: badEpoch });
+  const oldBad = renderIn(plantTree, 'cli_core.ts', ['--candidate', 'build', '--max', '32', '--out', clockBad], work, badEpoch);
+  say('RR17_RESTORING_THE_OLD_CLOCK_BREAKS_EPOCH_PINNING_AND_REFUSAL',
+    clockPlant && pinned.status === 0 && old.status === 0 && validTimes(oldStamp) && oldOtherBytesMatch && !at(oldStamp, fixedIso) &&
+      badBuild.status === 1 && oldBad.status === 0 && read(clockBad) !== null && !refusedEpoch(oldBad, clockBad, badBuild.stderr),
+    `plant applied=${clockPlant}, pinned/old exits=${pinned.status}/${old.status}, 3.9.1 clock path keeps other bytes=${oldOtherBytesMatch}, old malformed exit=${oldBad.status}`,
+    'the old clock fails the fixed-time assertion and writes a record where the new refusal leaves no directory');
 
   // `--out` named through a link shallower than its target (issues #1770, #1775): the recorded argv replayed from a
   // sibling directory named through the same link renders the same bytes under this host's own link rule.
@@ -68306,21 +68379,30 @@ function renderRunControls(say: (name: string, ok: boolean, detail: string, why:
     mkdirSync(outDeep, { recursive: true });
     const outLink = join(work, 'out-link');
     symlinkSync(outDeep, outLink, 'dir');
-    const timeless = (r: RenderStamp | null): string => r === null ? '(none)' : JSON.stringify({ ...r, started_at: 'T', finished_at: 'T' });
     for (const entry of ['cli.ts', 'cli_core.ts']) {
       const out = join(outLink, `${entry}-a`);
-      const first = renderIn(import.meta.dir, entry, ['--candidate', 'build', '--max', '64', '--geometry', '--out', out], work);
+      const first = renderIn(import.meta.dir, entry, ['--candidate', 'build', '--max', '64', '--geometry', '--out', out], work, epoch);
       const stamp = read(out);
       const base = LINK_RULE === 'as-spelled' ? out : join(outDeep, `${entry}-a`);
       const faults = audit(stamp, base);
       const copy = join(outLink, `${entry}-b`);
       mkdirSync(copy);
-      const again = stamp === null ? null : renderIn(import.meta.dir, entry, stamp.argv, copy);
+      const again = stamp === null ? null : renderIn(import.meta.dir, entry, stamp.argv, copy, epoch);
       const sameBytes = renderHashedFiles(out).length > 0 && contents(out) === contents(copy);
-      const sameRecord = timeless(stamp) === timeless(read(copy));
-      say('RR13_A_RECORD_THROUGH_A_LINKED_OUT_REPLAYS_UNDER_THE_HOST_RULE', first.status === 0 && faults.length === 0 && again?.status === 0 && sameBytes && sameRecord,
+      const sameRecord = stamp !== null && read(copy) !== null && text(out) === text(copy);
+      say('RR13_A_RECORD_THROUGH_A_LINKED_OUT_REPLAYS_UNDER_THE_HOST_RULE', first.status === 0 && faults.length === 0 && at(stamp, fixedIso) && again?.status === 0 && sameBytes && sameRecord,
         `${entry} (${LINK_RULE}): exit=${String(first.status)}, faults=${faults.join(',') || 'none'}, replay exit=${String(again?.status ?? null)}, identical=${sameBytes}, records equal=${sameRecord}`,
         'a render receipt written through a linked --out must replay from that --out under this platform\'s link rule');
+      if (stamp === null) continue;
+      const badCopy = join(outLink, `${entry}-bad-replay`);
+      mkdirSync(badCopy);
+      const badArgv = [...stamp.argv];
+      badArgv[badArgv.indexOf('--candidate') + 1] = 'missing-candidate';
+      const refused = renderIn(import.meta.dir, entry, badArgv, badCopy, epoch);
+      say('RR18_REPLAY_REJECTS_A_PLANTED_BAD_CANDIDATE_PATH',
+        refused.status === 2 && refused.stderr.includes('missing-candidate') && read(badCopy) === null,
+        `${entry} (${LINK_RULE}): planted replay exit=${refused.status}, receipt absent=${read(badCopy) === null}`,
+        'the linked replay control must see a wrong candidate spelling fail before it writes a record');
     }
   }
   rmSync(work, { recursive: true, force: true });

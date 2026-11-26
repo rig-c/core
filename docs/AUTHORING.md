@@ -7405,7 +7405,7 @@ retain the minimal inputs and report that code rather than inventing author data
 | <a id="CE_RUN_STAMP_PACKAGE"></a>`CE_RUN_STAMP_PACKAGE` | “RUN_STAMP_PACKAGE: package.json must supply a non-empty name and version” | Restore the running package's own non-empty name and version before building. |
 | <a id="CE_RUN_STAMP_INPUT_CHANGED"></a>`CE_RUN_STAMP_INPUT_CHANGED` | “RUN_STAMP_INPUT_CHANGED: &lt;value&gt; input changed during build; rerun with fixed inputs” | Freeze the named recipe input for the whole build and rerun. |
 | <a id="CE_RUN_STAMP_PATH_VOLUME"></a>`CE_RUN_STAMP_PATH_VOLUME` | “run stamp file "&lt;value&gt;" relative to output "&lt;value&gt;" produced absolute path "&lt;value&gt;" — keep recipe and report files on the output volume” | Put recipe inputs and the optional report on the output directory's volume. Refused before any output is written or removed. |
-| <a id="CE_RUN_STAMP_EPOCH"></a>`CE_RUN_STAMP_EPOCH` | “RUN_STAMP_EPOCH: SOURCE_DATE_EPOCH is &lt;value&gt;, and it must be a whole number of seconds from 0 to &lt;value&gt;, written in decimal digits only with no leading zero — set it to such a value, or unset it to stamp the wall clock” | Set `SOURCE_DATE_EPOCH` to a whole number of seconds from 0 to 253402300799 (9999-12-31T23:59:59Z) in decimal digits only — no sign, point, exponent, space or leading zero (`0` itself is accepted) — or unset it. Refused before the build reads, removes or writes anything; the wall clock is never used in its place. |
+| <a id="CE_RUN_STAMP_EPOCH"></a>`CE_RUN_STAMP_EPOCH` | “RUN_STAMP_EPOCH: SOURCE_DATE_EPOCH is &lt;value&gt;, and it must be a whole number of seconds from 0 to &lt;value&gt;, written in decimal digits only with no leading zero — set it to such a value, or unset it to stamp the wall clock” | Set `SOURCE_DATE_EPOCH` to a whole number of seconds from 0 to 253402300799 (9999-12-31T23:59:59Z) in decimal digits only — no sign, point, exponent, space or leading zero (`0` itself is accepted) — or unset it. Build and render refuse the value before reading inputs or changing output. |
 
 #### 5.1.3 Manifest, setup and animation targets
 
@@ -8125,7 +8125,7 @@ else, including an empty value, a sign, a point, an exponent, a space or a
 leading zero (`0` itself is accepted), is refused by `CE_RUN_STAMP_EPOCH` (message label `RUN_STAMP_EPOCH`) before the
 build reads, removes or writes anything, so an earlier stamp stays as it was.
 The wall clock is never used in its place, because a typo would quietly bring
-back the times the caller asked to fix. Only `build` reads the variable.
+back the times the caller asked to fix.
 
 This follows the shared [rig-run/1 shape and rules](https://github.com/rig-c/parts/blob/15f4993e09d49b82e380ecedc772f02e4afe4032/docs/STABILITY.md#run-stamp-runjson-spec-rig-run1).
 The one schema difference is that `inputs` replaces `config` in the same
@@ -8180,8 +8180,12 @@ different producer. Telling the two apart is the reader's job, not the record's.
 The fixed top-level key order is `spec`, `package`, `command`, `argv`,
 `started_at`, `finished_at`, `inputs`, `outputs`. `spec` is `rigc-run/2`,
 `command` is `render`, and `package`, the two times and the row shapes are
-those of `rigc-run/1` above. The times come from the entry's wall clock.
-`render` does not read `SOURCE_DATE_EPOCH`.
+those of `rigc-run/1` above. For frame sets, `--extremes-only` and
+`--parallax`, both times use the same UTC ISO 8601 format with milliseconds
+and a trailing `Z`. With a valid `SOURCE_DATE_EPOCH`, both times equal that
+instant. With the variable unset, the entry's wall clock supplies the times.
+A malformed value is refused with `CE_RUN_STAMP_EPOCH` (message label
+`RUN_STAMP_EPOCH`) before any output is written or removed.
 
 `argv` is an array of strings: the tokens `render` received after its name, in
 the order given. One normalisation is applied. The value of every path-valued

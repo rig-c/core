@@ -2950,7 +2950,7 @@ export function dropLine(dropped: DroppedState): string {
 export interface CommandArgs {
   /** Wall clock supplied by the executable entry, for producer receipts. */
   now?: () => string;
-  /** The raw `SOURCE_DATE_EPOCH` the executable entry read, or `undefined` when unset — `build` alone reads it (`runStampClock`). */
+  /** The raw `SOURCE_DATE_EPOCH` for the build and render stamps, or `undefined` when unset. */
   sourceDateEpoch?: string;
   flags: Record<string, string>;
   lists: Record<string, string[]>;

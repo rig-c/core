@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.9.2
+
+Every file `build` writes is byte-identical to v3.9.1's.
+
+**Read before upgrading:**
+
+* Set `SOURCE_DATE_EPOCH` to pin both `started_at` and `finished_at` in `render-run.json` to that epoch in UTC, as `build` already does in `run.json`.
+* A malformed value makes `render` exit 1 before writing any output, with the same `RUN_STAMP_EPOCH` diagnostic as `build`.
+* With `SOURCE_DATE_EPOCH` unset, `render` still records wall-clock times. This supersedes the 3.9.1 note's description of the receipt times as “wall-clock times” for calls that set the variable.
+
+### Bug Fixes
+
+* Honor `SOURCE_DATE_EPOCH` in render receipts (#1784) (2370d78d)
+
 ## 3.9.1
 
 Every file `build` writes is byte-identical to v3.9.0's.

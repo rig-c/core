@@ -79151,9 +79151,7 @@ const CURRENCY_RED_FIRST: Array<{ row: string; stale: string; clean: string }> =
       '\n' +
       '| Excluded as | Rules |\n' +
       '| --- | --- |\n' +
-      '| **archetype policy** (8) | `A21_MESH_RIM_PINNED`, `A24_AXIS_SPACE_STROKE`, `A25_DETACHED_BONE_PARENTAGE`,' +
-      ' `A26_SLOT_DRAW_ORDER`, `A28_RIBBON_ROWS_SHARE_WEIGHTS`, `A29_STROKE_WITHIN_CONTACT_DEPTH`,' +
-      ' `A30_STROKE_WITHIN_CAP_CONTAINMENT`, `A39_DEFORM_KEEPS_TRIANGLE_WINDING` |\n',
+      `| **archetype policy** (${REGISTRY_ARCHETYPE}) | ${ASSERTION_NAMES.filter((name) => ASSERTION_KIND[name] === 'archetype').map((name) => `\`${name}\``).join(', ')} |\n`,
   },
   {
     row: 'INGEST §3.3: the quoted report summary inside a fence (#360, found on the current tree)',
@@ -110807,6 +110805,69 @@ function runCoreSuite(child: CoreUnitChild | null = null): number {
     );
   });
 
+  if (parent) {
+    const dir = join(work, 'slider-combinations');
+    const { rig, motion } = sliderCombinationFixture(dir);
+    const rigPath = join(dir, 'rig.json');
+    const motionPath = join(dir, 'motion.json');
+    writeFileSync(motionPath, JSON.stringify(motion(false)));
+    const probes: string[] = [];
+    const read = (replace: boolean) => {
+      const constraints = rig.constraints.map((slider) =>
+        replace && slider.name === 'right' ? { ...slider, additive: false } : slider,
+      );
+      writeFileSync(rigPath, JSON.stringify({ ...rig, constraints }));
+      const { skeletonText, atlasText, model } = compile({ rigPath, motionPath, outDir: join(dir, 'out') });
+      const { structure, spine, core } = deformPosers({ skeletonText, atlasText, modelText: modelDocument(model, skeletonText, atlasText) });
+      const target = structure.animations.find((a) => a.name === 'left_pose')?.deforms[0];
+      if (target?.mesh == null || structure.sliders.map((slider) => slider.name).join() !== 'left,right') {
+        throw new Error('combination probe lost its panel mesh or slider order');
+      }
+      const { mesh, slotIndex } = target;
+      const skin = target.placement().holder;
+      const inputs = structure.sliders.map((slider) => ({ slider, field: 'x' as const, value: 1 }));
+      const sample = (poser: typeof spine, writes: typeof inputs) => {
+        const { pose, applied } = poser.combination(skin, writes);
+        const times = structure.sliders.map(({ name }) => applied.get(name));
+        const alpha = pose.shownAt(slotIndex, mesh).alpha;
+        const posed = pose.deformed(slotIndex, mesh);
+        const cleared = pose.plain(slotIndex, mesh);
+        return { times, alpha, posed: Array.from(posed), cleared: Array.from(cleared) };
+      };
+      return {
+        spine: sample(spine, inputs), core: sample(core, inputs),
+        reordered: sample(core, inputs.slice().reverse()), dropped: sample(core, inputs.slice(0, 1)),
+      };
+    };
+    const additive = read(false);
+    const replacement = read(true);
+    const equal = (a: typeof additive.spine, b: typeof additive.spine): boolean =>
+      a.alpha === b.alpha && a.times.every((time, i) => Object.is(time, b.times[i])) &&
+      a.posed.length === b.posed.length && a.posed.every((value, i) => Object.is(value, b.posed[i])) &&
+      a.cleared.length === b.cleared.length && a.cleared.every((value, i) => Object.is(value, b.cleared[i]));
+    for (const [label, reading, expected] of [['additive', additive, -10], ['replacement', replacement, 20]] as const) {
+      const { spine, core, reordered } = reading;
+      if (!equal(spine, core) || !equal(spine, reordered)) probes.push(`${label}: ${JSON.stringify({ spine, core, reordered })}`);
+      const triangle = [0, 1, 2];
+      if (spine.alpha !== 1 || spine.times.some((time) => time !== 1) ||
+          triangleAreas(spine.cleared, triangle)[0] !== 50 || triangleAreas(spine.posed, triangle)[0] !== expected) {
+        probes.push(`${label}: expected times 1/1 and signed area 50 → ${expected}, got ${JSON.stringify(spine)}`);
+      }
+    }
+    if (equal(additive.spine, additive.dropped) || additive.dropped.times[1] !== 0 ||
+        triangleAreas(additive.dropped.posed, [0, 1, 2])[0] !== 20) {
+      probes.push(`dropping the right input did not change its sample to 0 and signed area to 20: ${JSON.stringify(additive.dropped)}`);
+    }
+    if (equal(additive.spine, replacement.core)) probes.push('the false non-additive replacement matched the additive oracle');
+    const ok = probes.length === 0;
+    say(
+      'CO65_COMBINED_SLIDER_POSES_MATCH_AT_TOLERANCE_ZERO',
+      ok,
+      probeDetail(ok, probes, 'both effective sample times and all posed and cleared vertices are identical across suppliers and input orders. Signed area is 50 → -10 with addition and 50 → 20 with replacement. Dropping the right input and planting replacement both differ from the additive oracle'),
+      'issue #1786: the combined solve must preserve the runtime\'s constraint ordering, application times and actual deform composition',
+    );
+  }
+
   // --- CO33, CO34: issue #1039 — the order of an animation's bone timelines, and whether it reaches a pose --------
   // The core applies an animation's bone timelines bone by bone in the document's order and, on one bone, timeline by timeline
   // in the document's order; spine-core in the order the file keys them. An integer-like bone name puts the first of those
@@ -140906,6 +140967,46 @@ function linkedMeshBuild(): { outDir: string; result: ReturnType<typeof compile>
   return { outDir: dirs.outDir, result: compile({ rigPath: dirs.rigPath, motionPath, outDir: dirs.outDir, imagesDir: dirs.dir }) };
 }
 
+const A53 = 'A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING';
+
+function sliderCombinationFixture(dir: string) {
+  const parts = join(dir, 'parts');
+  mkdirSync(parts, { recursive: true });
+  const rgba = new Uint8Array(16 * 16 * 4).fill(255);
+  rgba[3] = 0;
+  writeFileSync(join(parts, 'panel.png'), encodePng(16, 16, rgba));
+
+  const names = ['left', 'right'];
+  const inputs = names.map((slider) => ({ slider, value: 1 }));
+  const rig = {
+    spec: 'rigc-rig/1', name: 'double_dial', images: 'parts',
+    skeleton: { x: 0, y: 0, width: 32, height: 32 },
+    bones: [{ name: 'root' }, ...names.map((name) => ({ name, parent: 'root' }))],
+    slots: [{ name: 'panel', bone: 'root', attachment: 'panel' }],
+    constraints: names.map((name) => ({
+      name, type: 'slider', animation: name + '_pose', bone: name, property: 'x',
+      from: 0, to: 0, scale: 1, local: true, additive: true, mix: 1,
+    })),
+    skins: { default: { panel: { panel: {
+      type: 'mesh', image: 'panel.png', uvs: [0, 0, 1, 0, 0, 1],
+      triangles: [0, 1, 2], vertices: [0, 0, 10, 0, 0, 10], hull: 3, width: 16, height: 16,
+    } } } },
+  };
+  const motion = (disjoint: boolean) => ({
+    spec: 'rigc-motion/1', archetype: rig.name, cut: rig.name, easings: {},
+    animations: Object.fromEntries(names.map((name) => [name + '_pose', {
+      duration: 1, loop: false, tracks: [],
+      deform: [{ slot: 'panel', attachment: 'panel', keys: [
+        { t: 0 }, disjoint && name === 'right' ? { t: 1, offset: 2, vertices: [2] } : { t: 1, offset: 5, vertices: [-6] },
+      ] }],
+    }])),
+  });
+  const declared = (tuple: readonly { slider: string; value: unknown }[]) => ({
+    ...rig, invariants: { deformSliderCombinations: [{ inputs: tuple }] },
+  });
+  return { rig, inputs, declared, motion };
+}
+
 // Issue #1039's controls read the rule the emitter keys an object by.
 import { keyedOrder } from './src/compile.ts';
 
@@ -140972,6 +141073,132 @@ function runVerdictSuppliersSuite(): number {
       'issue #1025: a body written once against facts is the same body on both sides only while the side that has no runtime ' +
         'can load it. CUR07 counts the files directly in src/ that link spine-core through git, so it sees neither this ' +
         'directory nor an uncommitted file, and CO04 follows the core only; this follows src/assertions/ off the disk',
+    );
+  }
+
+  {
+    const dir = mkdtempSync(join(harnessTemp(), 'rigc-slider-combinations-'));
+    const { rig, inputs, declared, motion } = sliderCombinationFixture(dir);
+    const probes: string[] = [];
+    const row = (stdout: string, code: string): string[] => {
+      const pattern = new RegExp(`^  (PASS|SKIP|FAIL|PROF)  ${code}\\b`);
+      return stdout.split('\n').filter((line) => pattern.test(line));
+    };
+    const left = inputs[0];
+    const right = inputs[1];
+    const cases = [
+      { name: 'undeclared', rig, verdict: 'SKIP', exit: 0 },
+      { name: 'empty', rig: { ...rig, invariants: { deformSliderCombinations: [] } }, verdict: 'SKIP', exit: 0 },
+      { name: 'disjoint', rig: declared(inputs), verdict: 'PASS', exit: 0 },
+      { name: 'fold', rig: declared(inputs), verdict: 'FAIL', exit: 1 },
+      { name: 'reordered', rig: declared([right, left]), verdict: 'FAIL', exit: 1 },
+      {
+        name: 'linked',
+        rig: {
+          ...declared(inputs),
+          slots: [{ ...rig.slots[0], attachment: 'follower' }],
+          skins: { default: { panel: {
+            ...rig.skins.default.panel,
+            follower: { type: 'linkedmesh', image: 'panel.png', source: 'panel', timelines: true },
+          } } },
+        },
+        verdict: 'FAIL',
+        exit: 1,
+      },
+      { name: 'spine-profile', rig: declared(inputs), verdict: 'PROF', exit: 0 },
+      { name: 'unknown', rig: declared([left, { ...right, slider: 'missing_dial' }]), refusal: 'missing_dial', exit: 1 },
+      { name: 'malformed', rig: declared([left, { ...right, value: 'bad_input' }]), refusal: 'bad_input', exit: 1 },
+      { name: 'duplicate', rig: declared([left, left]), refusal: 'left', exit: 1 },
+      {
+        name: 'conflicting',
+        rig: {
+          ...declared([left, { ...right, value: 0 }]),
+          constraints: rig.constraints.map((slider) => ({ ...slider, bone: left.slider })),
+        },
+        refusal: 'shared input left.x',
+        exit: 1,
+      },
+    ];
+    for (const test of cases) {
+      const rigPath = join(dir, `${test.name}.rig.json`);
+      const motionPath = join(dir, `${test.name}.motion.json`);
+      writeFileSync(rigPath, JSON.stringify(test.rig));
+      writeFileSync(motionPath, JSON.stringify(motion(test.name === 'disjoint')));
+      if (test.name === 'fold') {
+        // Feed VF02's measured-assertion roster even in a sharded run.
+        const outDir = join(dir, 'verdict-suppliers');
+        const result = compile({ rigPath, motionPath, outDir });
+        const { skeletonText, atlasText, declaredDurations, rig } = result;
+        validate({ skeletonText, atlasText, atlasDir: outDir, declaredDurations, rig, modelText: threadedModel(result, atlasText), profile: 'rig-play' });
+      }
+      const reports: string[][] = [];
+      for (const entry of ['cli.ts', 'cli_core.ts']) {
+        const label = `${test.name}/${entry}`;
+        const out = join(dir, `${test.name}-${entry}`);
+        const run = runEntryIn(root, entry, [
+          'build', '--profile', test.verdict === 'PROF' ? 'spine' : 'rig-play',
+          '--rig', rigPath, '--motion', motionPath, '--out', out,
+        ], root);
+        const a53 = row(run.stdout, A53);
+        reports.push(a53);
+        if (run.status !== test.exit || existsSync(join(out, 'skeleton.json')) !== (test.exit === 0)) {
+          probes.push(`${label}: exit ${run.status}, expected ${test.exit}; emitted=${existsSync(join(out, 'skeleton.json'))}; ${run.stderr.trim()}`);
+        }
+        if (test.refusal !== undefined) {
+          const detail = `${run.stderr}\n${a53.join('\n')}`;
+          const declaration = test.name === 'conflicting' ? 'combination 1' : 'invariants.deformSliderCombinations[0]';
+          if (!detail.includes(declaration) || !detail.includes(test.refusal)) {
+            probes.push(`${label}: expected a named declaration refusal, got ${detail.trim()}`);
+          }
+          continue;
+        }
+        if (test.verdict !== 'PROF' && !row(run.stdout, A39).some((line) => line.startsWith('  PASS  '))) {
+          probes.push(`${label}: A39 did not pass`);
+        }
+        if (a53.length !== 1 || !a53[0].startsWith(`  ${test.verdict}  `)) {
+          probes.push(`${label}: expected one ${test.verdict} row, got [${a53.join(' | ')}]`);
+          continue;
+        }
+        if (test.verdict === 'SKIP' && !a53[0].includes('rig declares no invariants.deformSliderCombinations')) {
+          probes.push(`${label}: missing no-declaration reason: ${a53[0]}`);
+        }
+        if (test.verdict === 'FAIL') {
+          const failures = run.stdout.split('\n').filter((line) => line.startsWith('  FAIL  '));
+          const detail = a53[0];
+          const [first, second] = test.name === 'reordered' ? ['right_pose', 'left_pose'] : ['left_pose', 'right_pose'];
+          const attachment = test.name === 'linked' ? 'panel/follower' : 'panel/panel';
+          if (failures.length !== 1 || !/1 of 1.*reverse winding/.test(detail) ||
+              !['default', attachment, '50.000', '-10.000', 'triangle 0', 'key 1', '"left"=1', '"right"=1'].every((token) => detail.includes(token)) ||
+              detail.split('t=1.000000s').length !== 3 ||
+              !detail.includes(first) || detail.indexOf(second) <= detail.indexOf(first)) {
+            probes.push(`${label}: expected only A53, the folded triangle and the declared dial order: ${failures.join(' | ')}`);
+          }
+        }
+      }
+      if (JSON.stringify(reports[0]) !== JSON.stringify(reports[1])) {
+        probes.push(`${test.name}: suppliers printed different A53 rows: ${JSON.stringify(reports)}`);
+      }
+    }
+    for (const entry of ['cli.ts', 'cli_core.ts']) {
+      for (const [test, files] of [
+        ['empty', ['skeleton.json', 'skeleton.atlas', MODEL_DOCUMENT_FILE]],
+        ['spine-profile', ['skeleton.json', 'skeleton.atlas']],
+      ] as const) {
+        for (const file of files) {
+          const base = join(dir, `undeclared-${entry}`, file);
+          const candidate = join(dir, `${test}-${entry}`, file);
+          if (!existsSync(base) || !existsSync(candidate) || !readFileSync(base).equals(readFileSync(candidate))) {
+            probes.push(`${test}/${entry}: ${file} missing or differs from the undeclared build`);
+          }
+        }
+      }
+    }
+    const ok = probes.length === 0;
+    say(
+      'VF24_BOTH_BUILD_ENTRIES_GATE_DECLARED_SLIDER_COMBINATIONS',
+      ok,
+      probeDetail(ok, probes, `${cases.length} inputs on each CLI: undeclared and empty SKIP, disjoint PASS, fold, reorder and linked follower FAIL with A39 green, spine PROF, and four named refusals`),
+      'issue #1786: two individually safe sliders can reverse winding together while disjoint edits preserve it',
     );
   }
 

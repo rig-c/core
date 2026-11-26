@@ -66,6 +66,7 @@ import { ikShapeFault } from './assertions/bodies/a47.ts';
 import { CompileError, NotImplementedError } from './errors.ts';
 import { expandStops } from './stop.ts';
 import { dottedPath, refuseNumbersTheFileCannotCarry, refuseUnknownKeys, refuseValuesOfTheWrongType, refuseValuesOutsideTheirSet } from './keys.ts';
+import type { DeformSliderCombination } from './types.ts';
 import type { ShapeVisit, SpecEnumTable, SpecValueType } from './keys.ts';
 
 export { CompileError, NotImplementedError };
@@ -1784,6 +1785,8 @@ export interface RigInvariants {
    * second kind, and names the issue.
    */
   deformMayFold?: RigDeformFoldExemption[];
+  /** Explicit tuples of slider inputs to check together for reversed winding. */
+  deformSliderCombinations?: DeformSliderCombination[];
   /**
    * Ik and transform constraints whose mix **the consumer sets**, from code,
    * rather than any animation in this file — so `A47` / `A48` do not refuse
@@ -2063,7 +2066,7 @@ export const RIG_KEYS = {
   RigBoneFrom: ['anchor', 'slotWindow', 'meshCenter', 'rotation'],
   RigSlot: ['name', 'bone', 'attachment', 'color', 'dark', 'blend'],
   RigEvent: ['int', 'float', 'string', 'audio', 'volume', 'balance'],
-  RigInvariants: ['meshSlots', 'meshTriangles', 'axisBone', 'massBone', 'detached', 'deformMayFold', 'consumerDrivenMix', 'idleDrivesMeshes', 'axes'],
+  RigInvariants: ['meshSlots', 'meshTriangles', 'axisBone', 'massBone', 'detached', 'deformMayFold', 'deformSliderCombinations', 'consumerDrivenMix', 'idleDrivesMeshes', 'axes'],
   RigAxis: ['name', 'through', 'bones', 'tolerance'],
   RigIdleDrivesMeshes: ['why'],
   RigDetachedRule: ['bone', 'notUnder', 'why'],
@@ -2176,7 +2179,8 @@ export const RIG_TYPES = {
   RigEvent: { int: 'number', float: 'number', string: 'string', audio: 'string', volume: 'number', balance: 'number' },
   RigInvariants: {
     meshSlots: 'number', meshTriangles: 'number', axisBone: 'string', massBone: 'string', detached: 'object[]',
-    deformMayFold: 'object[]', consumerDrivenMix: 'object[]', idleDrivesMeshes: 'object', axes: 'object[]',
+    deformMayFold: 'object[]', deformSliderCombinations: 'object[]', consumerDrivenMix: 'object[]',
+    idleDrivesMeshes: 'object', axes: 'object[]',
   },
   RigAxis: { name: 'string', through: 'string[]', bones: 'string[]', tolerance: 'number' },
   RigIdleDrivesMeshes: { why: 'string' },
@@ -2655,6 +2659,41 @@ function rigPlace(raw: Record<string, unknown>): (path: ReadonlyArray<string | n
   };
 }
 
+/** Read the optional declaration identically in the authoring spec and compiled model. */
+export function deformSliderCombinationProblem(
+  value: unknown,
+  at: string,
+  kindsOf?: (name: string) => readonly string[],
+): string | undefined {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) return `${at} is ${JSON.stringify(value)}, expected an array of combinations`;
+  for (const [i, entry] of value.entries()) {
+    const combination = `${at}[${i}]`;
+    if (!isObj(entry) || !Array.isArray(entry.inputs) || entry.inputs.length < 2) {
+      return `${combination} is ${JSON.stringify(entry)}, expected an object with at least two inputs`;
+    }
+    const extra = Object.keys(entry).find((key) => key !== 'inputs');
+    if (extra !== undefined) return `${combination} has unknown field ${JSON.stringify(extra)}`;
+    const seen = new Set<string>();
+    for (const [j, input] of entry.inputs.entries()) {
+      const path = `${combination}.inputs[${j}]`;
+      if (!isObj(input) || typeof input.slider !== 'string' || input.slider.length === 0) {
+        return `${path} is ${JSON.stringify(input)}, expected an input with a non-empty slider name and finite value`;
+      }
+      const extra = Object.keys(input).find((key) => key !== 'slider' && key !== 'value');
+      if (extra !== undefined) return `${path} has unknown field ${JSON.stringify(extra)}`;
+      const dial = `${path} slider ${JSON.stringify(input.slider)} with value ${typeof input.value === 'number' ? String(input.value) : JSON.stringify(input.value) ?? 'absent'}`;
+      if (typeof input.value !== 'number' || !Number.isFinite(input.value)) return `${dial}, expected a finite number`;
+      if (seen.has(input.slider)) return `${dial} repeats a slider in this combination`;
+      seen.add(input.slider);
+      const kinds = kindsOf?.(input.slider);
+      if (kinds !== undefined && !kinds.includes('slider')) {
+        return kinds.length === 0 ? `${dial} names an unknown slider` : `${dial} names ${kinds.join('/')} constraints, expected a slider`;
+      }
+    }
+  }
+}
+
 /**
  * Parse and check the envelope, then hand back a typed spec.
  *
@@ -2693,6 +2732,10 @@ export function parseRigSpec(raw: unknown, where: string): RigSpec {
   // consequence a typo at the root produces.
   const visits = checkRigSpecKeys(raw, where);
   const place = rigPlace(raw);
+  if (isObj(raw.invariants)) {
+    const problem = deformSliderCombinationProblem(raw.invariants.deformSliderCombinations, 'invariants.deformSliderCombinations');
+    if (problem !== undefined) throw new CompileError(`${where}: ${problem}`, 'CE_RIG_DEFORM_SLIDER_COMBINATIONS');
+  }
   // Every value the scan admitted, against the type its key holds, before any
   // reader — here or in `compile` — has done arithmetic on it (issue #890).
   // ⚠️ It runs ahead of this function's own field checks on purpose: those read
@@ -2710,7 +2753,14 @@ export function parseRigSpec(raw: unknown, where: string): RigSpec {
   // After the key check, so a misspelled key is named as a misspelling before
   // its value is judged, and before every reader below, so no range rule or
   // derived number ever meets a value the file cannot carry (issue #881).
-  refuseNumbersTheFileCannotCarry(raw, where, place);
+  if (isObj(raw.invariants) && raw.invariants.deformSliderCombinations !== undefined) {
+    // The tuple values are pose inputs stored only in model metadata. Their
+    // finite-number check above is independent of the Spine float32 grid.
+    const { deformSliderCombinations: _combinations, ...invariants } = raw.invariants;
+    refuseNumbersTheFileCannotCarry({ ...raw, invariants }, where, place);
+  } else {
+    refuseNumbersTheFileCannotCarry(raw, where, place);
+  }
 
   if (typeof raw.name !== 'string' || raw.name.length === 0) {
     throw new CompileError(`${where}: a rig spec needs a "name" — a motion spec names it to pick this rig`, 'CE_RIG_NAME_REQUIRED');

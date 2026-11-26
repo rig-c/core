@@ -112,6 +112,8 @@ import type { SkeletonRosterFacts } from '../facts/skeleton_roster.ts';
 import type { BoneTimelineFacts } from '../facts/bone_timelines.ts';
 import type { EventKeyFacts } from '../facts/event_keys.ts';
 import { a39DeformKeepsTriangleWinding } from '../bodies/a39.ts';
+import { A53, a53DeclaredSliderCombinationsKeepWinding, type SupplyDeformCombinations } from '../bodies/a53.ts';
+import { surveyModelDeformCombinations } from '../../deformsurvey.ts';
 import { a09AnimationDurationMatchesSpec } from '../bodies/a09.ts';
 import { a43TwoColorTintLoadsAndPosesAsWritten } from '../bodies/a43.ts';
 import { a46SequenceAttachmentsShowTheFrameTheFileStates } from '../bodies/a46.ts';
@@ -190,6 +192,7 @@ export interface ModelSupply {
   boneTimelines: (read: ReadDocument) => BoneTimelineFacts;
   eventKeys: (read: ReadDocument) => EventKeyFacts;
   deformSurvey: (read: ReadDocument) => DeformSurveyFacts;
+  deformCombinations: (read: ReadDocument) => SupplyDeformCombinations;
   animationDurations: (read: ReadDocument) => AnimationDurationFacts;
   twoColour: (read: ReadDocument) => TwoColourFacts;
   sequences: (read: ReadDocument) => SequenceFacts;
@@ -224,6 +227,7 @@ export const MODEL_SUPPLY: ModelSupply = {
   boneTimelines: modelBoneTimelines,
   eventKeys: modelEventKeys,
   deformSurvey: modelDeformSurvey,
+  deformCombinations: (read) => (combinations, exempt) => surveyModelDeformCombinations(read.doc, combinations, exempt),
   animationDurations: modelAnimationDurations,
   twoColour: modelTwoColour,
   sequences: modelSequences,
@@ -295,6 +299,7 @@ export const MOVED_ASSERTIONS: readonly MovedAssertion[] = [
   { code: 'A21_MESH_RIM_PINNED', run: (v, read, input, supply) => a21MeshRimPinned(v, supply.meshes(read), supply.rigInfo(read, input)), unread: SKIP_NO_MODEL },
   { code: 'A22_MESH_UVS_IN_UNIT_RANGE', run: (v, read, _input, supply) => a22MeshUvsInUnitRange(v, supply.meshes(read)), unread: SKIP_NO_MODEL },
   { code: 'A39_DEFORM_KEEPS_TRIANGLE_WINDING', run: (v, read, input, supply) => a39DeformKeepsTriangleWinding(v, supply.deformSurvey(read), supply.rigInfo(read, input)), unread: SKIP_NO_MODEL },
+  { code: A53, run: (v, read, input, supply) => a53DeclaredSliderCombinationsKeepWinding(v, supply.deformCombinations(read), supply.rigInfo(read, input)), unread: SKIP_NO_MODEL },
   { code: 'A23_PHYSICS_CONSTRAINT_EFFECTIVE', run: (v, read, _input, supply) => a23PhysicsConstraintEffective(v, supply.constraints(read), supply.meshes(read)), unread: SKIP_NO_MODEL },
   { code: 'A36_PATH_CONSTRAINT_EFFECTIVE', run: (v, read, _input, supply) => a36PathConstraintEffective(v, supply.constraints(read)), unread: SKIP_NO_MODEL },
   { code: 'A37_SLIDER_CONSTRAINT_EFFECTIVE', run: (v, read, _input, supply) => a37SliderConstraintEffective(v, supply.constraints(read)), unread: SKIP_NO_MODEL },

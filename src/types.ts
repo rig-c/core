@@ -1411,6 +1411,11 @@ export interface CompiledImage {
   pageGrid?: { said: string; sentence: string };
 }
 
+/** Slider inputs to pose together for the declared winding invariant. */
+export interface DeformSliderCombination {
+  inputs: Array<{ slider: string; value: number }>;
+}
+
 /**
  * Structural expectations the validator cannot read out of skeleton JSON.
  *
@@ -1479,6 +1484,8 @@ export interface RigInfo {
    * is on.
    */
   deformMayFold: string[];
+  /** Explicit inputs measured together by A53, omitted when no tuples are declared. */
+  deformSliderCombinations?: DeformSliderCombination[];
   /**
    * Ik and transform constraints whose mix the consumer sets, from
    * `invariants.consumerDrivenMix`, in the rig spec's order. `A47` / `A48` do

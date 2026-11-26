@@ -137,7 +137,8 @@ import {
   type SurveyStructure,
 } from './deformstructure.ts';
 // Issue #1025 (cut 4c-3): the half of the survey that names no runtime class.
-import { BEZIER_POINTS, corePoser, surveyWith, type DeformSurvey, type DialField, type ShownReading, type SurveyPose, type SurveyPoser } from './deformsurvey.ts';
+import { BEZIER_POINTS, corePoser, surveyCombinationsWith, surveyWith, type CombinedSurveyPoser, type DeformSurvey, type DialField, type ShownReading, type SurveyPose } from './deformsurvey.ts';
+import type { DeformSliderCombination } from './types.ts';
 // Issue #1052: the choice of reader and poser over a build is `./deformbuild.ts`'s, where an entry that links nothing of
 // the runtime can load it; this file's half of it — the survey through spine-core — is registered into the seam below.
 import type { DeformSurveyInput } from './deformbuild.ts';
@@ -200,6 +201,11 @@ export function skeletonDataFromText(skeletonText: string, atlasText: string): S
 export function surveyDeformKeys(data: SkeletonData, exempt: ReadonlySet<string> = new Set()): DeformSurvey {
   const side = runtimeSide(data);
   return { ...surveyWith(side.structure, exempt, side.poser), source: { used: 'spine-core', why: null } };
+}
+
+export function surveySpineDeformCombinations(data: SkeletonData, combinations: readonly DeformSliderCombination[], exempt: ReadonlySet<string>) {
+  const { structure, poser } = runtimeSide(data);
+  return surveyCombinationsWith(structure, poser, combinations, exempt);
 }
 
 /**
@@ -486,7 +492,7 @@ function visibilityKeyTimes(timelines: readonly Timeline[], slots: ReadonlySet<n
  * spine-core's parsed skeleton read as the survey's structure, and posed by
  * spine-core — the survey as it always was (the section's note).
  */
-function runtimeSide(data: SkeletonData): { structure: SurveyStructure; poser: SurveyPoser; links: RuntimeLinks } {
+function runtimeSide(data: SkeletonData): { structure: SurveyStructure; poser: CombinedSurveyPoser; links: RuntimeLinks } {
   const skins = new Map<Skin, SurveySkin>();
   const skinBack = new Map<SurveySkin, Skin>();
   const skinOf = (skin: Skin | null): SurveySkin | null => {
@@ -649,9 +655,35 @@ function spinePose(skeleton: Skeleton, links: RuntimeLinks): SurveyPose {
 }
 
 /** The survey's poses through spine-core — the recipes the survey has always taken (`poseAt`; the dial below). */
-function spinePoser(data: SkeletonData, links: RuntimeLinks): SurveyPoser {
+function spinePoser(data: SkeletonData, links: RuntimeLinks): CombinedSurveyPoser {
   return {
     track: (skin, animation, time) => spinePose(poseAt(data, links.skin(skin), animation, time), links),
+    combination: (skin, inputs) => {
+      const skeleton = skeletonUnderSkin(data, links.skin(skin));
+      skeleton.setupPose();
+      skeleton.update(0);
+      for (const { slider, field, value } of inputs) {
+        const instance = sliderOn(skeleton, links.slider(slider));
+        if (instance === null) throw new Error(`the skeleton has no slider "${slider.name}" to pose`);
+        if (field === null) instance.pose.time = value;
+        else {
+          if (instance.bone === null) throw new Error(`slider "${slider.name}" has no driving bone`);
+          instance.bone.pose[field] = value;
+        }
+      }
+      skeleton.updateWorldTransform(Physics.reset);
+      const applied = new Map<string, number>();
+      for (const instance of skeleton.constraints) {
+        if (!(instance instanceof Slider) || !instance.active || instance.bone?.active === false || instance.appliedPose.mix === 0) continue;
+        const { animation, loop, name } = instance.data;
+        const { time } = instance.appliedPose;
+        // A bone-driven, zero-duration loop has all its keys at zero. The
+        // runtime reaches those keys even when Slider.update produced NaN.
+        const sample = loop && animation.duration === 0 && instance.bone !== null ? 0 : time;
+        applied.set(name, loop && animation.duration !== 0 ? sample % animation.duration : sample);
+      }
+      return { pose: spinePose(skeleton, links), applied };
+    },
     dial: (skin, handle) => {
       const slider = links.slider(handle);
       const skeleton = skeletonUnderSkin(data, links.skin(skin));
@@ -691,7 +723,7 @@ function spinePoser(data: SkeletonData, links: RuntimeLinks): SurveyPoser {
  * handles; `model` is the model document's reading, which only `core` and the
  * model's own poser can pose.
  */
-export function deformPosers(input: DeformSurveyInput & { modelText: string }): { data: SkeletonData; structure: SurveyStructure; model: SurveyStructure; spine: SurveyPoser; core: SurveyPoser } {
+export function deformPosers(input: DeformSurveyInput & { modelText: string }): { data: SkeletonData; structure: SurveyStructure; model: SurveyStructure; spine: CombinedSurveyPoser; core: CombinedSurveyPoser } {
   const data = skeletonDataFromText(input.skeletonText, input.atlasText);
   const side = runtimeSide(data);
   const doc = readModel(input.modelText);

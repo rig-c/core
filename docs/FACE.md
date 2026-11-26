@@ -1835,7 +1835,7 @@ it come off:
   MESH  head         authored 25 vertices / 32 triangles  (budget 32)  bones=[head]  attachments=[head]  covers 100.00% of the art, reaching 95.90px past it
   MESH  hair_bang    authored 15 vertices / 16 triangles  (budget 32)  bones=[bang]  attachments=[hair_bang]  covers 100.00% of the art, reaching 55.22px past it
   ..    validate (spine-core round trip + machine assertions, profile spine)
-  ..    profile spine — 6 renderer-policy and 8 archetype assertion(s) do not apply
+  ..    profile spine — 6 renderer-policy and 9 archetype assertion(s) do not apply
 ```
 
 `spine` is the default, so that is the `build` above with no `--profile` on it —

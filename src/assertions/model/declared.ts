@@ -29,6 +29,7 @@
  * Links nothing from the runtime.
  */
 import type { MeshKind } from '../../mesh.ts';
+import { deformSliderCombinationProblem } from '../../rig.ts';
 import type { RigInfo } from '../../types.ts';
 import { isObj } from '../values.ts';
 import type { ReadDocument } from './parse.ts';
@@ -62,8 +63,8 @@ const shape = (fields: Readonly<Record<string, Check>>): Check => (v, at, p) => 
   for (const k of Object.keys(v)) if (!(k in fields)) p.push(`${at}.${k} is not a field the rig section has`);
 };
 
-/** The rig section's fields, as `RigInfo` declares them and the writer writes every one — each required, none defaulted. */
-const RIG_FIELDS: Readonly<Record<keyof RigInfo, Check>> = {
+/** The rig section's fields, as `RigInfo` declares them and the writer writes them. Each is required except explicitly optional declarations. */
+const RIG_FIELDS: Readonly<Record<Exclude<keyof RigInfo, 'deformSliderCombinations'>, Check>> = {
   archetype: str,
   axisBone: nullable(str),
   axisSubtree: list(str),
@@ -88,7 +89,21 @@ const RIG_FIELDS: Readonly<Record<keyof RigInfo, Check>> = {
 /** Every problem with the document's `rig` section, each by its path — empty when it reads as rig info. */
 export function rigSectionProblems(json: Readonly<Record<string, unknown>>): string[] {
   const problems: string[] = [];
-  shape(RIG_FIELDS)(json.rig, 'rig', problems);
+  shape({
+    ...RIG_FIELDS,
+    deformSliderCombinations: (value, at, p) => {
+      if (value === undefined) return;
+      const kinds = new Map<string, string[]>();
+      const constraints: unknown[] = Array.isArray(json.constraints) ? json.constraints : [];
+      for (const entry of constraints) {
+        if (isObj(entry) && typeof entry.name === 'string' && typeof entry.kind === 'string') {
+          kinds.set(entry.name, [...(kinds.get(entry.name) ?? []), entry.kind]);
+        }
+      }
+      const problem = deformSliderCombinationProblem(value, at, (name) => kinds.get(name) ?? []);
+      if (problem !== undefined) p.push(problem);
+    },
+  })(json.rig, 'rig', problems);
   return problems;
 }
 

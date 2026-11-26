@@ -192,6 +192,24 @@ export function poseDial(doc: CompiledDocument, override: DialOverride, slider: 
   return { doc: view, world: posed.world, slots: posed.setup.slots, shown: posed.shown, drawOrder: posed.setup.drawOrder, read, applied: ran === undefined ? record.time : ran.time };
 }
 
+/** Apply all declared input writes before solving one setup pose. */
+export function poseDialCombination(doc: CompiledDocument, overrides: readonly DialOverride[]): { pose: CoreSurveyPose; applied: ReadonlyMap<string, number> } {
+  const view = overrides.reduce(overridden, doc);
+  const applied = new Map<string, number>();
+  const posed = poseSetup(view, {
+    ...RAW_PLANT,
+    readLocals: (_bones, sliders) => {
+      for (const slider of sliders) applied.set(slider.name, slider.at);
+    },
+  }, freshStepContext());
+  const missing = posed.absent.filter(([b]) => b === 'setup.bones' || b === 'setup.slots' || b === 'setup.drawOrder');
+  if (missing.length > 0 || posed.world === null || posed.setup.slots === null) {
+    throw new CoreInputError(`the combined dial pose leaves ${missing.map(([b, w]) => `${b} out (${w})`).join('; ') || 'the bones or slots out'}`);
+  }
+  if (posed.shown === null) throw new CoreInputError('the combined dial pose leaves the shown records out');
+  return { pose: { doc: view, world: posed.world, slots: posed.setup.slots, shown: posed.shown }, applied };
+}
+
 /** `skin/slot/placeholder` — the identity a deform timeline keys a record under (`timelineIdentity`). */
 export function recordIdentity(skin: string, slot: string, placeholder: string): string {
   return `${skin}/${slot}/${placeholder}`;

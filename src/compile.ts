@@ -49,6 +49,7 @@ import {
   BONE_INHERIT_KNOWN,
   constraintAt,
   declaresNoStage,
+  deformSliderCombinationProblem,
   parseRigSpec,
   RIG_FROM_PROPERTIES,
   RIG_PATH_POSITION_MODES,
@@ -3436,6 +3437,13 @@ function compileInto(opts: CompileOptions, droppedStates: DroppedState[]): Compi
       });
     }
   });
+
+  const combinationProblem = deformSliderCombinationProblem(
+    rig.invariants?.deformSliderCombinations,
+    'invariants.deformSliderCombinations',
+    (name) => constraintKinds.get(name) ?? [],
+  );
+  if (combinationProblem !== undefined) throw new CompileError(`${rigPath}: ${combinationProblem}`, 'CE_RIG_DEFORM_SLIDER_COMBINATIONS');
 
   // -- 5. animations ---------------------------------------------------------
   //
@@ -8272,6 +8280,7 @@ function buildRigInfo(
   manifest: FaceManifest | null,
   images: CompiledImage[],
 ): RigInfo {
+  const combinations = rig.invariants?.deformSliderCombinations;
   const axisBone = rig.invariants?.axisBone ?? null;
   if (axisBone !== null && !bones.some((b) => b.name === axisBone)) {
     throw new CompileError(`rig "${rig.name}" names "${axisBone}" as its axis bone, which it does not declare`, 'CE_COMPILE_AXIS_BONE_UNKNOWN');
@@ -8333,6 +8342,12 @@ function buildRigInfo(
     meshDeclaredBones,
     meshSoftBones,
     deformMayFold,
+    // Model JSON has one spelling for zero.
+    ...(combinations?.length ? {
+      deformSliderCombinations: combinations.map(({ inputs }) => ({
+        inputs: inputs.map(({ slider, value }) => ({ slider, value: value === 0 ? 0 : value })),
+      })),
+    } : {}),
     // `parseRigSpec` resolved every entry against the rig's own constraints.
     consumerDrivenMix: (rig.invariants?.consumerDrivenMix ?? []).map((e) => ({ type: e.type, constraint: e.constraint, why: e.why })),
     // `parseRigSpec` refused every shape but a non-blank `why`.

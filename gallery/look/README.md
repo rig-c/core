@@ -673,14 +673,14 @@ instead of being kept by hand
 
 ```
 PROF  A30_STROKE_WITHIN_CAP_CONTAINMENT: archetype rule, not in profile "spine"
-..    50 assertions: 22 measured (22 passed, 0 failed), 14 skipped, 14 not in profile "spine"
+..    51 assertions: 22 measured (22 passed, 0 failed), 14 skipped, 15 not in profile "spine"
 ```
 
 `rigc build --profile rig-play`:
 
 ```
 SKIP  A30_STROKE_WITHIN_CAP_CONTAINMENT: the manifest declares no `stroke.cap_containment_ceiling`, so this cut has no measured containment ceiling
-..    50 assertions: 29 measured (29 passed, 0 failed), 21 skipped, 0 not in profile "rig-play"
+..    51 assertions: 29 measured (29 passed, 0 failed), 22 skipped, 0 not in profile "rig-play"
 ```
 
 🚨 **The loop does not close, and the reason is the spring, not the timeline.**

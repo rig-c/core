@@ -60,7 +60,7 @@ import {
 // them, so it is already on `package.json`'s `files` allowlist — see CLAUDE.md.
 // A19 needs the DECODED page, not its header, to measure one region's own
 // rectangle on a shared page.
-import { BEZIER_POINTS, curveStorage, surveyDeformKeys } from './deformmeasure.ts';
+import { BEZIER_POINTS, curveStorage, surveyDeformKeys, surveySpineDeformCombinations } from './deformmeasure.ts';
 import {
   LEGACY_BONE_INHERIT_KEY,
   spineGeneration,
@@ -148,6 +148,7 @@ import type { AnimationDurationFacts } from './assertions/facts/animation_durati
 import type { TwoColourFacts } from './assertions/facts/two_colour.ts';
 import { entryAddress, type EntryAddress, type SequenceFacts, type SequenceSkinEntry, type SequenceTimeline } from './assertions/facts/sequences.ts';
 import { a39DeformKeepsTriangleWinding } from './assertions/bodies/a39.ts';
+import { a53DeclaredSliderCombinationsKeepWinding } from './assertions/bodies/a53.ts';
 import { a09AnimationDurationMatchesSpec } from './assertions/bodies/a09.ts';
 import { a43TwoColorTintLoadsAndPosesAsWritten } from './assertions/bodies/a43.ts';
 import { a46SequenceAttachmentsShowTheFrameTheFileStates } from './assertions/bodies/a46.ts';
@@ -2830,6 +2831,7 @@ export function validate(input: ValidateInput): ValidateReport {
     // the model side the core's over the model document — the same body, and the
     // survey the two hand it held to one by `tools/survey_hashes.ts`.
     check('A39_DEFORM_KEEPS_TRIANGLE_WINDING', () => a39DeformKeepsTriangleWinding(verdicts, spineDeformSurvey(data), input.rig));
+    check('A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING', () => a53DeclaredSliderCombinationsKeepWinding(verdicts, (combinations, exempt) => surveySpineDeformCombinations(data, combinations, exempt), input.rig));
 
     // --- A23, A36, A37, A47, A48: a constraint that does nothing, quietly -
     //

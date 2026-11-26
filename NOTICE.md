@@ -40,8 +40,8 @@ Software's terms, not a licence term of this project:
    development dependency for its own gate, and so does an install with
    `spine-core` added beside it. Validation is not optional on either: the gate
    runs through the runtime where it is installed and through rigc's own validator
-   where it is not, and the two are held to the same verdicts in CI on 49 of the
-   50 assertions — the official parser's own parse runs only where the runtime is.
+   where it is not, and the two are held to the same verdicts in CI on 50 of the
+   51 assertions — the official parser's own parse runs only where the runtime is.
 
 > **If a product integrates a Spine Runtime to play rigc's output, that integration
 > is subject to the terms above** — rigc neither creates those terms nor removes

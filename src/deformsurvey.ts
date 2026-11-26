@@ -23,10 +23,11 @@
  * Links nothing from the runtime, directly or through what it imports.
  */
 import { CoreInputError, underSkin, type CompiledDocument } from './core/index.ts';
-import { float32Rows, meshWorld, poseDial as corePoseDial, poseJump, recordIdentity, sliderRecordOf, slotDraw, type CoreSurveyPose } from './core/hooks.ts';
+import { float32Rows, meshWorld, poseDial as corePoseDial, poseDialCombination, poseJump, recordIdentity, sliderRecordOf, slotDraw, type CoreSurveyPose } from './core/hooks.ts';
 import { modelStructure, type SurveyAnimation, type SurveyDeformTimeline, type SurveyMesh, type SurveySkin, type SurveySlider, type SurveyStructure } from './deformstructure.ts';
 import { areaBand, DEFORM_AREA_EPSILON, float32AreaNoise, stretchSingularValues, triangleAreas } from './areaband.ts';
 import { hypot2 } from './numeric.ts';
+import type { DeformSliderCombination } from './types.ts';
 
 // The area band lives in `src/areaband.ts` (moved unchanged, issue #1224) so the
 // geometry entry can read it without reaching the compiler, and
@@ -1091,7 +1092,7 @@ function reachesOf(structure: SurveyStructure, skin: SurveySkin | null, poser: S
  * ⛔ Nothing here falls back to `rotation`, or to any field, when the search does
  * not settle. Two answers that disagree are two answers, printed.
  */
-function planDial(poser: SurveyPoser, skin: SurveySkin | null, slider: SurveySlider): DialPlan | null {
+function planDial(poser: SurveyPoser, skin: SurveySkin | null, slider: SurveySlider, requireSettled = false): DialPlan | null {
   const boneName = slider.bone ?? '?';
   const where = slider.local ? ' (local)' : ' (world)';
   const reach = (discovery: DialDiscovery | null): DeformReach => {
@@ -1152,6 +1153,7 @@ function planDial(poser: SurveyPoser, skin: SurveySkin | null, slider: SurveySli
   const stated = slider.stated;
   const leaders = probes.filter((p) => p.response * DIAL_PROBE_MARGIN >= winner.response);
   const decisive = leaders.length === 1;
+  if (requireSettled && !decisive && !leaders.some((p) => p.field === stated)) return null;
   const chosen = decisive || stated === null ? winner : (leaders.find((p) => p.field === stated) ?? winner);
   const verdict: DialVerdict = chosen.field === stated ? (decisive ? 'agreed' : 'settled') : 'disagreed';
   const discovery: DialDiscovery = {
@@ -2074,6 +2076,157 @@ export interface SurveyPoser {
   dial(skin: SurveySkin | null, slider: SurveySlider): DialSession | null;
 }
 
+/** One input write, after resolving the local driver field. A bone-less slider writes its time. */
+interface CombinedDialInput {
+  slider: SurveySlider;
+  field: DialField | null;
+  value: number;
+}
+
+export interface CombinedSurveyPoser extends SurveyPoser {
+  combination(skin: SurveySkin | null, inputs: readonly CombinedDialInput[]): { pose: SurveyPose; applied: ReadonlyMap<string, number> };
+}
+
+interface CombinedTarget {
+  mesh: SurveyMesh;
+  slotIndex: number;
+  timelines: Map<string, SurveyDeformTimeline>;
+}
+
+interface CombinedSample {
+  slider: string;
+  value: number;
+  animation: string;
+  time: number | undefined;
+  /** The key at or before time and, between keys, the next key. No key before the first. */
+  keys: Array<{ index: number; time: number }>;
+}
+
+interface CombinedReversal {
+  combination: number;
+  skin: string | null;
+  slot: string;
+  attachment: string;
+  samples: CombinedSample[];
+  triangles: number;
+  reversed: DeformReversal[];
+}
+
+export interface CombinedDeformSurvey {
+  measured: number;
+  unmeasured: number[];
+  reversals: CombinedReversal[];
+}
+
+function combinedTargets(structure: SurveyStructure, sliders: readonly SurveySlider[], exempt: ReadonlySet<string>) {
+  const holders = new Map<SurveySkin | null, Map<SurveyMesh, Map<number, CombinedTarget>>>();
+  for (const slider of sliders) {
+    const animation = structure.animations.find((a) => a.name === slider.animation);
+    if (animation === undefined) throw new CoreInputError(`slider "${slider.name}" has no animation "${slider.animation}" to pose`);
+    for (const timeline of animation.deforms) {
+      if (timeline.mesh === null || timeline.mesh.triangles.length === 0) continue;
+      const { holder } = timeline.placement();
+      let meshes = holders.get(holder);
+      if (meshes === undefined) holders.set(holder, meshes = new Map());
+      let targets = meshes.get(timeline.mesh);
+      if (targets === undefined) meshes.set(timeline.mesh, targets = new Map());
+      for (const slotIndex of new Set([timeline.slotIndex, ...timeline.mesh.timelineSlots])) {
+        if (exempt.has(structure.slotName(slotIndex))) continue;
+        let target = targets.get(slotIndex);
+        if (target === undefined) targets.set(slotIndex, target = { mesh: timeline.mesh, slotIndex, timelines: new Map() });
+        target.timelines.set(slider.name, timeline);
+      }
+    }
+  }
+  const groups = new Map<SurveySkin | null, CombinedTarget[]>();
+  for (const [holder, meshes] of holders) {
+    const targets = [...meshes.values()].flatMap((mesh) => [...mesh.values()]);
+    if (targets.length > 0) groups.set(holder, targets);
+  }
+  return groups;
+}
+
+function sampleKeys(frames: ArrayLike<number> | undefined, time: number | undefined): CombinedSample['keys'] {
+  if (frames === undefined || time === undefined || frames.length === 0 || time < frames[0]) return [];
+  let index = 0;
+  while (index + 1 < frames.length && frames[index + 1] <= time) index++;
+  const key = { index, time: frames[index] };
+  return key.time === time || index === frames.length - 1 ? [key] : [key, { index: index + 1, time: frames[index + 1] }];
+}
+
+/** Read explicitly offered poses without changing A39's single-dial survey. */
+export function surveyCombinationsWith(structure: SurveyStructure, poser: CombinedSurveyPoser, combinations: readonly DeformSliderCombination[], exempt: ReadonlySet<string>): CombinedDeformSurvey {
+  const survey: CombinedDeformSurvey = { measured: 0, unmeasured: [], reversals: [] };
+  const sliders = new Map(structure.sliders.map((slider) => [slider.name, slider]));
+  const plans = new Map<SurveySkin | null, Map<SurveySlider, DialPlan | null>>();
+  for (const [combination, { inputs }] of combinations.entries()) {
+    const named = inputs.map(({ slider: name, value }) => {
+      const slider = sliders.get(name);
+      if (slider === undefined) throw new CoreInputError(`combination ${combination + 1} names unknown slider "${name}"`);
+      return { slider, value };
+    });
+    let measured = false;
+    for (const [holder, targets] of combinedTargets(structure, named.map(({ slider }) => slider), exempt)) {
+      const skin = holder?.name ?? null;
+      let skinPlans = plans.get(holder);
+      if (skinPlans === undefined) plans.set(holder, skinPlans = new Map());
+      const writes = new Map<string, CombinedDialInput>();
+      for (const { slider, value } of named) {
+        let plan = skinPlans.get(slider);
+        if (plan === undefined) {
+          plan = planDial(poser, holder, slider, true);
+          skinPlans.set(slider, plan);
+        }
+        if (plan === null) {
+          throw new CoreInputError(`combination ${combination + 1} cannot resolve the driving field of slider "${slider.name}" under skin ${JSON.stringify(skin)}`);
+        }
+        const key = JSON.stringify(slider.bone === null ? [slider.name] : [slider.bone, plan.field]);
+        const prior = writes.get(key);
+        if (prior !== undefined && prior.value !== value) {
+          throw new CoreInputError(`combination ${combination + 1} gives shared input ${slider.bone}.${plan.field} two values: "${prior.slider.name}"=${prior.value}, "${slider.name}"=${value}`);
+        }
+        writes.set(key, { slider, field: plan.field, value });
+      }
+      const { pose, applied } = poser.combination(holder, [...writes.values()]);
+      for (const { slider } of named) {
+        const time = applied.get(slider.name);
+        if (time !== undefined && !Number.isFinite(time)) throw new CoreInputError(`combination ${combination + 1} yields non-finite sample time ${time} for slider "${slider.name}"`);
+      }
+      for (const { mesh, slotIndex, timelines } of targets) {
+        const draw = pose.shownAt(slotIndex, mesh);
+        if (!draw.showsThisMesh || draw.alpha === 0) continue;
+        const samples = named.map(({ slider, value }): CombinedSample => {
+          const time = applied.get(slider.name);
+          return { slider: slider.name, value, animation: slider.animation, time, keys: sampleKeys(timelines.get(slider.name)?.frames, time) };
+        });
+        if (!samples.some((sample) => sample.keys.length > 0)) continue;
+        // The rows seam preserves the slot deform for another target read.
+        const posed = float32Rows(pose.rows(slotIndex, mesh, 'posed'));
+        const cleared = float32Rows(pose.rows(slotIndex, mesh, 'cleared'));
+        const before = triangleAreas(cleared, mesh.triangles);
+        const after = triangleAreas(posed, mesh.triangles);
+        const band = areaBand(before, cleared, posed);
+        const slot = structure.slotName(slotIndex);
+        const attachment = draw.shown ?? mesh.name;
+        if (!Number.isFinite(band)) throw new CoreInputError(`combination ${combination + 1} yields non-finite world geometry for ${slot}/${attachment}`);
+        const reversed: DeformReversal[] = [];
+        for (const [triangle, area] of before.entries()) {
+          if (Math.abs(area) <= band) continue;
+          measured = true;
+          const end = after[triangle];
+          if (Math.abs(end) <= band || Math.sign(area) === Math.sign(end)) continue;
+          const t = triangle * 3;
+          reversed.push({ triangle, ids: [mesh.triangles[t], mesh.triangles[t + 1], mesh.triangles[t + 2]], before: area, after: end });
+        }
+        if (reversed.length > 0) survey.reversals.push({ combination: combination + 1, skin, slot, attachment, samples, triangles: before.length, reversed });
+      }
+    }
+    if (measured) survey.measured++;
+    else survey.unmeasured.push(combination + 1);
+  }
+  return survey;
+}
+
 /** A pose of the core's, read through the structure's slot names and each mesh's model record. */
 function corePose(pose: CoreSurveyPose, structure: SurveyStructure): SurveyPose {
   const slotName = (slotIndex: number): string => {
@@ -2112,7 +2265,7 @@ function corePose(pose: CoreSurveyPose, structure: SurveyStructure): SurveyPose 
  * `structure` is whichever reader's: the model document's on a build the core
  * poses, the runtime's where the hooks are held to spine-core's.
  */
-export function corePoser(structure: SurveyStructure, doc: CompiledDocument): SurveyPoser {
+export function corePoser(structure: SurveyStructure, doc: CompiledDocument): CombinedSurveyPoser {
   const views = new Map<string, CompiledDocument>();
   const viewOf = (skin: SurveySkin | null): CompiledDocument => {
     if (skin === null) throw new CoreInputError('the survey asked for a pose wearing no skin, and the core poses one skin\'s view');
@@ -2125,6 +2278,12 @@ export function corePoser(structure: SurveyStructure, doc: CompiledDocument): Su
   };
   return {
     track: (skin, animation, time) => corePose(poseJump(viewOf(skin), animation, time), structure),
+    combination: (skin, inputs) => {
+      const { pose, applied } = poseDialCombination(viewOf(skin), inputs.map(({ slider, field, value }) =>
+        field === null || slider.bone === null ? { slider: slider.name, time: value } : { bone: slider.bone, field, value },
+      ));
+      return { pose: corePose(pose, structure), applied };
+    },
     dial: (skin, slider) => {
       const view = viewOf(skin);
       const record = sliderRecordOf(view, slider.name);
@@ -2160,4 +2319,9 @@ export function corePoser(structure: SurveyStructure, doc: CompiledDocument): Su
 export function surveyOfModel(doc: CompiledDocument, exempt: ReadonlySet<string>, read: (doc: CompiledDocument) => SurveyStructure = modelStructure): DeformSurvey {
   const structure = read(doc);
   return { ...surveyWith(structure, exempt, corePoser(structure, doc)), source: { used: 'model', why: null } };
+}
+
+export function surveyModelDeformCombinations(doc: CompiledDocument, combinations: readonly DeformSliderCombination[], exempt: ReadonlySet<string>): CombinedDeformSurvey {
+  const structure = modelStructure(doc);
+  return surveyCombinationsWith(structure, corePoser(structure, doc), combinations, exempt);
 }

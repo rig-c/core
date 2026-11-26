@@ -6,7 +6,7 @@ yardstick rigc is measured against, the three instruments that do the measuring
 (`rigc diff`, `rigc bonedist` and `rigc check`) and what none of them can see, the eight-rung
 benchmark ladder and the spineboy graduation exam, the commands that let you look at a
 rig with no reference at all, the run viewer, the input and output surface as it stands
-today, the 50 named assertions and their profiles, the selftest that has watched every
+today, the 51 named assertions and their profiles, the selftest that has watched every
 one of them fire, and the layout of the repository all of that lives in.
 
 It is **repository material rather than package material** — most of what it names
@@ -1063,7 +1063,7 @@ model (what is pinned, what may move, how authority falls off), and the
 ### The validator
 
 [`src/validate.ts`](../src/validate.ts) parses the emitted artifacts with `spine-core`
-and then runs 50 named assertions over the loaded skeleton. Each one exists because
+and then runs 51 named assertions over the loaded skeleton. Each one exists because
 the failure it catches is **silent**: the file loads, animates, and lies.
 
 Assertions whose data is absent are reported as **SKIP**, never folded into the pass
@@ -1071,7 +1071,7 @@ count — an assertion with nothing to check has not checked anything.
 
 #### Profiles — "wrong" versus "not how we do it here"
 
-Not all 50 rules are about Spine. Some are about **spine-html**, the renderer this
+Not all 51 rules are about Spine. Some are about **spine-html**, the renderer this
 compiler was built to feed, and about one project's frame budget; they fire on real,
 correct, editor-produced Spine data, because the official example projects carry
 unweighted meshes, 116-triangle meshes and packed atlases —
@@ -1085,16 +1085,16 @@ So `validate` and `build` take a `--profile`:
 | Profile | Runs | For |
 | --- | --- | --- |
 | `spine` | the 36 validity rules | **the default.** Is this valid Spine 4.3 that any runtime plays correctly? |
-| `rig-play` | all 50 — those 36 plus 6 renderer and 8 archetype | Opt-in. Is this a rig *this* project can ship? |
+| `rig-play` | all 51 — those 36 plus 6 renderer and 9 archetype | Opt-in. Is this a rig *this* project can ship? |
 
 Those are the two numbers `src/validate.ts` exports rather than states in prose:
-`ASSERTION_NAMES.length` is 50 and `assertionCountForProfile('spine')` is 36, so a
+`ASSERTION_NAMES.length` is 51 and `assertionCountForProfile('spine')` is 36, so a
 control can count them instead of quoting a figure that goes stale the next time one
 is added.
 
 `spine` is the default because it is the question this package's output answers:
 the artifact imports into the Spine editor and plays in any 4.3 runtime, and
-that is what the 36 validity rules are about. The other 14 are somebody's policy
+that is what the 36 validity rules are about. The other 15 are somebody's policy
 — one renderer's, one canvas budget's, one compiler's own formations' — and a
 rig arriving from anywhere else has no stake in them. Ask for them with
 `--profile rig-play` when you want them.
@@ -1148,6 +1148,7 @@ the renderer policy*.
 | `A37_SLIDER_CONSTRAINT_EFFECTIVE` | both | every slider applies an animation that carries at least one timeline, does not loop a zero-length one, does not read a bone property at `scale: 0`, and is either mixed in at setup or keyed above 0. A slider is the only constraint that applies an **animation**, so its failures are about that animation: an empty one changes nothing, and looping a zero-length one computes `duration + (time % duration)` and applies the animation at **NaN**. SKIPs when the skeleton declares no slider |
 | `A38_SKIN_MEMBERS_ARE_SKIN_REQUIRED` | both | a bone or constraint a skin activates is `skinRequired`, and everything `skinRequired` is activated by some skin. Two halves of one switch that live in two places — the member's own `skin: true` and the skin's list — and either half alone is dead data in silence: listed without the flag, the object is active under every skin and the list changes nothing; flagged and listed nowhere, it is inactive under every skin there is. The artifact is internally consistent either way, which is why nothing else can see it. SKIPs when no skin activates anything and nothing is `skinRequired` |
 | `A39_DEFORM_KEEPS_TRIANGLE_WINDING` | archetype | a `deform` key reverses a triangle's winding. Measured at the key's own time as the deformed mesh against the same posed bones with the deform cleared, so the bone pose — a mirror included — cancels and what is left is what the key did. A reversed triangle draws its texture backwards and the mesh has locally turned inside out; a *wrong projection* whose winding survives is correctly silent here and visible only to `check` against a trusted render. Not `validity`, and measured rather than assumed: an official `spineboy-pro` export reverses one of `hoverboard-board`'s 101 triangles, so a rule that fired on every skeleton would refuse correct editor output. `invariants.deformMayFold` exempts a slot that folds on purpose, and a key whose slot draws no pixels at that key's own time — alpha exactly 0, or another attachment shown — is measured and then passed over by name (issue #401): "draws its texture backwards" is false when nothing of it is drawn. The **spans between** consecutive keys are scanned as well (issue #403), because the runtime interpolates and a deform inside its fold angle at every key can be past it in between. And the FRAME it is posed in is the one the animation is reached in (issue #407): on a track when nothing applies it, otherwise once per **slider**, with that slider's mapping inverted and its bone driven until the runtime selects the key's own time — a slider picks the time, so the two are one number and posing them independently is a frame no playthrough contains — the fold fraction is a root of a quadratic in the interpolation parameter rather than a sampled search, and the time it names is then posed and measured, alpha included, exactly as a key is. SKIPs when no animation carries a deform timeline, when nothing keyed has triangles, when every mesh keyed is exempt, when every key measured draws no pixels and no span between them folds where anything is drawn, or with no rig info |
+| `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING` | archetype | an explicitly declared dial combination reverses a visible mesh triangle. The check uses the combined slider pose and the same pose with its deform cleared. See [AUTHORING §5.2](AUTHORING.md#a53_declared_slider_combinations_keep_winding). |
 | `A40_SLIDERS_COMPOSE_ON_A_SHARED_TARGET` | both | two or more sliders whose animations key the same timeline, where one of the later ones is not `additive`. `Slider.update` applies its animation with `MixFrom.current` and that flag, and at `mix: 1` a non-additive apply writes the value outright — so the slider later in the `constraints` array wins the property and every earlier one on it is dead weight on every frame. Measured: two dials on one bone contributing 7.50° and 18.75° pose 18.75° at the default, 7.50° with the array order swapped, and 26.25° — the sum — when both are additive. It also fires when the shared timeline **cannot** be additive at all (a slot colour, an attachment swap, a draw order, a sequence ignore the `add` argument), because there `"additive": true` is not the fix and a message recommending it would be a green gate over the same dead axis. `validity` rather than policy: the arithmetic is the runtime's, not this project's. Three shapes are excluded structurally rather than by a threshold — a slider below `mix: 1` or with its `mix` keyed (the apply is then a lerp from the current pose, and a chain of those is a legitimate weighting), two `skinRequired` sliders no single skin activates, and two sliders on different properties. SKIPs when fewer than two sliders are at full authority |
 | `A42_DRIVEN_CONSTRAINTS_UPDATE_AFTER_THEIR_DRIVER` | both | a slider whose animation keys a property of a constraint at or before it in the `constraints` array — which is the update order for every constraint kind, so the key is written after the only read of it and `Posed.resetConstrained` puts the pose back before the next frame. Measured: two dials where the second keys the first's `mix`, posed over 99 cells of both dials — in the declared order the driven dial moves the shared bone by up to 75.000000°, with the array entries swapped by 0.000e+0 against a float64 floor of 2.434e-13 (issue #658); and one dial against each other kind, posed at 6 positions in both orders — the constraint's own pose holds the same ramp either way while what it drives travels 0.000e+0 with the constraint declared first against 1.662e+1 (ik), 4.000e+1 (transform), 1.620e+2 (path) and 4.256e+2 (physics, over 30 frames) with it declared last (issue #665). The two indices equal is the same failure and is the one `A37` cannot see: it asks whether any animation keys the `mix` above 0, and a slider's own animation is one of them, so a slider muted at setup that keys its own `mix` up reported green and never ran. Two measured exclusions: a `physics` `reset` key never fires from a slider in either order, so no reorder repairs it; a physics timeline naming no constraint is every physics constraint declaring that property global, and those already run are refused. `validity` rather than policy: the update order is the runtime's. SKIPs when no slider drives a constraint, and names the absence |
 | `A43_TWO_COLOR_TINT_LOADS_AND_POSES_AS_WRITTEN` | both | a two-colour tint the runtime does not hold as the file states it: a slot `dark` the parser drops (it takes the field through a truthiness test, so `""` is discarded in silence), a `dark` that is not six hex digits (fixed `parseInt` slices store `NaN`), an `rgba2` or `rgb2` timeline on a slot with no dark colour to pose — measured: `SkeletonJson` loads that file without complaint and the first `state.apply` throws `TypeError: null is not an object` inside `RGBA2Timeline.apply1` (and inside `RGB2Timeline.apply1`, measured the same way for #730), because `Slot`'s constructor allocates a dark colour only for a slot whose setup pose has one — or a key whose posed light or dark is not what it states, read by stepping the animation to the key's own time and comparing `appliedPose` to half a quantisation step (`1/510`). The required value is parsed independently of `Color.fromString`, so the check is not the parser agreeing with itself. `validity` rather than policy: every one of the three is a file the format admits and no runtime plays as written. An `rgb2` key's light colour is compared over its three channels, since it states no alpha. SKIPs when nothing declares a `dark` and nothing keys an `rgba2` or `rgb2` |

@@ -209,14 +209,14 @@ instead of being kept by hand
 
 ```
 PROF  A30_STROKE_WITHIN_CAP_CONTAINMENT: archetype rule, not in profile "spine"
-..    50 assertions: 15 measured (15 passed, 0 failed), 21 skipped, 14 not in profile "spine"
+..    51 assertions: 15 measured (15 passed, 0 failed), 21 skipped, 15 not in profile "spine"
 ```
 
 `rigc build --profile rig-play`:
 
 ```
 SKIP  A51_BONES_LIE_ALONG_THEIR_DECLARED_AXIS: the rig "walk" declares no axes (invariants.axes)
-..    50 assertions: 19 measured (19 passed, 0 failed), 31 skipped, 0 not in profile "rig-play"
+..    51 assertions: 19 measured (19 passed, 0 failed), 32 skipped, 0 not in profile "rig-play"
 ```
 
 ---

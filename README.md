@@ -102,12 +102,12 @@ it cuts both ways:
   is a development dependency: this repository uses it to hold rigc's own validator
   to the round trip's verdicts — in CI, on the public example recipes and every
   selftest call, and on a private corpus of production rigs measured before each
-  release. Of the 50 assertions, 49 run on both; `A00_ROUNDTRIP_PARSE`, the official
+  release. Of the 51 assertions, 50 run on both; `A00_ROUNDTRIP_PARSE`, the official
   parser's own parse, runs only where the runtime is installed and is reported as a
   SKIP elsewhere. There, in the parse's place, the report also carries the model
   side's own two parse rules, `A00_MODEL_READ` and `A00_MODEL_REGIONS_ON_PAGES`,
   which no round-trip rule matches and the registry does not hold — so its summary
-  totals 52 on the core entry, and its last line counts 42 rules on the model side
+  totals 53 on the core entry, and its last line counts 43 rules on the model side
   ([AUTHORING §5.2](docs/AUTHORING.md) has a row for each). Install it beside rigc
   (`bun add -d @esotericsoftware/spine-core`) and the same `rigc` runs the round
   trip on every build. The
@@ -634,7 +634,7 @@ imports a build into the Spine editor and checks the export against that build w
 | 📥 **[docs/INGEST.md](docs/INGEST.md)** | **working with a skeleton you did not author.** What every command can and cannot do with a foreign `skeleton.json`, reading it with the toolchain, transcription as the route that makes it yours, what each validator complaint means on an export, and the re-pivot/rename/extend recipes. Ships in the package too |
 | 🤖 **[docs/PROMPTING.md](docs/PROMPTING.md)** | **handing the authoring to an AI agent** — the prompt clauses a measured pilot run paid for, and what you can leave unsaid. Ships in the package too |
 | 🔬 **[docs/SPEC_COVERAGE.md](docs/SPEC_COVERAGE.md)** | **the Spine 4.3 format, field by field.** Every key the 4.3 JSON parser and atlas reader take, what each defaults to, and the parser line it comes from — the rows rigc's refusals cite by part number. Ships in the package too |
-| 🎓 **[the benchmark dossier](docs/BENCHMARK.md)** | **why you can trust the output.** The yardstick, `diff` and `check` and what neither can see, the eight-rung ladder and the spineboy graduation exam, the run viewer, the 50 named assertions with their profiles, and the selftest that has watched every one of them fire. Repository material — it is not in the npm package |
+| 🎓 **[the benchmark dossier](docs/BENCHMARK.md)** | **why you can trust the output.** The yardstick, `diff` and `check` and what neither can see, the eight-rung ladder and the spineboy graduation exam, the run viewer, the 51 named assertions with their profiles, and the selftest that has watched every one of them fire. Repository material — it is not in the npm package |
 | 📋 [LADDER.md](docs/LADDER.md) · [GATE.md](docs/GATE.md) · [PILOT.md](docs/PILOT.md) | the live rung ledger, the clause statements a candidate is graded against, and how to run an agent through the ladder and score what comes back |
 | 🧬 [GENERATIONS.md](docs/GENERATIONS.md) | **Spine data from another generation.** Why a 3.8–4.2 file read as 4.3 fails in silence, the policy that follows (detect from `skeleton.spine`, never guess, play on the matching runtime), what `A16` and `ingest` do with such a file, and the editor as the migration path. Repository material |
 | 📓 [CASES.md](docs/CASES.md) | **converting a Live2D model to Spine, and verifying the conversion.** The method — the source's own player headless, parts from its texture along the drawables, motion baked as deform keys, reference frames first, `check` — run once end to end on two Live2D sample models with no editor and no converter, and verified against the source's renderer and Spine's own runtime: the three instruments, the two rigc defects verifying it led to and v1.2.1 fixed, and where the method stops. Figures only — the models' licence keeps every asset out. Repository material |
@@ -685,7 +685,7 @@ quality."* All six, with their verdicts, are in
 [the from-zero attempt records](docs/LADDER.md).
 
 The whole dossier — the yardstick, `diff` and `check` and what neither of them can
-see, every rung, the run viewer, the 50 assertions and the selftest behind them — is
+see, every rung, the run viewer, the 51 assertions and the selftest behind them — is
 [docs/BENCHMARK.md](docs/BENCHMARK.md).
 Live rung status is
 [recorded in the ladder ledger](docs/LADDER.md).

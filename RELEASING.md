@@ -70,7 +70,9 @@ and approve pull requests" is not required.
    pull request's head, installed into a copy of a dependant's checkout, has
    to type-check under the dependant's own `typecheck` script and build its
    public example to the same bytes as the same build on the last release
-   ([#1212](https://github.com/rig-c/core/issues/1212)). Manual for now;
+   ([#1212](https://github.com/rig-c/core/issues/1212)), outside the wall-clock
+   times and package version in recognised run receipts
+   ([#1778](https://github.com/rig-c/core/issues/1778)). Manual for now;
    from a checkout of the release pull request's head, with the dependant's
    checkout beside it and its examples fetched (`bun run fetch-examples`
    there). This step checks the public scarf example's config, animation file
@@ -97,10 +99,23 @@ and approve pull requests" is not required.
    served; `--baseline` names another — into the other, runs
    the dependant's `typecheck` on the candidate, the build command in both
    (each `{out}` becomes an output directory of that copy's own), and
-   compares every file the two builds wrote by SHA-256. It exits 0 only when
-   the type check passes, both builds exit 0 and every file is identical; 1
-   names each one that is not; 2 is a pack, copy or install that did not
-   complete, which measured nothing. A difference in the bytes is what the
+   compares the two outputs. Rig files, atlas pages, `build-report/1` reports
+   and gate text stay compared by SHA-256 (`gate_spine-html.txt` keeps only
+   summary counts, so unchanged existing rows cannot be derived from it without
+   guessing, and `rig-run/3` `outputs` hashes both report files). Shared
+   recognised run receipts — `rigc-run/1`, `rigc-run/2`, `rig-run/1`,
+   `rig-run/2` and `rig-run/3`, identified by `spec` — are compared by field,
+   excluding `started_at`, `finished_at` and `package.version` only, with every
+   other field (paths, `argv`, `inputs` and `outputs` hashes, `package.name`)
+   held equal and every exclusion printed by file and key; a candidate-only
+   recognised run receipt is printed as an addition by path and `spec`, while
+   an unknown `spec` is refused receipt treatment, stays byte-compared and has
+   its `spec` named. Exit 0 means the candidate type-checks, both builds exit
+   0, every non-receipt file is byte-identical, every shared recognised run
+   receipt is equal outside those three excluded keys, and every candidate-only
+   file is a recognised run receipt; 1 names each difference, baseline-only
+   file or candidate-only non-receipt file; 2 is a pack, copy or install that
+   did not complete, which measured nothing. A difference in the bytes is what the
    notes' negative form (below) then has to name for that dependant — it is
    red because "identical" is the only reading a release is approved on
    without reading further. `--patch <file>` applies a change of the

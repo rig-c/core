@@ -39,10 +39,19 @@
  *    as such and is not a pass.
  * 6. Runs the build command after `--` in both copies, with every `{out}` in
  *    it replaced by an output directory of that copy's own, and compares the
- *    two outputs file by file: names, then SHA-256.
+ *    two outputs file by file: every non-receipt file (rig files, atlas pages,
+ *    build reports, gate text) by SHA-256; every shared recognised run receipt
+ *    (`rigc-run/1`, `rigc-run/2`, `rig-run/1`, `rig-run/2`, `rig-run/3`, read
+ *    by `spec`) by field outside `started_at`, `finished_at` and
+ *    `package.version`, with every exclusion printed by file and key; and any
+ *    candidate-only recognised run receipt named by path and `spec` as an
+ *    addition. An unknown `spec` is never treated as a receipt: it stays
+ *    byte-compared and is named when it differs or appears on one side only.
  *
- * Exit codes: **0** the candidate type-checks, both builds exit 0 and every
- * file is byte-identical; **1** any of those is not so, each named on its own
+ * Exit codes: **0** the candidate type-checks, both builds exit 0, every
+ * non-receipt file is byte-identical, every shared recognised run receipt is
+ * equal outside the three excluded keys, and every candidate-only file is a
+ * recognised run receipt; **1** any of those is not so, each named on its own
  * line; **2** a usage error, or nothing could run (a pack, a copy or an install
  * that failed is not a verdict on the dependant).
  *
@@ -85,10 +94,241 @@ usage:
 Every {out} in the build command is replaced by an output directory of each copy's own.
 
 exit codes:
-  0  the candidate type-checks, both builds exit 0, and every file they write is byte-identical
+  0  the candidate type-checks, both builds exit 0, every non-receipt file they write is byte-identical, every shared recognised run receipt (rigc-run/1, rigc-run/2, rig-run/1, rig-run/2, rig-run/3) is equal outside started_at, finished_at and package.version, and any candidate-only file is a recognised run receipt
   1  one of those is not so — each is named
   2  a usage error, or a pack, copy or install failed, so nothing was measured
 `;
+
+/**
+ * Run-receipt `spec` families and the schema versions read for field comparison
+ * (issue #1778): core's `rigc-run/1` and `rigc-run/2`, and a dependant's
+ * `rig-run/1`, `rig-run/2` and `rig-run/3`. An unread version or another `spec`
+ * (including `build-report/1`, whose companion `gate_spine-html.txt` keeps only
+ * summary counts and whose SHA-256 is pinned inside `rig-run/3` `outputs`) is
+ * refused receipt treatment, stays byte-compared, and has its `spec` named.
+ */
+export const RECEIPT_SPEC_FAMILIES: Readonly<Record<string, readonly number[]>> = {
+  'rigc-run': [1, 2],
+  'rig-run': [1, 2, 3],
+};
+
+export const RECOGNISED_RECEIPT_SPECS: readonly string[] = Object.entries(RECEIPT_SPEC_FAMILIES).flatMap(
+  ([family, versions]) => versions.map((version) => `${family}/${version}`),
+);
+
+const RECOGNISED_RECEIPT_SET: ReadonlySet<string> = new Set(RECOGNISED_RECEIPT_SPECS);
+
+/** The only receipt fields excluded from equality; none of the five specs nests another package version or a path here. */
+export const EXCLUDED_RECEIPT_KEYS = ['started_at', 'finished_at', 'package.version'] as const;
+export type ExcludedReceiptKey = (typeof EXCLUDED_RECEIPT_KEYS)[number];
+
+export interface ReceiptExclusion {
+  file: string;
+  spec: string;
+  key: ExcludedReceiptKey;
+  candidate: string;
+  baseline: string;
+}
+
+export interface ReceiptAddition {
+  file: string;
+  spec: string;
+}
+
+type ReceiptReading =
+  | { kind: 'non-spec' }
+  | { kind: 'unknown-spec'; spec: string }
+  | { kind: 'malformed-receipt'; spec: string; reason: string }
+  | { kind: 'receipt'; spec: string; doc: Record<string, unknown> };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseJsonObject(bytes: Buffer): Record<string, unknown> | null {
+  let at = 0;
+  while (at < bytes.length && (bytes[at] === 0x20 || bytes[at] === 0x09 || bytes[at] === 0x0a || bytes[at] === 0x0d)) at++;
+  if (at >= bytes.length || bytes[at] !== 0x7b) return null;
+  try {
+    const parsed: unknown = JSON.parse(bytes.toString('utf8'));
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readReceiptCandidate(bytes: Buffer): ReceiptReading {
+  const doc = parseJsonObject(bytes);
+  if (doc === null || typeof doc.spec !== 'string') return { kind: 'non-spec' };
+  const spec = doc.spec;
+  if (!RECOGNISED_RECEIPT_SET.has(spec)) return { kind: 'unknown-spec', spec };
+  if (typeof doc.started_at !== 'string' || doc.started_at.trim() === '') {
+    return { kind: 'malformed-receipt', spec, reason: 'started_at must be a non-empty string' };
+  }
+  if (typeof doc.finished_at !== 'string' || doc.finished_at.trim() === '') {
+    return { kind: 'malformed-receipt', spec, reason: 'finished_at must be a non-empty string' };
+  }
+  if (
+    !isPlainObject(doc.package) ||
+    typeof doc.package.name !== 'string' ||
+    doc.package.name.trim() === '' ||
+    typeof doc.package.version !== 'string' ||
+    doc.package.version.trim() === ''
+  ) {
+    return { kind: 'malformed-receipt', spec, reason: 'package must hold non-empty string name and version' };
+  }
+  return { kind: 'receipt', spec, doc };
+}
+
+function summarizeValue(value: unknown): string {
+  const text = JSON.stringify(value);
+  if (text === undefined) return String(value);
+  return text.length <= 96 ? text : `${text.slice(0, 93)}...`;
+}
+
+function isExcludedReceiptKey(key: string): key is ExcludedReceiptKey {
+  return (EXCLUDED_RECEIPT_KEYS as readonly string[]).includes(key);
+}
+
+function compareReceiptFields(
+  file: string,
+  spec: string,
+  candidateDoc: Record<string, unknown>,
+  baselineDoc: Record<string, unknown>,
+  baselineLabel: string,
+): { exclusions: ReceiptExclusion[]; diffs: string[] } {
+  const exclusions: ReceiptExclusion[] = [];
+  const diffs: string[] = [];
+  const walk = (cand: unknown, base: unknown, at: string, rowHint: string): void => {
+    if (isExcludedReceiptKey(at)) {
+      const c = cand as string;
+      const b = base as string;
+      if (c !== b) exclusions.push({ file, spec, key: at, candidate: c, baseline: b });
+      return;
+    }
+    if (Array.isArray(cand) && Array.isArray(base)) {
+      if (cand.length !== base.length) {
+        diffs.push(`${at}: length ${cand.length} on the candidate, ${base.length} on ${baselineLabel}`);
+      }
+      const shared = Math.min(cand.length, base.length);
+      for (let i = 0; i < shared; i++) {
+        const ci: unknown = cand[i];
+        const bi: unknown = base[i];
+        const hint =
+          isPlainObject(ci) && isPlainObject(bi) && typeof ci.path === 'string' && ci.path === bi.path
+            ? ` (path ${JSON.stringify(ci.path)})`
+            : '';
+        walk(ci, bi, `${at}[${i}]`, hint);
+      }
+      return;
+    }
+    if (isPlainObject(cand) && isPlainObject(base)) {
+      const keys = [...new Set([...Object.keys(cand), ...Object.keys(base)])].sort();
+      for (const key of keys) {
+        const child = at === '' ? key : `${at}.${key}`;
+        if (!(key in base)) diffs.push(`${child}${rowHint}: ${summarizeValue(cand[key])} on the candidate, absent on ${baselineLabel}`);
+        else if (!(key in cand)) diffs.push(`${child}${rowHint}: absent on the candidate, ${summarizeValue(base[key])} on ${baselineLabel}`);
+        else walk(cand[key], base[key], child, rowHint);
+      }
+      return;
+    }
+    if (!Object.is(cand, base)) {
+      diffs.push(`${at}${rowHint}: ${summarizeValue(cand)} on the candidate, ${summarizeValue(base)} on ${baselineLabel}`);
+    }
+  };
+  walk(candidateDoc, baselineDoc, '', '');
+  return { exclusions, diffs };
+}
+
+function unknownSpecClause(reading: ReceiptReading): string {
+  if (reading.kind === 'unknown-spec') {
+    return ` (spec ${JSON.stringify(reading.spec)}, not a recognised run receipt; byte-compared — recognised: ${RECOGNISED_RECEIPT_SPECS.join(', ')})`;
+  }
+  if (reading.kind === 'malformed-receipt') {
+    return ` (spec ${JSON.stringify(reading.spec)}, malformed run receipt: ${reading.reason}; byte-compared)`;
+  }
+  if (reading.kind === 'receipt') {
+    return ` (spec ${JSON.stringify(reading.spec)})`;
+  }
+  return '';
+}
+
+export interface DependantOutputComparison {
+  byteIdentical: number;
+  receiptEqual: number;
+  exclusions: ReceiptExclusion[];
+  additions: ReceiptAddition[];
+  differ: string[];
+  notes: string[];
+}
+
+export function compareDependantOutputs(
+  candidateOut: string,
+  baselineOut: string,
+  mine: ReadonlyMap<string, string>,
+  theirs: ReadonlyMap<string, string>,
+  baseline: string,
+): DependantOutputComparison {
+  let byteIdentical = 0;
+  let receiptEqual = 0;
+  const exclusions: ReceiptExclusion[] = [];
+  const additions: ReceiptAddition[] = [];
+  const differ: string[] = [];
+
+  for (const [file, hash] of mine) {
+    const other = theirs.get(file);
+    const candPath = join(candidateOut, ...file.split('/'));
+    if (other === undefined) {
+      const cand = readReceiptCandidate(readFileSync(candPath));
+      if (cand.kind === 'receipt') additions.push({ file, spec: cand.spec });
+      else differ.push(`${file}${unknownSpecClause(cand)} is written on the candidate only`);
+      continue;
+    }
+    if (other === hash) {
+      byteIdentical++;
+      continue;
+    }
+    const basePath = join(baselineOut, ...file.split('/'));
+    const cand = readReceiptCandidate(readFileSync(candPath));
+    const base = readReceiptCandidate(readFileSync(basePath));
+    if (cand.kind === 'receipt' && base.kind === 'receipt' && cand.spec === base.spec) {
+      const compared = compareReceiptFields(file, cand.spec, cand.doc, base.doc, baseline);
+      if (compared.diffs.length === 0 && compared.exclusions.length > 0) {
+        receiptEqual++;
+        exclusions.push(...compared.exclusions);
+      } else if (compared.diffs.length === 0) {
+        differ.push(`${file} (spec ${JSON.stringify(cand.spec)}): ${hash.slice(0, 16)} on the candidate, ${other.slice(0, 16)} on ${baseline} (every field value equal; formatting or key order differs)`);
+      } else {
+        differ.push(`${file} (spec ${JSON.stringify(cand.spec)}): ${compared.diffs.join('; ')}`);
+      }
+      continue;
+    }
+    if (cand.kind === 'unknown-spec' && base.kind === 'unknown-spec' && cand.spec === base.spec) {
+      differ.push(`${file}${unknownSpecClause(cand)}: ${hash.slice(0, 16)} on the candidate, ${other.slice(0, 16)} on ${baseline}`);
+    } else if (cand.kind !== 'non-spec' || base.kind !== 'non-spec') {
+      const candLabel = cand.kind === 'non-spec' ? 'no spec' : `spec ${JSON.stringify(cand.spec)}${cand.kind === 'unknown-spec' ? ' (not a recognised run receipt)' : cand.kind === 'malformed-receipt' ? ` (malformed: ${cand.reason})` : ''}`;
+      const baseLabel = base.kind === 'non-spec' ? 'no spec' : `spec ${JSON.stringify(base.spec)}${base.kind === 'unknown-spec' ? ' (not a recognised run receipt)' : base.kind === 'malformed-receipt' ? ` (malformed: ${base.reason})` : ''}`;
+      differ.push(`${file} (${candLabel} on the candidate, ${baseLabel} on ${baseline}; byte-compared): ${hash.slice(0, 16)} on the candidate, ${other.slice(0, 16)} on ${baseline}`);
+    } else {
+      differ.push(`${file}: ${hash.slice(0, 16)} on the candidate, ${other.slice(0, 16)} on ${baseline}`);
+    }
+  }
+
+  for (const file of theirs.keys()) {
+    if (mine.has(file)) continue;
+    const base = readReceiptCandidate(readFileSync(join(baselineOut, ...file.split('/'))));
+    differ.push(`${file}${unknownSpecClause(base)} is written on ${baseline} only`);
+  }
+
+  const notes: string[] = [
+    ...exclusions.map(
+      (ex) => `excluded ${ex.file} (spec ${JSON.stringify(ex.spec)}) ${ex.key}: ${JSON.stringify(ex.candidate)} on the candidate, ${JSON.stringify(ex.baseline)} on ${baseline}`,
+    ),
+    ...additions.map((add) => `addition ${add.file} (spec ${JSON.stringify(add.spec)}): written on the candidate only`),
+  ];
+
+  return { byteIdentical, receiptEqual, exclusions, additions, differ, notes };
+}
 
 interface Ran {
   status: number;
@@ -276,8 +516,10 @@ function main(): number {
 
     // 6. The build, both sides, and the bytes.
     const outs: Array<Map<string, string>> = [];
+    const outDirs: string[] = [];
     for (const side of sides) {
       const out = join(side.dir, '.rigc-dependant-out');
+      outDirs.push(out);
       const args = build.map((arg) => arg.split('{out}').join(out));
       const built = run(args[0], args.slice(1), side.dir);
       const files = hashTree(out);
@@ -290,21 +532,24 @@ function main(): number {
     }
     const [mine, theirs] = outs;
     if (mine.size > 0 && theirs.size > 0) {
-      const differ: string[] = [];
-      for (const [file, hash] of mine) {
-        const other = theirs.get(file);
-        if (other === undefined) differ.push(`${file} is written on the candidate only`);
-        else if (other !== hash) differ.push(`${file}: ${hash.slice(0, 16)} on the candidate, ${other.slice(0, 16)} on ${baseline}`);
-      }
-      for (const file of theirs.keys()) if (!mine.has(file)) differ.push(`${file} is written on ${baseline} only`);
+      const compared = compareDependantOutputs(outDirs[0], outDirs[1], mine, theirs, baseline);
       const digest = (files: Map<string, string>): string =>
         createHash('sha256')
           .update([...files].map(([file, hash]) => `${hash}  ${file}\n`).join(''))
           .digest('hex');
-      if (differ.length > 0) {
-        faults.push(`DEPENDANT_BUILD_BYTES: ${differ.length} of ${new Set([...mine.keys(), ...theirs.keys()]).size} file(s) differ from the build on ${NAME}@${baseline}:\n${differ.map((d) => `          ${d}`).join('\n')}`);
-      } else {
+      if (compared.differ.length > 0) {
+        for (const note of compared.notes) console.log(`  ..    ${note}`);
+        faults.push(`DEPENDANT_BUILD_BYTES: ${compared.differ.length} of ${new Set([...mine.keys(), ...theirs.keys()]).size} file(s) differ from the build on ${NAME}@${baseline}:\n${compared.differ.map((d) => `          ${d}`).join('\n')}`);
+      } else if (compared.receiptEqual === 0 && compared.additions.length === 0) {
         console.log(`  PASS  DEPENDANT_BUILD_BYTES: every one of ${mine.size} file(s) is byte-identical to the build on ${NAME}@${baseline} (listing sha256 ${digest(mine)})`);
+      } else {
+        console.log(
+          `  PASS  DEPENDANT_BUILD_BYTES: ${compared.byteIdentical} of ${mine.size} file(s) byte-identical to the build on ${NAME}@${baseline}, ` +
+            `${compared.receiptEqual} run receipt(s) equal by field (${compared.exclusions.length} excluded key(s)), ` +
+            `${compared.additions.length} candidate-only run receipt addition(s) ` +
+            `(recognised specs: ${RECOGNISED_RECEIPT_SPECS.join(', ')}; listing sha256 ${digest(mine)})`,
+        );
+        for (const note of compared.notes) console.log(`          ${note}`);
       }
     }
     return report(faults, holes, keep, work);
@@ -326,4 +571,4 @@ function report(faults: string[], holes: string[], keep: boolean, work: string):
   return faults.length === 0 ? EXIT_GREEN : EXIT_RED;
 }
 
-process.exit(main());
+if (import.meta.main) process.exit(main());

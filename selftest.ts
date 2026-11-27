@@ -730,6 +730,7 @@ import { compareCut4c5Facts, comparePosedFacts, sumPosedTallies, CUT_4C5_FAMILIE
 import { compareSteppedPoses, coreRefusalOf, documentedCoreRefusal, STEPPED_FACT_FAMILIES, type SteppedFactFamily } from './tools/verdict_gate.ts';
 import { MERGED_TALLY_SPEC, PREPUBLISH_TALLY_VARIABLE, tallyDecision, treeHead, type MergedTally, type TallyTree, type TallyDecision } from './scripts/prepublish_gate.ts';
 import { ALIASES } from './scripts/alias_tarball.ts';
+import { EXCLUDED_RECEIPT_KEYS, RECOGNISED_RECEIPT_SPECS } from './scripts/dependant_check.ts';
 import { VERIFY_NOVA_REMOTE, verifyNovaRemote } from './scripts/verify_nova.ts';
 import { judgeSquash, parseFaults, squashSubject, squashText } from './scripts/commit_parse.ts';
 import { rigFactsDerivationsOf, modelRigFacts, RIG_FACT_FAMILIES, rigFactsDerivations, rigFactsSpelling, sumTallies, type DerivationTally, type RigFactFamily, type RigFacts } from './tools/rig_facts.ts';
@@ -88542,6 +88543,342 @@ function runCurrencySuite(): number {
     say('CUR129_THE_DOCUMENTED_RELEASE_SAMPLE_REFUSES_EACH_MISSING_INPUT_BEFORE_PACK_OR_INSTALL', probes.length === 0,
       probeDetail(probes.length === 0, probes, `${cases.length} readings of the exact RELEASING block: ${cases.join('; ')}`),
       'issue #1447: an obsolete example command cannot measure a dependant; the public scarf config names animations.json and each wrapper directory requires layers.json, so the documented step must name any missing sample asset before running the comparison');
+  }
+
+  // CUR138–CUR143 — `scripts/dependant_check.ts` compares recognised run receipts by field outside
+  // `started_at`, `finished_at` and `package.version`, names candidate-only receipts as additions,
+  // and keeps rig files, reports and unknown `spec` documents byte-compared (issue #1778).
+  {
+    const work = mkdtempSync(join(harnessTemp(), 'rigc-dependant-receipts-'));
+    try {
+      const dep = join(work, 'dependant');
+      const bin = join(work, 'bin');
+      const stage = join(work, 'stage');
+      mkdirSync(dep, { recursive: true });
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(join(stage, 'package'), { recursive: true });
+      const CANDIDATE_VER = '3.10.0';
+      const BASELINE_VER = '3.9.2';
+      writeFileSync(join(stage, 'package', 'package.json'), JSON.stringify({ name: packageName, version: CANDIDATE_VER }, null, 2) + '\n');
+      const candidateTgz = join(work, 'candidate.tgz');
+      const tarred = spawnSync('tar', ['-czf', candidateTgz, '-C', stage, 'package'], { encoding: 'utf8' });
+      if (tarred.status !== 0) throw new Error(`CUR138: tar exited ${String(tarred.status)}: ${tarred.stderr}`);
+      writeFileSync(
+        join(dep, 'package.json'),
+        JSON.stringify(
+          {
+            name: '@rig-c/probe-dependant',
+            version: '1.0.0',
+            scripts: { typecheck: 'true' },
+            dependencies: { [packageName]: `^${BASELINE_VER}` },
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+      // Offline `bun` shim: satisfies `install`, `add`, `run typecheck` and forwards `build.mjs <out>` to the real Bun.
+      const bunShim = join(bin, 'bun');
+      writeFileSync(
+        bunShim,
+        `#!/bin/sh
+if [ "$1" = "install" ]; then exit 0; fi
+if [ "$1" = "add" ]; then
+  mkdir -p "node_modules/${packageName}"
+  case "$2" in
+    *"@${BASELINE_VER}") ver="${BASELINE_VER}" ;;
+    *) ver="${CANDIDATE_VER}" ;;
+  esac
+  printf '{"name":"${packageName}","version":"%s"}\\n' "$ver" > "node_modules/${packageName}/package.json"
+  exit 0
+fi
+if [ "$1" = "run" ] && [ "$2" = "typecheck" ]; then exit 0; fi
+exec '${process.execPath}' "$@"
+`,
+      );
+      chmodSync(bunShim, 0o755);
+
+      const rigBytes = '{\n  "skeleton": { "spine": "4.3.13" }\n}\n';
+      const rigSha = createHash('sha256').update(rigBytes).digest('hex');
+      const baseReport = JSON.stringify({ spec: 'build-report/1', command: 'build', supplier: 'model', gates: [{ assertions: 50 }], pack: null }, null, 2) + '\n';
+      const baseGateTxt = '  ..    50 assertions: 25 measured (25 passed, 0 failed), 25 skipped, 0 not in profile "rig-play"\n';
+      writeFileSync(
+        join(dep, 'build.mjs'),
+        `import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+const out = process.argv[2];
+const pkg = JSON.parse(readFileSync('node_modules/${packageName}/package.json', 'utf8'));
+const isCand = pkg.version === '${CANDIDATE_VER}';
+const mode = process.env.DEPENDANT_RECEIPT_CASE ?? 'green';
+const write = (rel, text) => { const p = join(out, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); };
+const stamp = (extra) => ({
+  started_at: isCand ? '2026-11-27T01:00:00.000Z' : '2026-11-26T01:00:00.000Z',
+  finished_at: isCand ? '2026-11-27T01:00:05.000Z' : '2026-11-26T01:00:05.000Z',
+  ...extra,
+});
+write('check/build/skeleton.json', mode === 'rig-diff' && isCand ? ${JSON.stringify(rigBytes.replace('4.3.13', '4.3.14'))} : ${JSON.stringify(rigBytes)});
+write('check/build-report.json', mode === 'report-diff' && isCand ? ${JSON.stringify(baseReport.replace('50', '51'))} : ${JSON.stringify(baseReport)});
+write('check/gate_spine-html.txt', mode === 'gate-diff' && isCand ? ${JSON.stringify(baseGateTxt.replace('50 assertions', '51 assertions'))} : ${JSON.stringify(baseGateTxt)});
+
+const corePkg = { name: mode === 'pkg-name-diff' && isCand ? '@rig-c/other' : '${packageName}', version: pkg.version };
+const depPkg = { name: '@rig-c/probe-dependant', version: isCand ? '1.1.0' : '1.0.0' };
+const outHash = (mode === 'out-hash-core' || mode === 'out-hash-dep') && isCand ? '${'f'.repeat(64)}' : '${rigSha}';
+
+write('check/build/run.json', JSON.stringify({
+  spec: 'rigc-run/1',
+  package: corePkg,
+  command: 'build',
+  ...(mode === 'malformed-receipt' && isCand ? { started_at: '', finished_at: '2026-11-27T01:00:05.000Z' } : stamp({})),
+  inputs: [{ role: 'rig', path: mode === 'path-input' && isCand ? '../../other/rig.json' : '../../rig/rig.json', sha256: '${'a'.repeat(64)}' }],
+  outputs: [{ path: mode === 'path-output' && isCand ? 'moved.json' : 'skeleton.json', sha256: mode === 'out-hash-core' && isCand ? outHash : '${rigSha}' }],
+}, null, 2) + '\\n');
+
+write('check/extremes/render-run.json', JSON.stringify({
+  spec: 'rigc-run/2',
+  package: corePkg,
+  command: 'render',
+  argv: ['--candidate', mode === 'path-argv' && isCand ? '../../other/build' : '../build', '--out', '.'],
+  ...stamp({}),
+  inputs: [{ role: 'skeleton', path: '../build/skeleton.json', sha256: '${rigSha}' }],
+  outputs: [{ path: 'extremes.json', sha256: '${'b'.repeat(64)}' }],
+}, null, 2) + '\\n');
+
+write('rig/run.json', JSON.stringify({
+  spec: 'rig-run/1',
+  package: depPkg,
+  command: 'rig',
+  ...stamp({}),
+  config: { path: '../config.json', sha256: '${'c'.repeat(64)}' },
+  outputs: [{ path: 'rig.json', sha256: '${'d'.repeat(64)}' }],
+}, null, 2) + '\\n');
+
+write('check/shared-check-run.json', JSON.stringify({
+  spec: 'rig-run/2',
+  package: depPkg,
+  command: 'check',
+  ...stamp({}),
+  outputs: [{ path: 'build/skeleton.json', sha256: '${rigSha}' }],
+  argv: ['check', '--rig', '../rig', '--out', '.'],
+}, null, 2) + '\\n');
+
+write('build-run.json', JSON.stringify({
+  spec: 'rig-run/3',
+  package: depPkg,
+  command: 'build',
+  ...stamp({}),
+  config: { path: mode === 'path-config' && isCand ? '../other-config.json' : '../config.json', sha256: '${'c'.repeat(64)}' },
+  inputs: [{ role: 'source', path: '../painting.png', sha256: '${'e'.repeat(64)}' }],
+  outputs: [{ path: 'check/build/skeleton.json', sha256: mode === 'out-hash-dep' && isCand ? outHash : '${rigSha}' }],
+  argv: ['build', '--config', '../config.json', '--out', '.'],
+}, null, 2) + '\\n');
+
+if (mode === 'addition-green' && isCand) {
+  write('check/idle_frames/render-run.json', JSON.stringify({
+    spec: 'rigc-run/2', package: corePkg, command: 'render', argv: ['--candidate', '../build', '--out', '.'],
+    ...stamp({}), inputs: [], outputs: [],
+  }, null, 2) + '\\n');
+  write('check/check-run.json', JSON.stringify({
+    spec: 'rig-run/2', package: depPkg, command: 'check', ...stamp({}), outputs: [], argv: ['check', '--out', '.'],
+  }, null, 2) + '\\n');
+}
+if (mode === 'baseline-only-receipt' && !isCand) {
+  write('check/dropped-run.json', JSON.stringify({
+    spec: 'rigc-run/2', package: corePkg, command: 'render', argv: [], ...stamp({}), inputs: [], outputs: [],
+  }, null, 2) + '\\n');
+}
+if (mode === 'cand-non-receipt-bin' && isCand) write('rig/extra.png', 'PNGDATA');
+if (mode === 'cand-non-receipt-json' && isCand) write('check/extra.json', '{"hello":"world"}\\n');
+if (mode === 'unknown-identical') {
+  write('check/custom.json', '{"spec":"rig-mystery/1","value":1}\\n');
+}
+if (mode === 'unknown-shared-diff') {
+  write('check/mystery-run.json', JSON.stringify({ spec: 'rig-mystery/1', package: corePkg, ...stamp({}) }, null, 2) + '\\n');
+}
+if (mode === 'unknown-major-diff') {
+  write('check/future-run.json', JSON.stringify({ spec: 'rigc-run/99', package: corePkg, ...stamp({}) }, null, 2) + '\\n');
+}
+if (mode === 'unknown-cand-only' && isCand) {
+  write('check/cand-mystery.json', JSON.stringify({ spec: 'rig-mystery/1', package: corePkg, ...stamp({}) }, null, 2) + '\\n');
+}
+`,
+      );
+
+      const runCase = (mode: string): { status: number; out: string } => {
+        const ran = spawnSync(
+          process.execPath,
+          [join(root, 'scripts', 'dependant_check.ts'), '--dependant', dep, '--tarball', candidateTgz, '--baseline', BASELINE_VER, '--', 'bun', 'build.mjs', '{out}'],
+          { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`, DEPENDANT_RECEIPT_CASE: mode } },
+        );
+        return { status: ran.status ?? -1, out: `${ran.stdout ?? ''}${ran.stderr ?? ''}` };
+      };
+
+      // CUR138 — two receipts differing only in excluded keys read equal across all 5 recognised specs,
+      // every exclusion is printed by file and key, and non-excluded / report / rig differences go red.
+      {
+        const probes: string[] = [];
+        const green = runCase('green');
+        const receiptFiles: ReadonlyArray<readonly [string, string]> = [
+          ['check/build/run.json', 'rigc-run/1'],
+          ['check/extremes/render-run.json', 'rigc-run/2'],
+          ['rig/run.json', 'rig-run/1'],
+          ['check/shared-check-run.json', 'rig-run/2'],
+          ['build-run.json', 'rig-run/3'],
+        ];
+        if (RECOGNISED_RECEIPT_SPECS.join(',') !== receiptFiles.map(([, s]) => s).join(',')) {
+          probes.push(`RECOGNISED_RECEIPT_SPECS is [${RECOGNISED_RECEIPT_SPECS.join(', ')}], fixture covers [${receiptFiles.map(([, s]) => s).join(', ')}]`);
+        }
+        if (green.status !== 0 || !green.out.includes('PASS  DEPENDANT_BUILD_BYTES: 3 of 8 file(s) byte-identical') || !green.out.includes('5 run receipt(s) equal by field (15 excluded key(s))')) {
+          probes.push(`green run over all 5 receipt specs exited ${green.status}: ${green.out.trim().slice(-400)}`);
+        }
+        for (const [file, spec] of receiptFiles) {
+          for (const key of EXCLUDED_RECEIPT_KEYS) {
+            const needle = `excluded ${file} (spec "${spec}") ${key}:`;
+            if (!green.out.includes(needle)) probes.push(`green run omitted exclusion line ${JSON.stringify(needle)}`);
+          }
+        }
+        const plants: ReadonlyArray<readonly [string, string, string]> = [
+          ['pkg-name-diff', 'check/build/run.json (spec "rigc-run/1"): package.name:', 'package.name difference inside a receipt'],
+          ['malformed-receipt', 'check/build/run.json (spec "rigc-run/1" (malformed: started_at must be a non-empty string)', 'empty started_at in a recognised receipt'],
+          ['rig-diff', 'check/build/skeleton.json:', 'rig file byte difference'],
+          ['report-diff', 'check/build-report.json (spec "build-report/1", not a recognised run receipt; byte-compared — recognised:', 'build-report/1 row/count difference'],
+          ['gate-diff', 'check/gate_spine-html.txt:', 'gate_spine-html.txt count difference'],
+        ];
+        for (const [mode, expected, label] of plants) {
+          const red = runCase(mode);
+          if (red.status !== 1 || !red.out.includes('FAIL  DEPENDANT_BUILD_BYTES') || !red.out.includes(expected)) {
+            probes.push(`${label} (${mode}): exited ${red.status}, missing ${JSON.stringify(expected)} in:\n${red.out.trim().slice(-400)}`);
+          }
+        }
+        const releasing = readFileSync(join(root, 'RELEASING.md'), 'utf8');
+        for (const spec of RECOGNISED_RECEIPT_SPECS) {
+          if (!releasing.includes(`\`${spec}\``)) probes.push(`RELEASING.md step 4 does not name recognised receipt spec ${spec}`);
+        }
+        for (const key of EXCLUDED_RECEIPT_KEYS) {
+          if (!releasing.includes(`\`${key}\``)) probes.push(`RELEASING.md step 4 does not name excluded receipt key ${key}`);
+        }
+        say(
+          'CUR138_DEPENDANT_CHECK_COMPARES_RECOGNISED_RUN_RECEIPTS_BY_FIELD_AND_PRINTS_EACH_EXCLUSION',
+          probes.length === 0,
+          probeDetail(
+            probes.length === 0,
+            probes,
+            `all ${RECOGNISED_RECEIPT_SPECS.length} recognised specs (${RECOGNISED_RECEIPT_SPECS.join(', ')}) pass at exit 0 when differing only in ${EXCLUDED_RECEIPT_KEYS.join(', ')} with all 15 (file, key) exclusions printed; ${plants.length} plants (package.name, malformed started_at, skeleton.json, build-report/1, gate_spine-html.txt) exit 1 by name, and RELEASING.md names the specs and excluded keys`,
+          ),
+          'issue #1778: wall-clock timestamps and package versions made every cross-version dependant check exit 1, while rig files, reports and every non-excluded receipt field must stay held',
+        );
+      }
+
+      // CUR139 — a path field that differs inside a receipt is red.
+      {
+        const probes: string[] = [];
+        const pathPlants: ReadonlyArray<readonly [string, string]> = [
+          ['path-input', 'check/build/run.json (spec "rigc-run/1"): inputs[0].path: "../../other/rig.json" on the candidate, "../../rig/rig.json" on 3.9.2'],
+          ['path-output', 'check/build/run.json (spec "rigc-run/1"): outputs[0].path: "moved.json" on the candidate, "skeleton.json" on 3.9.2'],
+          ['path-argv', 'check/extremes/render-run.json (spec "rigc-run/2"): argv[1]: "../../other/build" on the candidate, "../build" on 3.9.2'],
+          ['path-config', 'build-run.json (spec "rig-run/3"): config.path: "../other-config.json" on the candidate, "../config.json" on 3.9.2'],
+        ];
+        for (const [mode, expected] of pathPlants) {
+          const red = runCase(mode);
+          if (red.status !== 1 || !red.out.includes(expected)) {
+            probes.push(`${mode}: exited ${red.status}, expected ${JSON.stringify(expected)}, got:\n${red.out.trim().slice(-400)}`);
+          }
+        }
+        say(
+          'CUR139_DEPENDANT_CHECK_REFUSES_A_RECEIPT_PATH_DIFFERENCE',
+          probes.length === 0,
+          probeDetail(probes.length === 0, probes, `${pathPlants.length} planted receipt path differences (inputs[0].path, outputs[0].path, argv[1], config.path) each exit 1 naming the receipt, spec and field`),
+          'issue #1778: excluding timestamps and package.version must never hide a path change in inputs, outputs, config or replay argv',
+        );
+      }
+
+      // CUR140 — a candidate-only recognised receipt is reported as an addition (exit 0); a baseline-only receipt is red (exit 1).
+      {
+        const probes: string[] = [];
+        const added = runCase('addition-green');
+        if (
+          added.status !== 0 ||
+          !added.out.includes('2 candidate-only run receipt addition(s)') ||
+          !added.out.includes('addition check/idle_frames/render-run.json (spec "rigc-run/2"): written on the candidate only') ||
+          !added.out.includes('addition check/check-run.json (spec "rig-run/2"): written on the candidate only')
+        ) {
+          probes.push(`candidate-only receipts exited ${added.status}:\n${added.out.trim().slice(-450)}`);
+        }
+        const dropped = runCase('baseline-only-receipt');
+        if (dropped.status !== 1 || !dropped.out.includes('check/dropped-run.json (spec "rigc-run/2") is written on 3.9.2 only')) {
+          probes.push(`baseline-only receipt exited ${dropped.status}, required exit 1 naming the dropped receipt:\n${dropped.out.trim().slice(-400)}`);
+        }
+        say(
+          'CUR140_DEPENDANT_CHECK_NAMES_CANDIDATE_ONLY_RECEIPTS_AS_ADDITIONS_AND_REFUSES_BASELINE_ONLY_ONES',
+          probes.length === 0,
+          probeDetail(probes.length === 0, probes, 'candidate-only rigc-run/2 and rig-run/2 receipts exit 0 naming path and spec as additions; a baseline-only receipt exits 1'),
+          'issue #1778: a release that introduces a new run receipt adds a receipt file on the candidate only, whereas losing an existing receipt or adding another file is a difference',
+        );
+      }
+
+      // CUR141 — a candidate-only non-receipt file exits 1.
+      {
+        const probes: string[] = [];
+        for (const [mode, file] of [
+          ['cand-non-receipt-bin', 'rig/extra.png is written on the candidate only'],
+          ['cand-non-receipt-json', 'check/extra.json is written on the candidate only'],
+        ] as const) {
+          const red = runCase(mode);
+          if (red.status !== 1 || !red.out.includes(file)) {
+            probes.push(`${mode}: exited ${red.status}, expected ${JSON.stringify(file)}, got:\n${red.out.trim().slice(-400)}`);
+          }
+        }
+        say(
+          'CUR141_DEPENDANT_CHECK_REFUSES_A_CANDIDATE_ONLY_NON_RECEIPT_FILE',
+          probes.length === 0,
+          probeDetail(probes.length === 0, probes, 'candidate-only binary and JSON non-receipt files both exit 1 naming the file'),
+          'issue #1778: only recognised run receipts may appear as candidate-only additions; any new non-receipt output stays a red byte difference',
+        );
+      }
+
+      // CUR142 — a receipt whose `outputs` row hash differs exits 1.
+      {
+        const probes: string[] = [];
+        for (const [mode, expected] of [
+          ['out-hash-core', 'check/build/run.json (spec "rigc-run/1"): outputs[0].sha256 (path "skeleton.json"):'],
+          ['out-hash-dep', 'build-run.json (spec "rig-run/3"): outputs[0].sha256 (path "check/build/skeleton.json"):'],
+        ] as const) {
+          const red = runCase(mode);
+          if (red.status !== 1 || !red.out.includes(expected)) {
+            probes.push(`${mode}: exited ${red.status}, expected ${JSON.stringify(expected)}, got:\n${red.out.trim().slice(-400)}`);
+          }
+        }
+        say(
+          'CUR142_DEPENDANT_CHECK_REFUSES_A_RECEIPT_OUTPUT_HASH_DIFFERENCE',
+          probes.length === 0,
+          probeDetail(probes.length === 0, probes, 'diverging outputs[0].sha256 in rigc-run/1 and rig-run/3 both exit 1 naming the receipt, spec, row index and output path'),
+          'issue #1778: a receipt binds the digests of what its stage wrote; a changed output digest inside a receipt is a real difference',
+        );
+      }
+
+      // CUR143 — an unknown `spec` stays byte-compared and is named when differing or candidate-only.
+      {
+        const probes: string[] = [];
+        const same = runCase('unknown-identical');
+        if (same.status !== 0) probes.push(`byte-identical unknown spec exited ${same.status}, required 0:\n${same.out.trim().slice(-400)}`);
+        for (const [mode, expected] of [
+          ['unknown-shared-diff', 'check/mystery-run.json (spec "rig-mystery/1", not a recognised run receipt; byte-compared'],
+          ['unknown-major-diff', 'check/future-run.json (spec "rigc-run/99", not a recognised run receipt; byte-compared'],
+          ['unknown-cand-only', 'check/cand-mystery.json (spec "rig-mystery/1", not a recognised run receipt; byte-compared — recognised:'],
+        ] as const) {
+          const red = runCase(mode);
+          if (red.status !== 1 || !red.out.includes(expected)) {
+            probes.push(`${mode}: exited ${red.status}, expected ${JSON.stringify(expected)}, got:\n${red.out.trim().slice(-400)}`);
+          }
+        }
+        say(
+          'CUR143_DEPENDANT_CHECK_KEEPS_UNKNOWN_SPECS_BYTE_COMPARED_AND_NAMES_THEM',
+          probes.length === 0,
+          probeDetail(probes.length === 0, probes, 'byte-identical unknown spec exits 0; differing "rig-mystery/1", unread major "rigc-run/99" and candidate-only "rig-mystery/1" each exit 1 naming the unknown spec and the recognised list'),
+          'issue #1778: receipt field exclusions apply only to specs whose schema has been read; an unknown family or unread major version stays byte-compared and says why',
+        );
+      }
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   }
 
   // CUR130 — `verify:nova` hands the pool runner its three values and the prepared remote command, or refuses

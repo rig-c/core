@@ -153,7 +153,7 @@ export { PACKAGE_ROOT, readPackageMeta, readVersion };
  * needs a value` (issue #328). `CLI10`/`CLI11` in `selftest.ts` now hold the two
  * halves together by reading `--help` rather than by naming a flag.
  */
-export const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'seam-cells', 'folds', 'extremes', 'extremes-only', 'overlaps', 'sheet', 'accept-skeleton-differences', 'keep-pages', 'dim']);
+export const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(['all', 'all-frames', 'all-bones', 'help', 'copy-images', 'again', 'pack', 'copy', 'geometry', 'seam-cells', 'folds', 'extremes', 'extremes-only', 'overlaps', 'sheet', 'loop-seam', 'accept-skeleton-differences', 'keep-pages', 'dim']);
 
 /**
  * The flags a command is allowed to spell more than once.
@@ -1119,6 +1119,7 @@ const FLAG_MEANINGS: Record<string, string> = {
     'are refused by name. An inspection of what the rig offers, not a scene',
   physics: 'pose with physics on (default) or off. Off suppresses every physics constraint after timeline application on both posers. frames.json records physicsMode off and check refuses that reference',
   'boundary-from': 'read visible whole-figure pixel-boundary displacement against an earlier render on the identical viewport and frame grid. Writes boundary.json, no threshold or pass verdict',
+  'loop-seam': 'measure the exact loop wrap and write a per-set report and wrap PNG with no pass criterion',
   'loop-seam-bar': 'require at most this many pixels above the stated RGBA channel delta; takes --loop-seam-cap',
   'loop-seam-cap': 'maximum whole warm-up loops to try, starting at 0; takes --loop-seam-bar',
   preroll:
@@ -1802,7 +1803,7 @@ export const COMMANDS: CommandDoc[] = [
       'rigc render … --viewport <x,y,w,h> | --viewport-from <frames.json>   (a box given, not fitted: two renders on one pixel grid)',
       'rigc render … --sheet [--sheet-format json-hash] [--page-edges pot|free]   (deterministic sprite sheets + JSON hash table + sheet-manifest.json per set)',
     ],
-    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'parallax', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'loop-seam-bar', 'loop-seam-cap', 'physics', 'boundary-from', 'poser', 'out'],
+    flags: ['candidate', 'atlas', 'animation', 'skin', 'slot', 'hide', 'fps', 'max', 'viewport', 'viewport-from', 'geometry', 'folds', 'extremes', 'extremes-only', 'parallax', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'loop-seam', 'loop-seam-bar', 'loop-seam-cap', 'physics', 'boundary-from', 'poser', 'out'],
     overrides: {
       'page-edges': {
         meaning:

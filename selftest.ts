@@ -125295,15 +125295,15 @@ function runRenderEnvironmentSuite(): number {
       const sched = scheduleFile(s, 'runtime', [{ t: 0, wind: [1, 0], gravity: [0, 1] }]);
       const stated = join(work, 're04-stated');
       const bare = join(work, 're04-bare');
-      const a = runCli(['render', '--candidate', s.out, '--geometry', '--environment', sched, '--out', stated]);
-      const b = runCli(['render', '--candidate', s.out, '--geometry', '--out', bare]);
+      const a = runCli(['render', '--candidate', s.out, '--geometry', '--loop-seam', '--environment', sched, '--out', stated]);
+      const b = runCli(['render', '--candidate', s.out, '--geometry', '--loop-seam', '--out', bare]);
       let pngs = 0;
       if (a.status !== 0 || b.status !== 0) probes.push(`the renders exited ${String(a.status)} and ${String(b.status)}`);
       else {
-        const takeFiles = (dir: string): string[] => files(dir).filter((f) => !f.endsWith('/loop-seam.json') && !f.endsWith('/loop-wrap.rgba'));
+        const takeFiles = (dir: string): string[] => files(dir).filter((f) => !f.endsWith('/loop-seam.json') && !f.endsWith('/loop-wrap.png'));
         const fa = takeFiles(stated);
         if (bits(fa) !== bits(takeFiles(bare))) probes.push('the two renders wrote different take files');
-        const observations = files(stated).filter((f) => f.endsWith('/loop-seam.json') || f.endsWith('/loop-wrap.rgba'));
+        const observations = files(stated).filter((f) => f.endsWith('/loop-seam.json') || f.endsWith('/loop-wrap.png'));
         if (observations.length === 0 || observations.some((f) => !existsSync(join(bare, f)) || !readFileSync(join(stated, f)).equals(readFileSync(join(bare, f))))) {
           probes.push('stating the runtime world changed the loop seam observation');
         }
@@ -125487,6 +125487,8 @@ function runRenderPrerollSuite(): number {
     'PRE10_THE_OFF_GRID_LOOP_SEAM_REPORT_BINDS_THE_EMITTED_RGBA_ON_BOTH_POSERS',
     'PRE11_THE_DECLARED_LOOP_SEAM_BAR_SELECTS_THE_FIRST_WARMUP_AND_REFUSES_AN_UNMET_CAP',
     'PRE12_A_ZERO_PHYSICS_LOOP_IS_MEASURED_ONCE_AND_EXPLICIT_PREROLL_STAYS_REFUSED',
+    'PRE13_AN_ORDINARY_RENDER_WRITES_ONLY_THE_ORIGIN_MAIN_INVENTORY',
+    'PRE14_A_ZERO_PERIOD_ANIMATION_REPORTS_A_NAMED_SKIP_WITHOUT_A_WRAP',
   ];
   const ORIGIN = 'issue #1684: a looping idle rendered from rest shows its physics starting from rest at every wrap; the render reaches the walk a player\'s looping track takes, and the export\'s walk has to be the core\'s';
   const LANDING = 'issue #1687: on a loop whose duration is a float32 a hair off a whole number of frames, the step onto the wrap moved the physics clock by its own short length, a physics step was dropped, and the loop recorded started a fresh transient instead of continuing the settled cycle';
@@ -126067,16 +126069,17 @@ function runRenderPrerollSuite(): number {
         const inspect = (report: Report, out: string, warmup: number): string[] => {
           const found: string[] = [];
           const first = readFileSync(join(out, report.first.path));
-          const wrap = readFileSync(join(out, report.wrap.path));
+          const wrapBytes = readFileSync(join(out, report.wrap.path));
+          const wrap = decodePng(wrapBytes);
           const decoded = decodePng(first);
           const grid = JSON.parse(readFileSync(join(out, 'frames.json'), 'utf8')) as FramesSidecar;
           const set = grid.sets[0];
           const last = decodePng(readFileSync(join(out, setDir, `f${String(set.written - 1).padStart(4, '0')}.png`)));
           if (report.period !== period || report.wrap.time !== period || report.first.time !== 0 || set.duration === period ||
-              set.written !== Math.round(report.period * fps) + 1 || report.wrap.path.endsWith('.png')) found.push('sample times or take grid');
-          if (report.first.path !== `${setDir}/f0000.png` || report.first.sha256 !== digest(first) || report.wrap.sha256 !== digest(wrap)) found.push('paths or hashes');
-          if (decoded.data.length !== wrap.length || bits(figures(decoded.data, wrap)) !== bits([report.differingPixels, report.maxChannelDelta])) found.push('decoded RGBA figures');
-          if (warmup > 0 && figures(last.data, wrap)[0] === 0) found.push('the rounded warm last frame can stand in for the wrap');
+              set.written !== Math.round(report.period * fps) + 1 || report.wrap.path !== `${setDir}/loop-wrap.png`) found.push('sample times or take grid');
+          if (report.first.path !== `${setDir}/f0000.png` || report.first.sha256 !== digest(first) || report.wrap.sha256 !== digest(wrapBytes)) found.push('paths or hashes');
+          if (decoded.width !== wrap.width || decoded.height !== wrap.height || bits(figures(decoded.data, wrap.data)) !== bits([report.differingPixels, report.maxChannelDelta])) found.push('decoded RGBA figures');
+          if (warmup > 0 && figures(last.data, wrap.data)[0] === 0) found.push('the rounded warm last frame can stand in for the wrap');
           if (report.warmup !== warmup || !report.series.some((row) => row.warmup === warmup && row.differingPixels === report.differingPixels && row.maxChannelDelta === report.maxChannelDelta)) found.push('warm-up row');
           return found;
         };
@@ -126087,7 +126090,7 @@ function runRenderPrerollSuite(): number {
           const series: SeamRow[] = [];
           for (let warmup = 0; warmup <= 4; warmup++) {
             const out = join(work, `seam-${poser}-${warmup}`);
-            const result = render(out, warmup === 0 ? [] : ['--preroll', String(warmup)]);
+            const result = render(out, ['--loop-seam', ...(warmup === 0 ? [] : ['--preroll', String(warmup)])]);
             if (result.status !== 0) {
               faults.push(`${poser} warm-up ${warmup}: ${result.status}, ${result.stderr.trim()}`);
               continue;
@@ -126126,18 +126129,53 @@ function runRenderPrerollSuite(): number {
           }
         }
         if (sweep.some(({ series }) => series.length !== 5) || bits(sweep[0].series) !== bits(sweep[1].series)) faults.push('series differ between posers');
-        say(names[9], faults.length === 0, probeDetail(faults.length === 0, faults, `breath at ${fps} fps, period=${period}: ${JSON.stringify(sweep)}; mismatched wrap time and first hash rejected`), 'the exact wrap is a separate observation bound to the emitted first PNG and raw RGBA');
+        say(names[9], faults.length === 0, probeDetail(faults.length === 0, faults, `breath at ${fps} fps, period=${period}: ${JSON.stringify(sweep)}; mismatched wrap time and first hash rejected`), 'the exact wrap is a separate observation bound to the emitted first and wrap PNGs');
         say(names[10], gateFaults.length === 0, probeDetail(gateFaults.length === 0, gateFaults, 'both posers select loop 1 using its measured pixel count with cap 4; check refuses the warm take; 0,0 exits 2 with five measured rows; plants reporting the cap as the winner or returning exit 0 for an unmet bar are red'), 'the caller owns the bar and first satisfaction settles the search');
       }
       {
         const out = join(work, 'seam-no-physics-out');
         const rendered = noPhysicsBuild === undefined ? null : runCli(['render', '--candidate', noPhysicsBuild, '--max', '64', '--out', out, '--loop-seam-bar', '0,0', '--loop-seam-cap', '4']);
-        const reports = rendered?.status === 0 ? files(out).filter((file) => file.endsWith('/loop-seam.json')).map((file) => JSON.parse(readFileSync(join(out, file), 'utf8')) as { warmup: number; status: string; differingPixels: number; series: unknown[] }) : [];
+        const reports = rendered?.status === 0 ? files(out).filter((file) => file.endsWith('/loop-seam.json')).map((file) => JSON.parse(readFileSync(join(out, file), 'utf8')) as { warmup: number; status: string; differingPixels: number; maxChannelDelta: number; series: unknown[] }) : [];
+        const unjudgedOut = join(work, 'seam-no-physics-unjudged');
+        const unjudged = noPhysicsBuild === undefined ? null : runCli(['render', '--candidate', noPhysicsBuild, '--max', '64', '--out', unjudgedOut, '--loop-seam']);
+        const observation = unjudged?.status === 0 ? JSON.parse(readFileSync(join(unjudgedOut, 'loop', 'loop-seam.json'), 'utf8')) as typeof reports[number] : null;
         const refused = noPhysicsBuild === undefined ? null : runCli(['render', '--candidate', noPhysicsBuild, '--out', out, '--preroll', '1']);
         const atRest = (r: typeof reports[number]): boolean => r.warmup === 0 && r.status === 'met' && r.differingPixels === 0 && r.series.length === 1;
         const ok = reports.length > 0 && reports.every(atRest) && !atRest({ ...reports[0], warmup: 1 }) &&
+          observation?.status === 'unjudged' && bits(observation.series) === bits([{ warmup: 0, differingPixels: 0, maxChannelDelta: 0 }]) &&
           refused?.status === 2 && refused.stderr.includes('declares no physics constraint');
-        say(names[11], ok, `render=${rendered?.status}, explicit preroll=${refused?.status}, ${reports.length} measured set(s): ${JSON.stringify(reports.map(({ warmup, status, series }) => ({ warmup, status, series })))}`, 'a no-physics candidate has no carried physics to warm');
+        say(names[11], ok, `judged=${rendered?.status}, unjudged=${unjudged?.status}, explicit preroll=${refused?.status}, judged series=${JSON.stringify(reports.map((row) => row.series))}, unjudged series=${JSON.stringify(observation?.series)}`, 'a no-physics candidate has no carried physics to warm');
+      }
+      {
+        const fps = 13;
+        const setDir = frameSetDir('breath', fps);
+        const period = core().animations.find((animation) => animation.name === 'breath')?.duration ?? NaN;
+        const ordinary = join(work, 'seam-ordinary');
+        const optedIn = join(work, 'seam-opted-in');
+        const args = ['render', '--candidate', probe.outDir, '--animation', 'breath', '--fps', String(fps), '--max', '64'];
+        const baseline = ['frames.json', `${setDir}/contact.png`, ...Array.from({ length: Math.round(period * fps) + 1 }, (_, index) => `${setDir}/f${String(index).padStart(4, '0')}.png`)].sort();
+        const matchesOrigin = (inventory: string[]): boolean => bits(inventory.toSorted()) === bits(baseline);
+        const regular = runCli([...args, '--out', ordinary]);
+        const observed = runCli([...args, '--out', optedIn, '--loop-seam']);
+        const fromDisk = regular.status === 0 ? files(ordinary) : [];
+        const receipt = regular.status === 0 ? JSON.parse(readFileSync(join(ordinary, RENDER_RUN_FILE), 'utf8')) as { outputs: { path: string }[] } : null;
+        const extra = [`${setDir}/loop-seam.json`, `${setDir}/loop-wrap.png`];
+        const sameTake = matchesOrigin(fromDisk) && observed.status === 0 && bits(files(optedIn)) === bits([...baseline, ...extra].sort()) &&
+          baseline.every((path) => readFileSync(join(ordinary, path)).equals(readFileSync(join(optedIn, path))));
+        if (sameTake) copyFileSync(join(optedIn, extra[0]), join(ordinary, extra[0]));
+        const ok = sameTake && receipt !== null && matchesOrigin(receipt.outputs.map((row) => row.path)) && !matchesOrigin(files(ordinary));
+        say(names[12], ok, `ordinary exit=${regular.status}, opt-in exit=${observed.status}, ${fromDisk.length} ordinary outputs, same take=${sameTake}; an unasked report fails the origin/main inventory reader`, 'the consumer explicitly requests a loop observation');
+      }
+      {
+        const path = join(work, 'seam-still.json');
+        writeFileSync(path, JSON.stringify({ ...JSON.parse(skeletonText) as Record<string, unknown>, animations: { still: {} } }));
+        const out = join(work, 'seam-still');
+        const result = runCli(['render', '--candidate', path, '--atlas', join(probe.outDir, 'skeleton.atlas'), '--animation', 'still', '--poser', 'spine', '--max', '64', '--loop-seam', '--out', out]);
+        const report = result.status === 0 ? JSON.parse(readFileSync(join(out, 'still', 'loop-seam.json'), 'utf8')) as { period: number; code: string; status: string; wrap?: unknown } : null;
+        const skipped = (row: NonNullable<typeof report>): boolean => row.period === 0 && row.status === 'skip' && row.code === 'LOOP_SEAM_UNAVAILABLE' && row.wrap === undefined;
+        const ok = report !== null && skipped(report) && !skipped({ ...report, status: 'unjudged' }) &&
+          /LOOP_SEAM_UNAVAILABLE.*SKIP/.test(result.stdout) && !existsSync(join(out, 'still', 'loop-wrap.png'));
+        say(names[13], ok, `exit=${result.status}, report=${JSON.stringify(report)}, stderr=${result.stderr.trim()}`, 'an animation of period zero cannot supply a wrap observation');
       }
       // PRE07's reading, on one pair of posers — the unplanted pair, or the planted core against itself (PRE09).
       const landing = (posers: Array<[string, () => Poser]>): { probes: string[]; rows: string[]; compared: number } => {

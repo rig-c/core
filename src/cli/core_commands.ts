@@ -750,6 +750,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
   // `t` could be read on the recording's clock or on the walk's, the two give different physics, and nothing settles it.
   const preroll = readPrerollFlag(flags);
   const loopSearch = readLoopSeamFlags(flags);
+  const wantsLoopSeam = flags['loop-seam'] !== undefined || loopSearch !== undefined;
   if (flags.physics !== undefined && flags.physics !== 'on' && flags.physics !== 'off') throw new UsageError(`--physics ${JSON.stringify(flags.physics)}: required on or off`);
   const physicsMode = flags.physics === 'off' ? 'off' as const : undefined;
   if (preroll !== undefined && environment !== undefined) {
@@ -763,7 +764,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
   const given = readGivenViewport(flags);
   const extremesOnly = flags['extremes-only'] !== undefined;
   if (extremesOnly) {
-    for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'boundary-from']) {
+    for (const flag of ['sheet', 'sheet-format', 'page-edges', 'geometry', 'folds', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'boundary-from', 'loop-seam']) {
       if (flags[flag] !== undefined) {
         throw new UsageError(`--extremes-only takes no --${flag}: it writes only extremes.json and, when readable, extremes.png. Drop --${flag}, or use --extremes for ordinary frames and additional outputs`);
       }
@@ -899,7 +900,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
     posersAsked(flags),
   );
   if (flags.parallax !== undefined) {
-    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'physics', 'boundary-from', 'viewport', 'viewport-from']) {
+    for (const flag of ['animation', 'fps', 'slot', 'hide', 'geometry', 'folds', 'extremes', 'extremes-only', 'pass-through', 'seam', 'seam-cells', 'overlaps', 'angle-range', 'sheet', 'sheet-format', 'page-edges', 'environment', 'preroll', 'loop-seam', 'physics', 'boundary-from', 'viewport', 'viewport-from']) {
       if (flags[flag] !== undefined) throw new UsageError(`--parallax takes no --${flag}: it samples one named dial on its own 9-value grid; drop --${flag} or run ordinary render separately`);
     }
     if (flags.poser !== undefined && flags.poser !== 'core') throw new UsageError('--parallax requires --poser core: it reads only a rigc compiled model');
@@ -1061,7 +1062,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
       wrap?: Uint8Array;
       selectedPreroll?: number;
     }>();
-    if (!extremesOnly) {
+    if (wantsLoopSeam) {
       const viewportRecord = sidecarViewport(viewport);
       for (const [name, frames] of sampled) {
         const period = poser.animations.find((animation) => animation.name === name)?.duration;
@@ -1069,7 +1070,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
         if (period === undefined || period <= 0) {
           const reason = period === undefined ? 'the skeleton has no animation' : 'the animation has no positive period';
           if (loopSearch !== undefined) throw new UsageError(`LOOP_SEAM_UNAVAILABLE: ${JSON.stringify(name)}: ${reason}`);
-          seamSamples.set(name, { text: JSON.stringify({ ...identity, status: 'skip', reason }, null, 2) });
+          seamSamples.set(name, { text: JSON.stringify({ ...identity, status: 'skip', code: 'LOOP_SEAM_UNAVAILABLE', reason }, null, 2) });
           continue;
         }
         const from = preroll ?? 0;
@@ -1090,6 +1091,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
           if (loopSearch !== undefined && (figures.pixelsAbove ?? Infinity) > loopSearch.bar.pixelsAbove) continue;
 
           const firstBytes = encodePng(first.width, first.height, first.data);
+          const wrapBytes = encodePng(wrap.width, wrap.height, wrap.data);
           const setDir = frameSetDir(name, fps);
           const report = {
             ...identity,
@@ -1097,7 +1099,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
             warmup,
             ...(loopSearch === undefined ? {} : { bar: loopSearch.bar, cap: loopSearch.cap }),
             first: { time: 0, ...loopSampleFile(`${setDir}/f0000.png`, firstBytes) },
-            wrap: { time: period, encoding: 'rgba8-row-major', ...loopSampleFile(`${setDir}/${LOOP_WRAP_FILE}`, wrap.data) },
+            wrap: { time: period, encoding: 'png', ...loopSampleFile(`${setDir}/${LOOP_WRAP_FILE}`, wrapBytes) },
             ...figures,
             series,
           };
@@ -1105,7 +1107,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
           seamSamples.set(name, {
             text: JSON.stringify(report, null, 2),
             first: firstBytes,
-            wrap: wrap.data,
+            wrap: wrapBytes,
             selectedPreroll: loopSearch !== undefined && warmup > 0 ? warmup : undefined,
           });
           break;

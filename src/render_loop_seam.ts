@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Plate } from '../tools/plate.ts';
 
 export const LOOP_SEAM_FILE = 'loop-seam.json';
-export const LOOP_WRAP_FILE = 'loop-wrap.rgba';
+export const LOOP_WRAP_FILE = 'loop-wrap.png';
 
 export interface LoopSeamBar {
   channelDelta: number;

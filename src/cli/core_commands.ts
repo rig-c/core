@@ -56,7 +56,7 @@ import { cmdRepack } from './repack.ts';
 import { writeWhole } from './write_whole.ts';
 import { filesWrittenUnder, frameSetDirOnRecord, readRenderInputs, realDir, RENDER_RUN_FILE, RENDER_RUN_TEMP_FILE, renderRunArgv, runStampClock, runStampPackage, spelledDir, spelledInput, writeRenderRunStamp } from './run_stamp.ts';
 import { GUIDE_FILE, GUIDE_RULE_TABLES_ELSEWHERE, guideAnswer, refusalLine } from '../guide.ts';
-import { ATLAS_ABSENT, BOOLEAN_FLAGS, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
+import { ATLAS_ABSENT, BOOLEAN_FLAGS, COMMANDS, type CommandRun, DelegateError, modelTextBeside, resolveBuild, type BuildGate, runBuild, PACKAGE_ROOT, DEFAULT_CHAINFIT_OUT, DEFAULT_POSE_OUT, DEFAULT_SKILLS_DIR, ExplainError, GuideError, printAlphaClips, meshBudget, meshDepthNote, meshFit, meshInfluenceNote, PAGE_GRID_UNLOCATED, readAnimationFlag, readChainFitInputs, readJsonFile, readPageEdges, readPoserFlag, readSheetFormat, readSkeletonText, readVersion, requireSkillsInstall, resolveCut, resolveDrawable, runCheck, SkillsInstallError, STAGELESS_FRAMING, UsageError, writeJson, documentStageBeside } from './shared.ts';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -1544,9 +1544,6 @@ export function physicsLine(stepped: readonly string[], declared: readonly strin
 
 /** Warning-only reading, independent of build and of raster output. */
 export function cmdTextureScale(flags: Record<string, string>): void {
-  const accepted = ['candidate', 'atlas', 'skin', 'fps', 'poser', 'json', 'help'];
-  const stray = Object.keys(flags).filter(k => !accepted.includes(k));
-  if (stray.length > 0) throw new UsageError(`texture-scale takes no --${stray.join(', --')}; use texture-scale --help`);
   if (flags.candidate === undefined) throw new UsageError('texture-scale needs --candidate <dir | skeleton.json>');
   const fps = readPositiveNumber(flags, 'fps', TEXTURE_SCALE_FPS, 1);
   const { skeletonPath, atlasPath, atlasText } = resolveDrawable(flags.candidate, flags.atlas);
@@ -1584,19 +1581,8 @@ export const DEFAULT_INSPECT_OUT = 'inspect.png';
  * that turns its pixels back into world units (issue #1357). The view is
  * `src/inspect.ts`'s; this reads the flags, loads the candidate the way
  * `render` loads it and writes the two files.
- *
- * ⚠️ A flag this command does not take is refused by name here rather than
- * ignored: the parser accepts any `--word value`, and a view asked for with a
- * flag that does nothing would be a picture of something other than what the
- * caller asked about.
  */
 export function cmdInspect(flags: Record<string, string>): void {
-  const doc = COMMANDS.find((c) => c.name === 'inspect');
-  const accepted = [...(doc?.flags ?? []), 'help'];
-  const stray = Object.keys(flags).filter((name) => !accepted.includes(name));
-  if (stray.length > 0) {
-    throw new InspectError(`inspect takes no --${stray.join(', --')}; it takes --${accepted.filter((f) => f !== 'help').join(', --')}`);
-  }
   if (flags.candidate === undefined) {
     throw new UsageError('inspect needs --candidate <dir | skeleton.json> — the directory `build --out` wrote');
   }
@@ -1739,29 +1725,14 @@ export function cmdPose(flags: Record<string, string>): void {
 }
 
 export function cmdChainFit(flags: Record<string, string>): void {
-  if (flags.candidate === undefined) {
-    throw new UsageError('chainfit needs --candidate <dir | skeleton.json> — the compiled rig to read the frame through');
-  }
-  if (flags.images === undefined) {
-    throw new UsageError("chainfit needs --images <dir> — where the candidate's attachment image names resolve to PNGs");
-  }
-  if (flags.frame === undefined) throw new UsageError('chainfit needs --frame <path> — one pose frame to read the placements out of');
-  // Refused rather than ignored. Every other --candidate command takes --atlas, so
-  // passing it here is a reasonable thing to try — and a flag that silently does
-  // nothing is worse than one that says why it cannot.
-  if (flags.atlas !== undefined) {
-    throw new UsageError(
-      'chainfit reads no atlas: the part art comes from --images, one PNG per attachment image name, and the ' +
-        'skeleton is all it needs of the candidate. Drop --atlas',
-    );
-  }
+  const { candidate, images, frame } = readChainFitInputs(flags);
   // The candidate through the one statement of a build (issue #1046): a path, or a directory holding no skeleton.json,
   // is refused here as by every command that takes a build, rather than by `src/chainfit.ts`'s own reader in its own words.
-  resolveBuild(flags.candidate, undefined);
+  resolveBuild(candidate, undefined);
   const options: ChainFitOptions = {
-    candidatePath: flags.candidate,
-    imagesDir: flags.images,
-    framePath: flags.frame,
+    candidatePath: candidate,
+    imagesDir: images,
+    framePath: frame,
   };
   if (flags.anchor !== undefined) options.anchorPath = flags.anchor;
   const hinge = readRange(flags, 'hinge');
@@ -2458,9 +2429,6 @@ export function cmdIngest(flags: Record<string, string>, positional: string[]): 
   }
 }
 
-/** What `rigc skills` offers. One today; the list is what the refusal of any other word prints. */
-const SKILLS_SUBCOMMANDS = ['install'];
-
 type SkillsInstallAction = 'linked' | 'copied' | 'already linked' | 'already copied';
 
 interface SkillsInstallEntry {
@@ -2782,29 +2750,7 @@ function isLink(path: string): boolean {
 }
 
 export function cmdSkills(flags: Record<string, string>, positional: string[]): void {
-  const [sub, ...extra] = positional;
-  if (sub === undefined) {
-    throw new UsageError(
-      `skills takes a subcommand: ${SKILLS_SUBCOMMANDS.join(', ')} — \`rigc skills install\` links every skill this ` +
-        `package and any installed @rig-c/* or alias package ship into ${DEFAULT_SKILLS_DIR}`,
-    );
-  }
-  if (!SKILLS_SUBCOMMANDS.includes(sub)) {
-    throw new UsageError(`unknown skills subcommand: ${sub} (rigc skills offers ${SKILLS_SUBCOMMANDS.join(', ')})`);
-  }
-  if (extra.length > 0) {
-    throw new UsageError(
-      `skills install takes no positional argument, and ${JSON.stringify(extra[0])} was given — the directory is --dir <path>`,
-    );
-  }
-  const takes = COMMANDS.find((c) => c.name === 'skills')?.flags ?? [];
-  const foreign = Object.keys(flags).filter((flag) => !takes.includes(flag));
-  if (foreign.length > 0) {
-    throw new UsageError(
-      `skills install takes ${takes.map((flag) => `--${flag}`).join(' and ')}; ` +
-        `${foreign.map((flag) => `--${flag}`).join(', ')} is not one of them`,
-    );
-  }
+  requireSkillsInstall(positional);
   const copy = flags.copy !== undefined;
   const dir = resolve(process.cwd(), flags.dir ?? DEFAULT_SKILLS_DIR);
   const entries = installSkills(discoverSkillSources(process.cwd(), PACKAGE_ROOT), dir, copy);
@@ -2839,8 +2785,6 @@ export function cmdSkills(flags: Record<string, string>, positional: string[]): 
  * answer names that file.
  */
 export function cmdGuide(flags: Record<string, string>, positional: string[]): void {
-  const flagged = Object.keys(flags).filter((flag) => flag !== 'all');
-  if (flagged.length > 0) throw new UsageError(`guide takes only --all, and ${flagged.map((f) => `--${f}`).join(', ')} was given — name one rule or one §section`);
   if (positional.length !== 1) {
     throw new UsageError(
       positional.length === 0

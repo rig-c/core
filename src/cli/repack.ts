@@ -78,7 +78,6 @@ import { constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
-/** The flags `repack` takes: the packing flags `build --pack` takes, the gate's profile, the atlas when it is not beside the skeleton, the stage `ingest` takes, and `--out`. */
 /**
  * The switch that writes a rebuild whose skeleton differs from the input's
  * (issue #1169's follow-up). Default off: check (b) refuses a difference, and
@@ -94,21 +93,6 @@ export const ACCEPT_FLAG = 'accept-skeleton-differences';
  * of the lift and `build --pack`, nothing written but the document.
  */
 export const KEEP_PAGES_FLAG = 'keep-pages';
-
-export const REPACK_FLAGS = ['out', 'atlas', 'page-size', 'padding', 'page-edges', 'pack-shape', 'profile', 'stage', 'stage-box', ACCEPT_FLAG, KEEP_PAGES_FLAG, 'report'] as const;
-
-/** `build`'s flags that `repack` does not take, and why — each refused by name rather than ignored. */
-const BUILD_FLAGS_REFUSED: Readonly<Record<string, string>> = {
-  rig: 'repack reads the rig back out of the skeleton (ingest); it takes no rig spec',
-  motion: 'repack reads the motion back out of the skeleton (ingest); it takes no motion spec',
-  manifest: 'repack lifts the parts off the pages; it takes no cut manifest',
-  images: 'repack lifts the parts off the pages the atlas names; it takes no parts directory',
-  'copy-images': 'repack always writes self-contained pages into --out, which is what packing is',
-  pack: 'repack always packs; the flag would say nothing',
-  'atlas-in': `repack MAKES a new pack out of the regions of the old one; --atlas-in would keep the old pack — pass the build itself, and --${KEEP_PAGES_FLAG} to keep its pack`,
-  cut: 'repack takes a build directory, not a cut',
-  cuts: 'repack takes a build directory, not a cuts table',
-};
 
 /** The three files besides the pages that every repacked build is, in the order `runBuild` writes them. */
 const BUILD_TEXTS = ['skeleton.json', 'skeleton.atlas', MODEL_DOCUMENT_FILE] as const;
@@ -132,16 +116,6 @@ function readStageFlag(raw: string | undefined): IngestStage | undefined {
   const parts = raw.split(',').map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) throw new UsageError(`--stage is ${JSON.stringify(raw)}; give four numbers, x,y,width,height`);
   return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
-}
-
-/** Every flag given that `repack` does not take, refused by name. */
-function refuseForeignFlags(flags: Record<string, string>): void {
-  const taken = new Set<string>([...REPACK_FLAGS, 'help']);
-  for (const name of Object.keys(flags).sort()) {
-    if (taken.has(name)) continue;
-    const why = BUILD_FLAGS_REFUSED[name];
-    throw new UsageError(why === undefined ? `repack takes no --${name}; it takes --${REPACK_FLAGS.join(', --')}` : `repack takes no --${name}: ${why}`);
-  }
 }
 
 /** `--out`: required, and absent or an empty directory — refused by name otherwise, before anything is read. */
@@ -314,7 +288,6 @@ const KEPT_ATLAS = 'kept.atlas';
  * (`build`'s). `plant` is the selftest's (`RepackPlant`).
  */
 export function cmdRepack({ flags, positional }: CommandArgs, gate: BuildGate, plant?: RepackPlant): void {
-  refuseForeignFlags(flags);
   const keeping = flags[KEEP_PAGES_FLAG] !== undefined;
   if (keeping) refuseKeepPagesConflicts(flags);
   if (positional.length !== 1) throw new UsageError(`repack takes one path — the build directory, or its skeleton.json — and was given ${positional.length}`);

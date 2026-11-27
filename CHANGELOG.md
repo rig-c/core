@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.11.0
+
+Every file `build` writes is byte-identical to v3.10.0's.
+
+Nothing changes for existing callers: without the new loop-seam flags, `render` writes the same outputs as v3.10.0 apart from `render-run.json`'s package version and timestamps.
+
+### Features
+
+* Add `render --loop-seam` (measures and reports each set's wrap seam with status `unjudged`) and `--loop-seam-bar <channel-delta,pixels>` with `--loop-seam-cap <loops>` (selects the first warm-up take that meets the bar, or exits with `LOOP_SEAM_BAR_UNMET`), writing per-set `loop-seam.json` (`rigc-loop-seam/1`) and refusing references rendered after a selected warm-up in `check` (#1791) (aad15171)
+
+### Bug Fixes
+
+* Compare recognised run receipts by field outside `started_at`, `finished_at` and `package.version` in the release-tool dependant check (`scripts/dependant_check.ts`, shipped in the repository rather than the published package) (#1789) (2ac5482f)
+
 ## 3.10.0
 
 For the 19 measured recipes with no declared slider combinations, the skeleton, atlas and model files written by `build` are byte-identical to v3.9.2's.

@@ -177,14 +177,16 @@ export const REPEATABLE_FLAGS: Record<string, ReadonlySet<string>> = {
  *
  * `lists` carries every occurrence of every flag and `flags` carries the last
  * one, so a command that wants a repeated flag reads `lists` and the ones that
- * do not are untouched by the addition.
+ * do not are untouched by the addition. A name check runs before reading the
+ * value so a misspelt flag can be refused even when it has no value.
  */
 export function parseArgs(
   argv: string[],
   repeatable: ReadonlySet<string> = new Set(),
+  checkFlagName?: (name: string) => void,
 ): { flags: Record<string, string>; lists: Record<string, string[]>; positional: string[] } {
-  const flags: Record<string, string> = {};
-  const lists: Record<string, string[]> = {};
+  const flags: Record<string, string> = Object.create(null);
+  const lists: Record<string, string[]> = Object.create(null);
   const positional: string[] = [];
   const take = (name: string, value: string): void => {
     if (flags[name] !== undefined && !repeatable.has(name)) {
@@ -200,14 +202,16 @@ export function parseArgs(
     const arg = argv[i];
     if (arg.startsWith('--')) {
       const eq = arg.indexOf('=');
+      const name = arg.slice(2, eq === -1 ? undefined : eq);
+      checkFlagName?.(name);
       if (eq !== -1) {
-        take(arg.slice(2, eq), arg.slice(eq + 1));
-      } else if (BOOLEAN_FLAGS.has(arg.slice(2))) {
-        take(arg.slice(2), 'true');
+        take(name, arg.slice(eq + 1));
+      } else if (BOOLEAN_FLAGS.has(name)) {
+        take(name, 'true');
       } else {
         const next = argv[i + 1];
         if (next === undefined || next.startsWith('--')) throw new UsageError(`${arg} needs a value`);
-        take(arg.slice(2), next);
+        take(name, next);
         i++;
       }
     } else {
@@ -982,6 +986,22 @@ export const DEFAULT_LEDGER = 'votes.jsonl';
 /** The default `--dir`, resolved against the caller's working directory. */
 export const DEFAULT_SKILLS_DIR = '.agents/skills';
 
+export function requireSkillsInstall(positional: string[]): void {
+  const [sub, ...extra] = positional;
+  if (sub === undefined) {
+    throw new UsageError(
+      'skills takes a subcommand: install — `rigc skills install` links every skill this ' +
+        `package and any installed @rig-c/* or alias package ship into ${DEFAULT_SKILLS_DIR}`,
+    );
+  }
+  if (sub !== 'install') throw new UsageError(`unknown skills subcommand: ${sub} (rigc skills offers install)`);
+  if (extra.length > 0) {
+    throw new UsageError(
+      `skills install takes no positional argument, and ${JSON.stringify(extra[0])} was given — the directory is --dir <path>`,
+    );
+  }
+}
+
 /** An install refused before its first write — nothing to install, or an entry in the way. Exit 1. */
 export class SkillsInstallError extends Error {}
 
@@ -1402,6 +1422,8 @@ interface CommandDoc {
   usage: string[];
   /** Flag names (into FLAG_MEANINGS/FLAG_VALUES), in display order. `--help` is appended automatically. */
   flags: string[];
+  /** Preserve a command's existing diagnostic for flags outside its declaration. A return uses the shared refusal. */
+  refuseUndeclaredFlags?: (names: readonly string[], declared: readonly string[], args: ReturnType<typeof parseArgs>) => void;
   /**
    * Per-command wording for a flag whose value or meaning genuinely differs here.
    *
@@ -1461,6 +1483,8 @@ interface CommandDoc {
    * `diff`) can be moved to another side in one place.
    */
   spineFormat: boolean;
+  /** The command's delegate owns its flags and help. */
+  delegateFlags?: true;
   /**
    * A command whose body is another package's bin (issue #1457): the dispatch
    * hands it every argument after the name untouched — nothing is parsed as a
@@ -1474,6 +1498,51 @@ interface CommandDoc {
    * `<bareTarget> <target> …` — the one rewrite the launcher makes.
    */
   delegate?: { package: string; bin: string; bareTarget?: string; subcommands?: readonly string[] };
+}
+
+const REPACK_BUILD_FLAG_REFUSALS: Readonly<Record<string, string>> = {
+  rig: 'repack reads the rig back out of the skeleton (ingest); it takes no rig spec',
+  motion: 'repack reads the motion back out of the skeleton (ingest); it takes no motion spec',
+  manifest: 'repack lifts the parts off the pages; it takes no cut manifest',
+  images: 'repack lifts the parts off the pages the atlas names; it takes no parts directory',
+  'copy-images': 'repack always writes self-contained pages into --out, which is what packing is',
+  pack: 'repack always packs; the flag would say nothing',
+  'atlas-in': 'repack MAKES a new pack out of the regions of the old one; --atlas-in would keep the old pack — pass the build itself, and --keep-pages to keep its pack',
+  cut: 'repack takes a build directory, not a cut',
+  cuts: 'repack takes a build directory, not a cuts table',
+};
+
+export function readChainFitInputs(flags: Record<string, string>): { candidate: string; images: string; frame: string } {
+  const { candidate, images, frame } = flags;
+  if (candidate === undefined) {
+    throw new UsageError('chainfit needs --candidate <dir | skeleton.json> — the compiled rig to read the frame through');
+  }
+  if (images === undefined) {
+    throw new UsageError("chainfit needs --images <dir> — where the candidate's attachment image names resolve to PNGs");
+  }
+  if (frame === undefined) throw new UsageError('chainfit needs --frame <path> — one pose frame to read the placements out of');
+  return { candidate, images, frame };
+}
+
+export function requireBallotCandidates(count: number): void {
+  if (count === 0) {
+    throw new UsageError(
+      'vote takes either 2–4 --candidate <dir | skeleton.json> to write a ballot, or --record <result.json> to ' +
+        'record one that came back',
+    );
+  }
+  if (count < MIN_CANDIDATES) {
+    throw new UsageError(
+      `a ballot needs ${MIN_CANDIDATES}–${MAX_CANDIDATES} --candidate <dir | skeleton.json>, and ${count} ` +
+        'was given — one candidate on its own is `rigc preview`',
+    );
+  }
+  if (count > MAX_CANDIDATES) {
+    throw new UsageError(
+      `${count} candidates were given and a ballot holds at most ${MAX_CANDIDATES} — they go side by side ` +
+        'on one screen, and a comparison that needs scrolling is not a comparison',
+    );
+  }
 }
 
 export const COMMANDS: CommandDoc[] = [
@@ -1564,6 +1633,13 @@ export const COMMANDS: CommandDoc[] = [
           `rigc repack <dir | skeleton.json> --out <dir> --keep-pages [--atlas <path>] [--profile spine|rig-play] [--stage x,y,w,h] [--stage-box <slot>] [--report <file>]   (skeleton.model.json alone, pages kept)`,
     ],
     flags: ['out', 'atlas', 'page-size', 'padding', 'page-edges', 'pack-shape', 'profile', 'stage', 'stage-box', 'accept-skeleton-differences', 'keep-pages', 'report'],
+    refuseUndeclaredFlags(names, declared) {
+      const [name] = [...names].sort();
+      if (Object.hasOwn(REPACK_BUILD_FLAG_REFUSALS, name)) {
+        throw new UsageError(`repack takes no --${name}: ${REPACK_BUILD_FLAG_REFUSALS[name]}`);
+      }
+      throw new UsageError(`repack takes no --${name}; it takes --${declared.join(', --')}`);
+    },
     overrides: {
       out: {
         value: '<dir>',
@@ -1632,7 +1708,7 @@ export const COMMANDS: CommandDoc[] = [
       'rigc validate <dir | skeleton.json> [--atlas <path>] [--profile spine|rig-play]',
       'rigc validate --cut <name> --cuts <cuts.json>   (also re-derives declared durations)',
     ],
-    flags: ['atlas', 'profile', 'cut', 'cuts', 'rig', 'motion', 'out', 'manifest', 'images'],
+    flags: ['atlas', 'profile', 'cut', 'cuts', 'rig', 'motion', 'out', 'manifest', 'images', 'atlas-in'],
   },
   {
     name: 'ingest',
@@ -1764,8 +1840,10 @@ export const COMMANDS: CommandDoc[] = [
     runtime: { for: 'the gate runs before anything is measured, and --bones poses the rung\'s reference skeletons through it' },
     spineFormat: false,
     usage: [`rigc bench <${RUNG_IDS.join(' | ')}> --candidate <dir | skeleton.json> [--frames <dir>] [flags]`],
-    flags: ['candidate', 'atlas', 'frames', 'profile', 'bones', 'all-frames', 'all-bones', 'json'],
+    flags: ['candidate', 'atlas', 'frames', 'profile', 'bones', 'all-frames', 'all-bones', 'json', 'texture-from', 'fps', 'viewport', 'framing', 'as', 'skin', 'poser'],
+    notes: ['The comparison options apply to --frames. --fps sets the rate for a reference set without a frames.json sidecar.'],
     overrides: {
+      poser: { meaning: 'which implementation poses the candidate for --frames (core or spine); defaults and fallbacks are the same as in check --help' },
       bones: {
         meaning:
           'also run the stage-3 per-frame bone world-transform distance against each of the rung\'s reference ' +
@@ -1845,6 +1923,9 @@ export const COMMANDS: CommandDoc[] = [
     spineFormat: false,
     usage: ['rigc texture-scale --candidate <dir | skeleton.json> [--skin <name>] [--fps 60] [--poser core|spine] [--json <out>]'],
     flags: ['candidate', 'atlas', 'skin', 'fps', 'poser', 'json'],
+    refuseUndeclaredFlags(names) {
+      throw new UsageError(`texture-scale takes no --${names.join(', --')}; use texture-scale --help`);
+    },
     overrides: {
       fps: { meaning: 'sample setup and every animation at this rate (default 60), also including float32 key times, key-interval midpoints and endpoints; reports sampled minima, never continuous extrema' },
       json: { meaning: 'write the report outside the candidate directory; an existing file is replaced only if it is a rigc-texture-scale/1 report' },
@@ -1864,6 +1945,9 @@ export const COMMANDS: CommandDoc[] = [
       'rigc inspect … --compare <dir | skeleton.json>   (a second build beside the first, on one transform)',
     ],
     flags: ['candidate', 'atlas', 'show', 'dim', 'animation', 'at', 'fps', 'skin', 'zoom', 'viewport', 'bone', 'hide-bone', 'overlay-slot', 'hide-overlay-slot', 'compare', 'max', 'poser', 'out'],
+    refuseUndeclaredFlags(names, declared) {
+      throw new InspectError(`inspect takes no --${names.join(', --')}; it takes --${declared.join(', --')}`);
+    },
     overrides: {
       animation: { meaning: 'the animation --at reads its times from (default: the setup pose, with no --at)' },
       fps: { meaning: `the frame grid --at is read on, which is the grid \`render --fps\` draws (default ${INSPECT_DEFAULT_FPS})` },
@@ -1890,6 +1974,16 @@ export const COMMANDS: CommandDoc[] = [
     spineFormat: true,
     usage: ['rigc preview --candidate <dir | skeleton.json> [--candidate <another> …] [--animation <name>] [--out preview.html]'],
     flags: ['candidate', 'atlas', 'animation', 'out'],
+    refuseUndeclaredFlags(names, _declared, { flags }) {
+      for (const flag of ['slot', 'hide']) {
+        if (names.includes(flag)) {
+          throw new UsageError(
+            `preview takes no --${flag}: the Spine Web Player draws what the skeleton draws. A subset of the slots is ` +
+              `\`rigc render --${flag} ${flags[flag]}\`, on the whole rig's grid`,
+          );
+        }
+      }
+    },
     overrides: {
       candidate: {
         value: '<dir|skeleton.json>',
@@ -1949,6 +2043,14 @@ export const COMMANDS: CommandDoc[] = [
       'rotation',
       'out',
     ],
+    refuseUndeclaredFlags(names, _declared, { flags }) {
+      if (!names.includes('atlas')) return;
+      readChainFitInputs(flags);
+      throw new UsageError(
+        'chainfit reads no atlas: the part art comes from --images, one PNG per attachment image name, and the ' +
+          'skeleton is all it needs of the candidate. Drop --atlas',
+      );
+    },
     overrides: {
       images: {
         value: '<dir>',
@@ -1982,6 +2084,13 @@ export const COMMANDS: CommandDoc[] = [
       `rigc vote --record <result.json> [--ballot ${DEFAULT_BALLOT}] [--ledger ${DEFAULT_LEDGER}] [--again]`,
     ],
     flags: ['candidate', 'animation', 'out', 'record', 'ballot', 'ledger', 'again'],
+    refuseUndeclaredFlags(names, _declared, { flags, lists }) {
+      if (!names.includes('atlas') || flags.record !== undefined) return;
+      requireBallotCandidates(lists.candidate?.length ?? 0);
+      throw new UsageError(
+        "--atlas names one atlas and a ballot has several candidates; each one's atlas has to sit beside its skeleton",
+      );
+    },
     overrides: {
       candidate: {
         value: '<dir|skeleton.json>',
@@ -2007,6 +2116,9 @@ export const COMMANDS: CommandDoc[] = [
       'rigc guide §<n> | §<n>.<m> | §<n>.<m>.<k> [--all]    (a section\'s own prose and subsection index; --all includes their bodies)',
     ],
     flags: ['all'],
+    refuseUndeclaredFlags(names) {
+      throw new UsageError(`guide takes only --all, and ${names.map((f) => `--${f}`).join(', ')} was given — name one rule or one §section`);
+    },
     notes: [
       'guide reads the docs/AUTHORING.md this command ships with, at the moment it runs, and',
       'prints a slice of it — the row(s) whose first cell names the rule, each under the',
@@ -2025,6 +2137,13 @@ export const COMMANDS: CommandDoc[] = [
     spineFormat: false,
     usage: [`rigc skills install [--dir ${DEFAULT_SKILLS_DIR}] [--copy]   (every skill this package and any installed rig-c package ship, where an agent host looks)`],
     flags: ['dir', 'copy'],
+    refuseUndeclaredFlags(names, declared, { positional }) {
+      requireSkillsInstall(positional);
+      throw new UsageError(
+        `skills install takes ${declared.map((flag) => `--${flag}`).join(' and ')}; ` +
+          `${names.map((flag) => `--${flag}`).join(', ')} is not one of them`,
+      );
+    },
     notes: [
       'scans the skills/ directory of the package this command runs from and every',
       'node_modules/@rig-c/*/skills/<name>/SKILL.md and rig-c alias package (resolving by',
@@ -2051,6 +2170,7 @@ export const COMMANDS: CommandDoc[] = [
     name: 'review',
     runtime: false,
     spineFormat: false,
+    delegateFlags: true,
     // rig-review's own first words: every one of them, `--help`, `-h` and `--` (rig-review's way to its legacy bare
     // form) pass through; anything else first is a build directory, handed over as `open <dir>` (issue #1486).
     delegate: { package: '@rig-c/review', bin: 'rig-review', bareTarget: 'open', subcommands: ['open', 'check', 'feedback', 'control', 'strip', 'compare'] },
@@ -3162,18 +3282,34 @@ export function runCli(entry: CliEntry, argv: readonly string[]): void {
       console.log(USAGE);
       process.exit(0);
     }
-    if (!known.includes(command)) {
+    const doc = docs.find((candidate) => candidate.name === command);
+    if (doc === undefined) {
       const elsewhere = COMMANDS.find((doc) => doc.name === command);
       if (elsewhere !== undefined) throw commandNeedsRuntime(elsewhere, known, rest);
       throw new UsageError(`unknown command: ${command}`);
     }
     // A delegating command reads nothing here: not a flag, not `--help` (issue #1457).
-    if (docs.find((doc) => doc.name === command)?.delegate !== undefined) {
+    if (doc.delegateFlags === true) {
       entry.runs[command]({ flags: {}, lists: {}, positional: [], raw: rest });
       return;
     }
 
-    const { flags, lists, positional } = parseArgs([...rest], REPEATABLE_FLAGS[command]);
+    const declared = [...doc.flags, 'help'];
+    const takesFlag = (name: string): boolean => declared.includes(name);
+    const refuseUndeclared = (names: readonly string[]): never => {
+      throw new UsageError(`${command} takes no --${names.join(', --')}; it takes --${declared.join(', --')}`);
+    };
+    // Commands with a legacy refusal need the parsed invocation to preserve its ordering and wording.
+    const checkFlagName = doc.refuseUndeclaredFlags === undefined
+      ? (name: string): void => { if (!takesFlag(name)) refuseUndeclared([name]); }
+      : undefined;
+    const parsed = parseArgs(rest, REPEATABLE_FLAGS[command], checkFlagName);
+    const { flags, lists, positional } = parsed;
+    const undeclared = Object.keys(flags).filter((name) => !takesFlag(name));
+    if (undeclared.length > 0) {
+      doc.refuseUndeclaredFlags?.(undeclared, doc.flags, parsed);
+      refuseUndeclared(undeclared);
+    }
     if (flags.help !== undefined) {
       console.log(commandHelp(command, docs));
       process.exit(0);

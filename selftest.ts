@@ -68707,6 +68707,284 @@ function linkedOutControls(say: (name: string, ok: boolean, detail: string, why:
   rmSync(work, { recursive: true, force: true });
 }
 
+/** Follow the flag bags from the live registrations into the handlers and the readers they call. */
+function cliFlagReads(sourceOverride?: { path: string; text: string }): {
+  reads: Map<string, ReadonlySet<string>>;
+  faults: string[];
+} {
+  const registries = new Map([
+    ['CORE_COMMAND_RUNS', ['cli.ts', 'cli_core.ts']],
+    ['CORE_ENTRY_RUNS', ['cli_core.ts']],
+    ['SPINE_COMMAND_RUNS', ['cli.ts']],
+  ]);
+  const files = ['src/cli/core_commands.ts', 'src/cli/spine_commands.ts', 'src/cli/shared.ts', 'src/cli/repack.ts'];
+  const options: ts.CompilerOptions = {
+    noLib: true,
+    noResolve: true,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+  };
+  const host = ts.createCompilerHost(options);
+  const readFile = host.readFile;
+  host.readFile = (path) => sourceOverride !== undefined && resolve(path) === sourceOverride.path
+    ? sourceOverride.text
+    : readFile.call(host, path);
+  const program = ts.createProgram(files.map((file) => join(import.meta.dir, file)), options, host);
+  const checker = program.getTypeChecker();
+  const faults: string[] = [];
+  const reads = new Map<string, ReadonlySet<string>>();
+  const declarationOf = (node: ts.Identifier): ts.Declaration | undefined => {
+    const symbol = checker.getSymbolAtLocation(node);
+    if (symbol === undefined) return undefined;
+    return (symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol).valueDeclaration;
+  };
+  const nameOf = (node: ts.Node): string | undefined =>
+    ts.isIdentifier(node) || ts.isStringLiteralLike(node) ? node.text : undefined;
+  const bag = (node: ts.Node): boolean =>
+    ts.isIdentifier(node) && (node.text === 'flags' || node.text === 'lists');
+
+  const inspect = (
+    root: ts.Node,
+    label: string,
+    names: Set<string>,
+    supplied: ReadonlyMap<ts.Declaration, string[]>,
+    ancestors: ReadonlySet<ts.Node>,
+  ): void => {
+    if (ancestors.has(root)) return;
+    const visited = new Set(ancestors).add(root);
+    const keyNames = (node: ts.Node): string[] => {
+      if (ts.isStringLiteralLike(node)) return [node.text];
+      if (ts.isAsExpression(node)) return keyNames(node.expression);
+      if (ts.isArrayLiteralExpression(node)) return node.elements.flatMap(keyNames);
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+        const { expression, name } = node.expression;
+        if (name.text === 'sort' && node.arguments.length === 0) return keyNames(expression);
+        // A conflict table can supply the keys to a loop over the caller's flags.
+        const table = node.arguments[0];
+        if (name.text === 'keys' && expression.getText() === 'Object' && table !== undefined && ts.isIdentifier(table)) {
+          const declaration = declarationOf(table);
+          if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer && ts.isObjectLiteralExpression(declaration.initializer)) {
+            return declaration.initializer.properties.flatMap(({ name: key }) => {
+              if (key === undefined) return [];
+              if (ts.isComputedPropertyName(key)) return keyNames(key.expression);
+              const name = nameOf(key);
+              return name === undefined ? [] : [name];
+            });
+          }
+        }
+      }
+      if (!ts.isIdentifier(node)) return [];
+      const declaration = declarationOf(node);
+      if (declaration === undefined) return [];
+      const given = supplied.get(declaration);
+      if (given !== undefined) return given;
+      if (!ts.isVariableDeclaration(declaration)) return [];
+      if (declaration.initializer !== undefined) return keyNames(declaration.initializer);
+      const loop = declaration.parent.parent;
+      return ts.isForOfStatement(loop) ? keyNames(loop.expression) : [];
+    };
+    const visit = (node: ts.Node): void => {
+      if (ts.isPropertyAccessExpression(node) && bag(node.expression)) names.add(node.name.text);
+      if (ts.isElementAccessExpression(node) && bag(node.expression)) {
+        const keys = keyNames(node.argumentExpression);
+        if (keys.length === 0) faults.push(`${label}: cannot resolve ${node.getText()} in ${basename(node.getSourceFile().fileName)}`);
+        for (const key of keys) names.add(key);
+      }
+      if (ts.isVariableDeclaration(node) && node.initializer !== undefined && bag(node.initializer)) {
+        const unresolvedBinding = (binding: ts.Node): void => {
+          faults.push(`${label}: cannot resolve flag binding ${binding.getText()} in ${basename(node.getSourceFile().fileName)}`);
+        };
+        if (ts.isObjectBindingPattern(node.name)) {
+          for (const element of node.name.elements) {
+            const key = element.propertyName ?? element.name;
+            const keys = ts.isComputedPropertyName(key)
+              ? keyNames(key.expression)
+              : [ts.isNumericLiteral(key) ? key.text : nameOf(key)];
+            if (element.dotDotDotToken !== undefined || keys.length !== 1 || keys[0] === undefined) {
+              unresolvedBinding(element);
+            } else {
+              names.add(keys[0]);
+            }
+          }
+        } else {
+          unresolvedBinding(node.name);
+        }
+      }
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+          node.arguments.some((arg) => bag(arg) || nameOf(arg) === 'args')) {
+        const callee = declarationOf(node.expression);
+        if (callee && ts.isFunctionDeclaration(callee) && callee.body !== undefined) {
+          const given = new Map(callee.parameters.map((param, index) =>
+            [param, node.arguments[index] === undefined ? [] : keyNames(node.arguments[index])] as const,
+          ));
+          inspect(callee.body, label, names, given, visited);
+        } else {
+          faults.push(`${label}: cannot follow the flag bag into ${node.expression.text}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(root);
+  };
+
+  for (const file of program.getRootFileNames()) {
+    const source = program.getSourceFile(file);
+    if (source === undefined) {
+      faults.push(`missing CLI source ${basename(file)}`);
+      continue;
+    }
+    for (const statement of source.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const binding of statement.declarationList.declarations) {
+        const entries = registries.get(nameOf(binding.name) ?? '');
+        if (entries === undefined) continue;
+        if (binding.initializer === undefined || !ts.isObjectLiteralExpression(binding.initializer)) {
+          faults.push(`${binding.name.getText()} does not register commands in an object literal`);
+          continue;
+        }
+        for (const member of binding.initializer.properties) {
+          const command = member.name === undefined ? undefined : nameOf(member.name);
+          if (command === undefined || !ts.isPropertyAssignment(member)) {
+            faults.push(`cannot read registered command ${member.getText()}`);
+            continue;
+          }
+          const names = new Set<string>();
+          inspect(member.initializer, command, names, new Map(), new Set());
+          for (const entry of entries) {
+            const key = `${entry} ${command}`;
+            if (reads.has(key)) faults.push(`${key}: duplicate registration`);
+            reads.set(key, names);
+          }
+        }
+      }
+    }
+  }
+  return { reads, faults };
+}
+
+function cliFlagControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const entries = [
+    { entry: 'cli.ts', docs: entryCommands(true) },
+    { entry: 'cli_core.ts', docs: entryCommands(false) },
+  ];
+  const delegationFaults = (docs: readonly (typeof COMMANDS)[number][]): string[] =>
+    docs.flatMap((doc) => (doc.delegateFlags === true) === (doc.name === 'review')
+      ? []
+      : [`${doc.name}: ${doc.delegateFlags === true ? 'unexpected flag delegation' : 'missing flag delegation'}`]);
+  const plantedDelegation = delegationFaults(COMMANDS.map((doc) => doc.name === 'diff' ? { ...doc, delegateFlags: true } : doc));
+  const delegation = [
+    ...entries.flatMap(({ entry, docs }) => delegationFaults(docs).map((fault) => `${entry} ${fault}`)),
+    ...(plantedDelegation.join('\n') === 'diff: unexpected flag delegation' ? [] : [`second delegate plant: ${plantedDelegation.join('; ') || 'no fault'}`]),
+  ];
+  say(
+    'CLI124_REVIEW_ALONE_DELEGATES_FLAGS_AND_A_SECOND_DELEGATE_IS_RED',
+    delegation.length === 0,
+    probeDetail(delegation.length === 0, delegation, 'both command tables mark review alone; marking diff too faults by name; RV09 holds review’s argv and exit'),
+    'delegation bypasses core’s flag check, so accidentally marking another command must be visible even if its probe would otherwise be skipped',
+  );
+
+  const sentinel = '--selftest-unknown-flag';
+  const probeArgs = (command: string): string[] =>
+    [command, ...(command === 'skills' ? ['install'] : []), sentinel, 'value'];
+  const refusalFault = (label: string, run: ReturnType<typeof runEntryIn>): string | null => {
+    const first = run.stderr?.split('\n')[0] ?? '';
+    const namesUnknownFlag = first.includes(sentinel) &&
+      /(?:unknown|unrecognized|unexpected|unsupported) (?:flag|option)|takes no|takes only|does not take|is not one of them/.test(first);
+    return run.status === 2 && namesUnknownFlag && run.stdout === ''
+      ? null
+      : `${label}: exit ${String(run.status)}, stdout ${JSON.stringify(run.stdout?.split('\n')[0])}, stderr ${JSON.stringify(first)}`;
+  };
+
+  const work = mkdtempSync(join(harnessTemp(), 'rigc-unknown-flag-'));
+  try {
+    const faults: string[] = [];
+    let probes = 0;
+    for (const { entry, docs } of entries) {
+      for (const doc of docs) {
+        if (doc.name === 'review') continue;
+        if (doc.flags.includes(sentinel.slice(2))) {
+          faults.push(`${entry} ${doc.name}: ${sentinel} is declared and cannot probe rejection`);
+          continue;
+        }
+        probes++;
+        const fault = refusalFault(`${entry} ${doc.name}`, runEntryIn(import.meta.dir, entry, probeArgs(doc.name), work));
+        if (fault !== null) faults.push(fault);
+      }
+    }
+    const written = readdirSync(work);
+    if (written.length > 0) faults.push(`refused subprocesses wrote ${written.join(', ')}`);
+    say(
+      'CLI125_EACH_COMMAND_OWNING_FLAGS_REFUSES_AN_UNKNOWN_FLAG_BY_NAME',
+      faults.length === 0,
+      probeDetail(faults.length === 0, faults, `${probes} command/entry pairs exit 2 naming ${sentinel}, with empty stdout and no writes`),
+      'a missing required argument can also exit 2, so the first diagnostic must identify the unknown flag itself',
+    );
+
+    // Admit the test flag for diff on this child only, through the same declaration the dispatcher reads.
+    const bypassScript = `
+      import { COMMANDS } from ${JSON.stringify(join(import.meta.dir, 'src', 'cli', 'shared.ts'))};
+      COMMANDS.find((doc) => doc.name === 'diff').flags.push(${JSON.stringify(sentinel.slice(2))});
+      process.argv.splice(1, Infinity, 'cli_core.ts', ...${JSON.stringify(probeArgs('diff'))});
+      await import(${JSON.stringify(join(import.meta.dir, 'cli_core.ts'))});
+    `;
+    const bypass = spawnSync(process.execPath, ['-e', bypassScript], { cwd: work, encoding: 'utf8' });
+    const bypassFault = refusalFault('cli_core.ts diff', bypass);
+    const reachedBody = bypass.status === 2 && bypass.stderr?.startsWith('rigc: diff takes two paths:');
+    say(
+      'CLI126_AN_UNKNOWN_FLAG_LET_THROUGH_ON_ONE_COMMAND_IS_RED',
+      bypassFault !== null && reachedBody,
+      reachedBody && bypassFault !== null
+        ? 'diff’s body still exits 2 on missing paths, and CLI125’s judge catches the missing unknown-flag diagnostic'
+        : `diff bypass did not reach the expected refusal: ${bypassFault ?? 'judge accepted it'}`,
+      'the subprocess probe distinguishes its own refusal from an unrelated exit 2 after a flag has been admitted',
+    );
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+
+  const audit = ({ reads, faults }: ReturnType<typeof cliFlagReads>): string[] => [
+    ...faults,
+    ...entries.flatMap(({ entry, docs }) => docs.flatMap((doc) => {
+      const label = `${entry} ${doc.name}`;
+      const names = reads.get(label);
+      if (names === undefined) return [`${label}: no registered command inspected`];
+      return [...names].filter((flag) => !doc.flags.includes(flag)).sort()
+        .map((flag) => `${label}: reads undeclared --${flag}`);
+    })),
+  ];
+  const live = cliFlagReads();
+  const liveFaults = audit(live);
+  const path = join(import.meta.dir, 'src', 'cli', 'shared.ts');
+  const source = readFileSync(path, 'utf8');
+  const head = "): Pick<CheckOptions, 'fps' | 'viewport' | 'as' | 'framing' | 'textureFrom' | 'skin'> {";
+  const chainfitBinding = 'const { candidate, images, frame } = flags;';
+  const plant = 'selftest-undeclared-read';
+  const aliasKey = 'selftest-undeclared-binding';
+  const shorthandKey = 'selftestUndeclaredBinding';
+  const plantedSource = source
+    .replace(head, `${head}\n  void flags['${plant}'];`)
+    .replace(chainfitBinding, `${chainfitBinding}\n  const { ${shorthandKey}, '${aliasKey}': plantedAlias, ...plantedRest } = flags;`);
+  const planted = audit(cliFlagReads({ path, text: plantedSource }));
+  const added = planted.filter((fault) => !liveFaults.includes(fault));
+  const wanted = [
+    ...['cli.ts bench', 'cli.ts check', 'cli_core.ts check'].map((label) => `${label}: reads undeclared --${plant}`),
+    ...entries.flatMap(({ entry }) =>
+      [aliasKey, shorthandKey].map((key) => `${entry} chainfit: reads undeclared --${key}`),
+    ),
+    'chainfit: cannot resolve flag binding ...plantedRest in shared.ts',
+  ];
+  const plantHeld = isDeepStrictEqual(added.sort(), wanted.sort());
+  say(
+    'CLI127_EACH_FLAG_READ_BY_A_HANDLER_IS_DECLARED_AND_A_PLANTED_READ_IS_RED',
+    liveFaults.length === 0 && plantHeld,
+    probeDetail(liveFaults.length === 0 && plantHeld, [
+      ...liveFaults,
+      ...(plantHeld ? [] : [`planted read raised ${added.join('; ') || 'no faults'}`]),
+    ], `${live.reads.size} command/entry registrations inspected; the shared read is named by bench and check, and chainfit reports the shorthand and aliased flag keys and the unresolved rest binding`),
+    'flag reads can be reached through shared readers and can appear as object bindings; the audit checks the flag key from either path',
+  );
+}
+
 function runCliSuite(): number {
   console.log('\n── cli ergonomics (subprocess: bun cli.ts …) ──');
   let bad = 0;
@@ -68717,6 +68995,7 @@ function runCliSuite(): number {
   runStampControls(say);
   renderRunControls(say);
   linkedOutControls(say);
+  cliFlagControls(say);
 
   {
     const { status, stderr } = runCli(['init']);

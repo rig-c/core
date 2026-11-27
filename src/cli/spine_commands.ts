@@ -8,7 +8,7 @@
  * module (`SPINE_COMMAND_RUNS`); an entry that does not links nothing of the
  * runtime, and refuses these commands naming what each needs it for.
  */
-import { type BallotCandidateInput, type BallotInput, buildBallot, ledgerLineText, MAX_CANDIDATES, MIN_CANDIDATES, parseLedger, readBallotManifest, resultFilename, TIE, verifyResult, VOTE_RULES } from '../ballot.ts';
+import { type BallotCandidateInput, type BallotInput, buildBallot, ledgerLineText, parseLedger, readBallotManifest, resultFilename, TIE, verifyResult, VOTE_RULES } from '../ballot.ts';
 import { boneDistance, boneDistLines, type BoneDistReport } from '../bonedist.ts';
 import { IDENTITY_CORRESPONDENCE } from '../correspondence.ts';
 import { checkLines, type CheckReport } from '../check.ts';
@@ -21,7 +21,7 @@ import { atlasPagePath } from '../render_shared.ts';
 import { BoneDistError } from '../bonedist.ts';
 import { assertionCountForProfile, CLI_DEFAULT_PROFILE, reportLines, validate, type ValidateProfile } from '../validate.ts';
 import { failLine } from '../guide.ts';
-import { type CliRefusal, type CommandRun, DEFAULT_BALLOT, PACKAGE_ROOT, DEFAULT_LEDGER, parseJsonNamed, readAnimationFlag, readJsonFile, readPackageMeta, readSkeletonText, readVersion, resolveBuild, resolveCut, resolveViewable, runCheck, spinePairOf, type BuildGate, runBuild, readProfile, STAGELESS_FRAMING, UsageError, writeJson, modelTextBeside } from './shared.ts';
+import { type CliRefusal, type CommandRun, DEFAULT_BALLOT, PACKAGE_ROOT, DEFAULT_LEDGER, parseJsonNamed, readAnimationFlag, readJsonFile, readPackageMeta, readSkeletonText, readVersion, requireBallotCandidates, resolveBuild, resolveCut, resolveViewable, runCheck, spinePairOf, type BuildGate, runBuild, readProfile, STAGELESS_FRAMING, UsageError, writeJson, modelTextBeside } from './shared.ts';
 import { cmdRepack } from './repack.ts';
 import { spelledDir } from '../written_path.ts';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
@@ -173,16 +173,6 @@ function previewGate(skeletonPath: string, skeletonText: string, atlasText: stri
  * direction for the command whose whole job is "just show me".
  */
 export function cmdPreview(flags: Record<string, string>, candidates: string[]): void {
-  // Refused rather than ignored: a preview asked to hide `head` that plays the
-  // whole rig is a picture that answers a question it was not asked (issue #835).
-  for (const flag of ['slot', 'hide'] as const) {
-    if (flags[flag] !== undefined) {
-      throw new UsageError(
-        `preview takes no --${flag}: the Spine Web Player draws what the skeleton draws. A subset of the slots is ` +
-          `\`rigc render --${flag} ${flags[flag]}\`, on the whole rig's grid`,
-      );
-    }
-  }
   const several = candidates.length > 1;
   // `--atlas` names ONE atlas, and with several skeletons there is no
   // unambiguous thing it could mean — the refusal `vote` makes, for the reason
@@ -365,26 +355,7 @@ function commonAnimation(
 
 /** vote (ballot mode) — write the page a human opens. */
 function cmdVoteBallot(flags: Record<string, string>, candidates: string[]): void {
-  if (candidates.length < MIN_CANDIDATES) {
-    throw new UsageError(
-      `a ballot needs ${MIN_CANDIDATES}–${MAX_CANDIDATES} --candidate <dir | skeleton.json>, and ${candidates.length} ` +
-        'was given — one candidate on its own is `rigc preview`',
-    );
-  }
-  if (candidates.length > MAX_CANDIDATES) {
-    throw new UsageError(
-      `${candidates.length} candidates were given and a ballot holds at most ${MAX_CANDIDATES} — they go side by side ` +
-        'on one screen, and a comparison that needs scrolling is not a comparison',
-    );
-  }
-  // `--atlas` names ONE atlas and there are several skeletons here, so there is
-  // no unambiguous thing it could mean. Each candidate's atlas has to sit beside
-  // its skeleton, which is what `build --out` leaves behind.
-  if (flags.atlas !== undefined) {
-    throw new UsageError(
-      '--atlas names one atlas and a ballot has several candidates; each one\'s atlas has to sit beside its skeleton',
-    );
-  }
+  requireBallotCandidates(candidates.length);
 
   const loaded = candidates.map((target) => loadBallotCandidate(target));
   const animation = commonAnimation(flags, loaded);
@@ -482,13 +453,7 @@ function cmdVoteRecord(flags: Record<string, string>): void {
 
 export function cmdVote(flags: Record<string, string>, candidates: string[]): void {
   if (flags.record !== undefined) cmdVoteRecord(flags);
-  else if (candidates.length > 0) cmdVoteBallot(flags, candidates);
-  else {
-    throw new UsageError(
-      'vote takes either 2–4 --candidate <dir | skeleton.json> to write a ballot, or --record <result.json> to ' +
-        'record one that came back',
-    );
-  }
+  else cmdVoteBallot(flags, candidates);
 }
 
 /**

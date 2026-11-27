@@ -42,13 +42,14 @@ import { FOLDS_FILE, foldLine, foldsFileOf, foldsOf, foldsText, setupFaultLine }
 import { AngleRangeError, angleRangeLine, type AngleRangeReading, angleRangesOf, type BonePair, readBonePairs } from '../anglerange.ts';
 import { outsideLine, outsideViewport, pinnedRecord, readViewportBox, viewportOfFramesFile, ViewportError } from '../viewportpin.ts';
 import { PASS_THROUGH_FILE, passFrameLine, type PassPair, passSummaryLine, passThroughFileOf, passThroughOf, passThroughText, PassThroughError, readPassPairs } from '../passthrough.ts';
-import type { Plate } from '../../tools/plate.ts';
+import { encodePng, type Plate } from '../../tools/plate.ts';
+import { LOOP_SEAM_FILE, LOOP_WRAP_FILE, loopSampleFile, loopSeamPixels, type LoopSeamBar } from '../render_loop_seam.ts';
 import { OVERLAPS_FILE, OverlapError, overlapLine, overlapPlate, overlapsFileOf, overlapsOf, overlapsPlateFile, overlapsText, plateParticipants, staticLine } from '../overlaps.ts';
 import { buildSheetSet, SHEET_MANIFEST_FILE, type SheetSetPack, SheetUsageError, sheetRigNameOf, sheetSidecarRecord, sheetSourceOf } from '../sheet.ts';
 import { readSeamPairs, SEAM_FILE, seamFileOf, seamLine, SeamError, type SeamPair, seamsOf, seamText, setupCellReader } from '../seam.ts';
 import { environmentCollisions, environmentFrame, EnvironmentError, environmentResponse, readEnvironmentSchedule, type EnvironmentStep } from '../environment.ts';
 import { estimatePose, poseLines, type PoseOptions } from '../pose.ts';
-import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, FrameSetDirError, frameSetDirs, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, prerollStart, prerollWarmPoints, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
+import { BACKGROUND, contactSheet, type Frame, FRAMES_SIDECAR, FRAMES_SPEC, frameSetDir, FrameSetDirError, frameSetDirs, type FrameSet, type FramesSidecar, framingViewport, GEOMETRY_FILE, geometryFileOf, geometryText, loadCandidate, POSER_NAMES, type PoserName, prerollStart, prerollWarmPoints, PROTOCOL_FPS, refuseUnchosen, renderFrame, sampleAll, sampleAnimation, sampleLoopWrap, sampleSetupPose, SETUP_POSE_DIR, SHEET_FILE, SHEET_TILE, sidecarViewport, type SkeletonFacts, type SlotSubset, SlotSubsetError, throughPoser, type Viewport, viewportFor } from '../render_shared.ts';
 import { type CompileResult } from '../types.ts';
 import { attachmentRegionJoins } from '../region_joins.ts';
 import { cmdRepack } from './repack.ts';
@@ -534,6 +535,26 @@ function readPrerollFlag(flags: Record<string, string>): number | undefined {
   return value;
 }
 
+function readLoopSeamFlags(flags: Record<string, string>): { bar: LoopSeamBar; cap: number } | undefined {
+  const bar = flags['loop-seam-bar'];
+  const cap = flags['loop-seam-cap'];
+  if (bar === undefined && cap === undefined) return undefined;
+  if (bar === undefined || cap === undefined) throw new UsageError('--loop-seam-bar and --loop-seam-cap must be given together');
+  const match = /^(\d+),(\d+)$/.exec(bar);
+  const channelDelta = Number(match?.[1]);
+  const pixelsAbove = Number(match?.[2]);
+  if (channelDelta > 255 || !Number.isInteger(channelDelta) || !Number.isSafeInteger(pixelsAbove)) {
+    throw new UsageError(`--loop-seam-bar ${JSON.stringify(bar)}: expected <channel-delta,pixels>, with delta in 0..255 and a nonnegative safe integer pixel count`);
+  }
+  if (!/^\d+$/.test(cap) || !Number.isSafeInteger(Number(cap))) {
+    throw new UsageError(`--loop-seam-cap ${JSON.stringify(cap)}: expected a nonnegative safe integer number of loops`);
+  }
+  for (const flag of ['preroll', 'environment', 'parallax', 'extremes-only']) {
+    if (flags[flag] !== undefined) throw new UsageError(`--loop-seam-bar takes no --${flag}`);
+  }
+  return { bar: { channelDelta, pixelsAbove }, cap: Number(cap) };
+}
+
 /** The most steps a walk's step list holds: the longest array the language makes (`2^32 − 1`). */
 const WALK_STEPS_HELD = 2 ** 32 - 1;
 
@@ -728,6 +749,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
   // The pre-roll (issue #1684), read and refused as early, and refused beside a schedule: under a pre-roll a schedule's
   // `t` could be read on the recording's clock or on the walk's, the two give different physics, and nothing settles it.
   const preroll = readPrerollFlag(flags);
+  const loopSearch = readLoopSeamFlags(flags);
   if (flags.physics !== undefined && flags.physics !== 'on' && flags.physics !== 'off') throw new UsageError(`--physics ${JSON.stringify(flags.physics)}: required on or off`);
   const physicsMode = flags.physics === 'off' ? 'off' as const : undefined;
   if (preroll !== undefined && environment !== undefined) {
@@ -960,6 +982,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
   if (environment !== undefined && facts.animations.length === 0) {
     throw new UsageError(environmentRefusal(flags.environment, environment.steps, skeletonText, fps, []) ?? '');
   }
+  if (loopSearch !== undefined && facts.animations.length === 0) throw new UsageError('LOOP_SEAM_UNAVAILABLE: the skeleton has no animation');
   if (preroll !== undefined && facts.animations.length === 0) throw new UsageError(prerollRefusal(preroll, fps, [], physicsDeclared) ?? '');
 
   // Rigc's own core when the candidate is a rigc build, and spine-core
@@ -1032,6 +1055,66 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
       only === undefined
         ? sampleAll(poser, fps, sampling)
         : new Map([[only, sampleAnimation(poser, only, fps, sampling)]]);
+    const seamSamples = new Map<string, {
+      text: string;
+      first?: Uint8Array;
+      wrap?: Uint8Array;
+      selectedPreroll?: number;
+    }>();
+    if (!extremesOnly) {
+      const viewportRecord = sidecarViewport(viewport);
+      for (const [name, frames] of sampled) {
+        const period = poser.animations.find((animation) => animation.name === name)?.duration;
+        const identity = { spec: 'rigc-loop-seam/1', animation: period === undefined ? null : name, period: period ?? null, fps, viewport: viewportRecord };
+        if (period === undefined || period <= 0) {
+          const reason = period === undefined ? 'the skeleton has no animation' : 'the animation has no positive period';
+          if (loopSearch !== undefined) throw new UsageError(`LOOP_SEAM_UNAVAILABLE: ${JSON.stringify(name)}: ${reason}`);
+          seamSamples.set(name, { text: JSON.stringify({ ...identity, status: 'skip', reason }, null, 2) });
+          continue;
+        }
+        const from = preroll ?? 0;
+        const cap = loopSearch === undefined ? from : physicsDeclared.length === 0 || physicsMode === 'off' ? 0 : loopSearch.cap;
+        const gridEnd = (cap + 1) * period * fps;
+        const steps = gridEnd >= WALK_STEPS_HELD
+          ? Math.ceil(gridEnd)
+          : prerollWarmPoints(prerollStart(period, cap), fps) + Math.round(period * fps) + 1;
+        if (steps >= WALK_STEPS_HELD) throw new UsageError(`LOOP_SEAM_UNAVAILABLE: ${JSON.stringify(name)} would walk ${steps} steps at ${fps} fps, more than the step list holds`);
+        const series: Array<{ warmup: number } & ReturnType<typeof loopSeamPixels>> = [];
+        for (let warmup = from; warmup <= cap; warmup++) {
+          const take = warmup === from ? frames : sampleAnimation(poser, name, fps, { ...sampling, preroll: warmup });
+          const first = renderFrame(take[0], pages, viewport, BACKGROUND);
+          const sample = sampleLoopWrap(poser, name, period, fps, warmup, pose);
+          const wrap = renderFrame(sample, pages, viewport, BACKGROUND);
+          const figures = loopSeamPixels(first, wrap, loopSearch?.bar);
+          series.push({ warmup, ...figures });
+          if (loopSearch !== undefined && (figures.pixelsAbove ?? Infinity) > loopSearch.bar.pixelsAbove) continue;
+
+          const firstBytes = encodePng(first.width, first.height, first.data);
+          const setDir = frameSetDir(name, fps);
+          const report = {
+            ...identity,
+            status: loopSearch === undefined ? 'unjudged' : 'met',
+            warmup,
+            ...(loopSearch === undefined ? {} : { bar: loopSearch.bar, cap: loopSearch.cap }),
+            first: { time: 0, ...loopSampleFile(`${setDir}/f0000.png`, firstBytes) },
+            wrap: { time: period, encoding: 'rgba8-row-major', ...loopSampleFile(`${setDir}/${LOOP_WRAP_FILE}`, wrap.data) },
+            ...figures,
+            series,
+          };
+          sampled.set(name, take);
+          seamSamples.set(name, {
+            text: JSON.stringify(report, null, 2),
+            first: firstBytes,
+            wrap: wrap.data,
+            selectedPreroll: loopSearch !== undefined && warmup > 0 ? warmup : undefined,
+          });
+          break;
+        }
+        if (!seamSamples.has(name)) {
+          throw new UsageError(`LOOP_SEAM_BAR_UNMET: ${JSON.stringify(name)} at ${fps} fps, bar ${JSON.stringify(loopSearch?.bar)}, cap ${cap}, series ${JSON.stringify(series)}`);
+        }
+      }
+    }
     const extremeReadings = new Map<string, { reading: ReturnType<typeof extremesOf>; plate: Plate | null }>();
     if (extremes) {
       // Setup is an optional observation too: a failed extra read cannot turn a drawable set into a gate failure.
@@ -1068,7 +1151,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
     if (geometry) {
       for (const [name, frames] of sampled) {
         const animation = name === SETUP_POSE_DIR && facts.animations.length === 0 ? null : name;
-        geometryTexts.set(name, geometryText(geometryFileOf(poser, animation, fps, frames, viewport, skin, environment?.steps, preroll, physicsMode)));
+        geometryTexts.set(name, geometryText(geometryFileOf(poser, animation, fps, frames, viewport, skin, environment?.steps, preroll ?? seamSamples.get(name)?.selectedPreroll, physicsMode)));
       }
     }
     // The fold reading, off the very attachments the frames were drawn from, against the rest table the geometry
@@ -1200,7 +1283,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
               skin,
               subset,
               environment: environment?.steps,
-              preroll,
+              preroll: preroll ?? seamSamples.get(name)?.selectedPreroll,
               physicsMode,
               pinned,
             }),
@@ -1211,9 +1294,9 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
         }
       }
     }
-    return { viewport, fitted, sampled, extremeReadings, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks };
+    return { viewport, fitted, sampled, seamSamples, extremeReadings, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks };
   });
-  const { viewport, fitted, sampled, extremeReadings, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks } = posed.value;
+  const { viewport, fitted, sampled, seamSamples, extremeReadings, geometryTexts, foldReadings, passReadings, seamReadings, angleReadings, overlapReadings, sheetPacks } = posed.value;
   console.log(`  ..    poser    ${posed.note}`);
   if (environment !== undefined) {
     const response = environmentResponse(skeletonText);
@@ -1279,8 +1362,16 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
     // are indistinguishable from real ones.
     if (existsSync(dir)) rmSync(dir, { recursive: true });
     mkdirSync(dir, { recursive: true });
+    const seamSample = seamSamples.get(name);
     for (let i = 0; i < frames.length; i++) {
-      renderFrame(frames[i], pages, viewport, BACKGROUND).writePng(join(dir, `f${String(i).padStart(4, '0')}.png`));
+      const file = join(dir, `f${String(i).padStart(4, '0')}.png`);
+      if (i === 0 && seamSample?.first !== undefined) writeFileSync(file, seamSample.first);
+      else renderFrame(frames[i], pages, viewport, BACKGROUND).writePng(file);
+    }
+    if (seamSample !== undefined) {
+      if (seamSample.wrap !== undefined) writeFileSync(join(dir, LOOP_WRAP_FILE), seamSample.wrap);
+      else console.log(`  ..    LOOP_SEAM_UNAVAILABLE: ${JSON.stringify(name)} SKIP (see ${LOOP_SEAM_FILE})`);
+      writeFileSync(join(dir, LOOP_SEAM_FILE), `${seamSample.text}\n`);
     }
     // One frame has nothing to compare itself against, so it gets no sheet — it
     // would be the same picture with a border and a "0" on it.
@@ -1324,6 +1415,7 @@ export function cmdRender(flags: Record<string, string>, record?: { raw: readonl
       written: frames.length,
       stride: 1,
       duration,
+      ...(seamSample?.selectedPreroll === undefined ? {} : { preroll: seamSample.selectedPreroll }),
       ...(physics === undefined ? {} : { physics: { stepped: physics.stepped.length, fps } }),
       ...(overlapReading === undefined ? {} : { overlaps: overlapsRecord(overlapReading.file, overlapReading.plates.size) }),
       ...(sheetPack === undefined ? {} : { sheet: sheetSidecarRecord(sheetPack) }),

@@ -125300,8 +125300,13 @@ function runRenderEnvironmentSuite(): number {
       let pngs = 0;
       if (a.status !== 0 || b.status !== 0) probes.push(`the renders exited ${String(a.status)} and ${String(b.status)}`);
       else {
-        const fa = files(stated);
-        if (bits(fa) !== bits(files(bare))) probes.push('the two renders wrote different files');
+        const takeFiles = (dir: string): string[] => files(dir).filter((f) => !f.endsWith('/loop-seam.json') && !f.endsWith('/loop-wrap.rgba'));
+        const fa = takeFiles(stated);
+        if (bits(fa) !== bits(takeFiles(bare))) probes.push('the two renders wrote different take files');
+        const observations = files(stated).filter((f) => f.endsWith('/loop-seam.json') || f.endsWith('/loop-wrap.rgba'));
+        if (observations.length === 0 || observations.some((f) => !existsSync(join(bare, f)) || !readFileSync(join(stated, f)).equals(readFileSync(join(bare, f))))) {
+          probes.push('stating the runtime world changed the loop seam observation');
+        }
         for (const f of fa) {
           if (f.endsWith('.png')) {
             pngs++;
@@ -125479,9 +125484,13 @@ function runRenderPrerollSuite(): number {
     'PRE07_ON_A_LOOP_SHORT_OF_OR_PAST_WHOLE_FRAMES_THE_LOOP_RECORDED_IS_LOOP_N_PLUS_1_OF_THE_PLAIN_LOOPING_WALK',
     'PRE08_AFTER_TEN_LOOPS_THE_LOOP_RECORDED_CLOSES_ITS_PHYSICS_SEAM_AND_THE_SHORT_LANDING_DOES_NOT',
     'PRE09_THE_SHORT_LANDING_STEP_RESTORED_ON_THE_CORE_IS_RED_IN_PRE07S_READING_BY_NAME',
+    'PRE10_THE_OFF_GRID_LOOP_SEAM_REPORT_BINDS_THE_EMITTED_RGBA_ON_BOTH_POSERS',
+    'PRE11_THE_DECLARED_LOOP_SEAM_BAR_SELECTS_THE_FIRST_WARMUP_AND_REFUSES_AN_UNMET_CAP',
+    'PRE12_A_ZERO_PHYSICS_LOOP_IS_MEASURED_ONCE_AND_EXPLICIT_PREROLL_STAYS_REFUSED',
   ];
   const ORIGIN = 'issue #1684: a looping idle rendered from rest shows its physics starting from rest at every wrap; the render reaches the walk a player\'s looping track takes, and the export\'s walk has to be the core\'s';
   const LANDING = 'issue #1687: on a loop whose duration is a float32 a hair off a whole number of frames, the step onto the wrap moved the physics clock by its own short length, a physics step was dropped, and the loop recorded started a fresh transient instead of continuing the settled cycle';
+  let noPhysicsBuild: string | undefined;
   const FPS = PROTOCOL_FPS;
   const PREROLL = 2;
   const bits = (x: unknown): string => JSON.stringify(x, (_k, v: unknown) => (typeof v === 'number' ? (Object.is(v, -0) ? '-0' : String(v)) : v));
@@ -125818,6 +125827,7 @@ function runRenderPrerollSuite(): number {
           probes.push(`${label}: the probe did not build (exit ${String(built.status)}): ${built.stderr.trim().split('\n').slice(-1)[0] ?? ''}`);
           continue;
         }
+        if (label === 'a skeleton with no physics constraint') noPhysicsBuild = join(dir, 'build');
         refusedWith(label, join(dir, 'build'), ['--preroll', '1', ...args], says);
       }
       // The sampler's own backstops, for a caller that is not the CLI.
@@ -126026,6 +126036,109 @@ function runRenderPrerollSuite(): number {
         { name: 'step_over', fps: 30, short: false },
       ];
       const LOOPS = [2, 10];
+      // At 13 fps the last ordinary breath frame is farther than a float32
+      // rounding error from the wrap. Read the report against written bytes.
+      {
+        interface SeamRow { warmup: number; differingPixels: number; maxChannelDelta: number; pixelsAbove?: number }
+        interface Report extends SeamRow {
+          status: string;
+          period: number;
+          first: { path: string; sha256: string; time: number };
+          wrap: { path: string; sha256: string; time: number };
+          series: SeamRow[];
+        }
+        const fps = 13;
+        const setDir = frameSetDir('breath', fps);
+        const viewport = ['--viewport', '0,0,256,256', '--max', '128'];
+        const period = core().animations.find((animation) => animation.name === 'breath')?.duration;
+        const faults: string[] = [];
+        const gateFaults: string[] = [];
+        const figures = (a: Uint8Array, b: Uint8Array): [number, number] => {
+          let count = 0;
+          let largest = 0;
+          for (let i = 0; i < a.length; i += 4) {
+            const delta = Math.max(...[0, 1, 2, 3].map((offset) => Math.abs(a[i + offset] - b[i + offset])));
+            if (delta > 0) count++;
+            largest = Math.max(largest, delta);
+          }
+          return [count, largest];
+        };
+        const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+        const inspect = (report: Report, out: string, warmup: number): string[] => {
+          const found: string[] = [];
+          const first = readFileSync(join(out, report.first.path));
+          const wrap = readFileSync(join(out, report.wrap.path));
+          const decoded = decodePng(first);
+          const grid = JSON.parse(readFileSync(join(out, 'frames.json'), 'utf8')) as FramesSidecar;
+          const set = grid.sets[0];
+          const last = decodePng(readFileSync(join(out, setDir, `f${String(set.written - 1).padStart(4, '0')}.png`)));
+          if (report.period !== period || report.wrap.time !== period || report.first.time !== 0 || set.duration === period ||
+              set.written !== Math.round(report.period * fps) + 1 || report.wrap.path.endsWith('.png')) found.push('sample times or take grid');
+          if (report.first.path !== `${setDir}/f0000.png` || report.first.sha256 !== digest(first) || report.wrap.sha256 !== digest(wrap)) found.push('paths or hashes');
+          if (decoded.data.length !== wrap.length || bits(figures(decoded.data, wrap)) !== bits([report.differingPixels, report.maxChannelDelta])) found.push('decoded RGBA figures');
+          if (warmup > 0 && figures(last.data, wrap)[0] === 0) found.push('the rounded warm last frame can stand in for the wrap');
+          if (report.warmup !== warmup || !report.series.some((row) => row.warmup === warmup && row.differingPixels === report.differingPixels && row.maxChannelDelta === report.maxChannelDelta)) found.push('warm-up row');
+          return found;
+        };
+        const sweep: Array<{ poser: string; series: SeamRow[] }> = [];
+        for (const poser of ['core', 'spine']) {
+          const render = (out: string, flags: string[]): ReturnType<typeof runCli> => runCli(['render', '--candidate', probe.outDir, '--animation', 'breath', '--fps', String(fps), ...viewport, '--poser', poser, '--out', out, ...flags]);
+          const reportAt = (out: string): Report => JSON.parse(readFileSync(join(out, setDir, 'loop-seam.json'), 'utf8')) as Report;
+          const series: SeamRow[] = [];
+          for (let warmup = 0; warmup <= 4; warmup++) {
+            const out = join(work, `seam-${poser}-${warmup}`);
+            const result = render(out, warmup === 0 ? [] : ['--preroll', String(warmup)]);
+            if (result.status !== 0) {
+              faults.push(`${poser} warm-up ${warmup}: ${result.status}, ${result.stderr.trim()}`);
+              continue;
+            }
+            const report = reportAt(out);
+            const readings = inspect(report, out, warmup);
+            if (report.status !== 'unjudged' || report.series.length !== 1 || /^.*LOOP_SEAM.*PASS/im.test(result.stdout)) readings.push('undeclared bar was judged');
+            if (!inspect({ ...report, wrap: { ...report.wrap, time: Math.round(report.period * fps) / fps, sha256: '0'.repeat(64) } }, out, warmup).includes('sample times or take grid') ||
+                !inspect({ ...report, first: { ...report.first, sha256: '0'.repeat(64) } }, out, warmup).includes('paths or hashes')) readings.push('report mutant escaped');
+            faults.push(...readings.map((reading) => `${poser}/${warmup}: ${reading}`));
+            series.push(report.series[0]);
+          }
+          sweep.push({ poser, series });
+          const allowed = series[1]?.differingPixels ?? -1;
+          const bar = `0,${allowed}`;
+          const cap = 4;
+          const chosen = join(work, `seam-chosen-${poser}`);
+          const accepted = render(chosen, ['--loop-seam-bar', bar, '--loop-seam-cap', String(cap)]);
+          if (accepted.status !== 0) gateFaults.push(`${poser}: accepted render exited ${accepted.status}: ${accepted.stderr.trim()}`);
+          else {
+            const report = reportAt(chosen);
+            const match = (r: Report): boolean => r.status === 'met' && r.warmup === 1 &&
+              bits(r.series) === bits(series.slice(0, 2).map((row) => ({ ...row, pixelsAbove: row.differingPixels })));
+            const check = runCli(['check', '--candidate', probe.outDir, '--frames', chosen]);
+            if (check.status === 0 || !check.stderr.includes('selected by --loop-seam-bar')) gateFaults.push(`${poser}: check accepted selected warm frames`);
+            if (!match(report) || match({ ...report, warmup: cap }) || inspect(report, chosen, 1).length > 0 ||
+                !series.slice(2).some((row) => row.differingPixels <= allowed)) gateFaults.push(`${poser}: first of several passing counts was not selected`);
+          }
+          const rejected = join(work, `seam-rejected-${poser}`);
+          const rejectedResult = render(rejected, ['--loop-seam-bar', '0,0', '--loop-seam-cap', String(cap)]);
+          const seriesText = JSON.stringify(series.map((row) => ({ ...row, pixelsAbove: row.differingPixels })));
+          const rejectedWithSeries = (result: typeof rejectedResult): boolean => result.status === 2 &&
+            result.stderr.includes('LOOP_SEAM_BAR_UNMET') && result.stderr.includes(seriesText);
+          if (!rejectedWithSeries(rejectedResult) || rejectedWithSeries({ ...rejectedResult, status: 0 }) || existsSync(rejected)) {
+            gateFaults.push(`${poser}: unmet cap did not refuse with its measured series: ${rejectedResult.status}, ${rejectedResult.stderr.trim()}`);
+          }
+        }
+        if (sweep.some(({ series }) => series.length !== 5) || bits(sweep[0].series) !== bits(sweep[1].series)) faults.push('series differ between posers');
+        say(names[9], faults.length === 0, probeDetail(faults.length === 0, faults, `breath at ${fps} fps, period=${period}: ${JSON.stringify(sweep)}; mismatched wrap time and first hash rejected`), 'the exact wrap is a separate observation bound to the emitted first PNG and raw RGBA');
+        say(names[10], gateFaults.length === 0, probeDetail(gateFaults.length === 0, gateFaults, 'both posers select loop 1 using its measured pixel count with cap 4; check refuses the warm take; 0,0 exits 2 with five measured rows; plants reporting the cap as the winner or returning exit 0 for an unmet bar are red'), 'the caller owns the bar and first satisfaction settles the search');
+      }
+      {
+        const out = join(work, 'seam-no-physics-out');
+        const rendered = noPhysicsBuild === undefined ? null : runCli(['render', '--candidate', noPhysicsBuild, '--max', '64', '--out', out, '--loop-seam-bar', '0,0', '--loop-seam-cap', '4']);
+        const reports = rendered?.status === 0 ? files(out).filter((file) => file.endsWith('/loop-seam.json')).map((file) => JSON.parse(readFileSync(join(out, file), 'utf8')) as { warmup: number; status: string; differingPixels: number; series: unknown[] }) : [];
+        const refused = noPhysicsBuild === undefined ? null : runCli(['render', '--candidate', noPhysicsBuild, '--out', out, '--preroll', '1']);
+        const atRest = (r: typeof reports[number]): boolean => r.warmup === 0 && r.status === 'met' && r.differingPixels === 0 && r.series.length === 1;
+        const ok = reports.length > 0 && reports.every(atRest) && !atRest({ ...reports[0], warmup: 1 }) &&
+          refused?.status === 2 && refused.stderr.includes('declares no physics constraint');
+        say(names[11], ok, `render=${rendered?.status}, explicit preroll=${refused?.status}, ${reports.length} measured set(s): ${JSON.stringify(reports.map(({ warmup, status, series }) => ({ warmup, status, series })))}`, 'a no-physics candidate has no carried physics to warm');
+      }
       // PRE07's reading, on one pair of posers — the unplanted pair, or the planted core against itself (PRE09).
       const landing = (posers: Array<[string, () => Poser]>): { probes: string[]; rows: string[]; compared: number } => {
         const probes: string[] = [];

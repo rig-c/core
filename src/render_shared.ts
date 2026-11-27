@@ -274,6 +274,8 @@ export interface FrameSet {
    * file could only ever be the stale one.
    */
   duration: number;
+  /** Whole warm-up loops selected for this set by the loop-seam bar. */
+  preroll?: number;
   /**
    * Whether the physics ran while these frames were posed (issue #1467): how
    * many physics constraints the poser stepped on at least one frame of this
@@ -1494,6 +1496,35 @@ export function prerollTimes(duration: number, fps: number, preroll: number): { 
   const clock = times.slice(1).map((t, i) => t - times[i]);
   if (first > 0) clock[first - 1] = Math.round(start * fps) / fps - times[first - 1];
   return { times, first, clock };
+}
+
+/** Sample the separate wrap observation without inserting a step into the take. */
+export function sampleLoopWrap(poser: Poser, name: string, duration: number, fps: number, warmup: number, opts?: PoseOptions): Frame {
+  const { times, first, clock } = prerollTimes(duration, fps, warmup);
+  const end = prerollStart(duration, warmup + 1);
+  if (times.length > first + 1 && times[times.length - 1] >= end) {
+    times.pop();
+    clock.pop();
+  }
+  // Advance the physics to the corresponding point of the recorded grid.
+  // The track itself advances to the period boundary, even off that grid.
+  const gridSteps = times.length - 1 - first;
+  clock.push((Math.round(duration * fps) - gridSteps) / fps);
+  const prior = times[times.length - 1];
+  times.push(end);
+  let wrap: Frame | undefined;
+  const last = times.length - 1;
+  // A schedule accompanies only the cold observation. The intermediate poses
+  // still use the take's grid; the last step sees the world at the exact wrap.
+  const schedule = opts?.environment;
+  const onGrid = schedule === undefined ? undefined : environmentAt(schedule, fps);
+  const atWrap = schedule?.find((step) => step.t > prior && step.t <= end);
+  const environment = onGrid === undefined ? undefined : (i: number) => i === last ? atWrap : onGrid(i);
+  poser.animation(name, opts?.skin, fps, last, (i, posed) => {
+    if (i === last) wrap = frameOf(i, duration, posed, drawResolver(poser, opts)(), opts);
+  }, environment, undefined, times, true, clock, opts?.physicsMode);
+  if (wrap === undefined) throw new Error(`LOOP_SEAM_UNAVAILABLE: ${JSON.stringify(name)} did not pose its wrap`);
+  return wrap;
 }
 
 /**

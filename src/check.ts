@@ -1303,6 +1303,10 @@ export function checkAgainstFrames(options: CheckOptions): CheckReport {
   }
   // A frame set drawn after a pre-roll (`render --preroll`, issue #1684) shows the physics warm; check poses the
   // candidate from rest, so the score would be a number about the difference between a warm loop and a cold one.
+  const searchedPreroll = located.sidecar?.sets?.find((set) => set.preroll !== undefined && (located.only.length === 0 || located.only.includes(set.dir)));
+  if (searchedPreroll !== undefined) {
+    throw new CheckError(`${FRAMES_SIDECAR} records that ${JSON.stringify(searchedPreroll.dir)} was rendered after ${searchedPreroll.preroll} warm-up loop(s) selected by --loop-seam-bar. Render the reference from rest.`);
+  }
   const referencePreroll = located.sidecar?.preroll;
   if (referencePreroll !== undefined) {
     throw new CheckError(

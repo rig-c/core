@@ -706,7 +706,7 @@ Installs under the `rig-c` and `spine-rigc` aliases carry the same map, so
 | `./mesh` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
 | `./errors` | [#1212](https://github.com/rig-c/core/issues/1212) | nothing |
 | `./meshcompare` | [#1230](https://github.com/rig-c/core/issues/1230), [#1595](https://github.com/rig-c/core/issues/1595), by agreement | nothing |
-| `./core` | [#1275](https://github.com/rig-c/core/issues/1275) | nothing |
+| `./core` | [#1275](https://github.com/rig-c/core/issues/1275); `f32` for rig-play’s scene camera ([#1795](https://github.com/rig-c/core/issues/1795)) | nothing |
 | `./runtime` | [#1591](https://github.com/rig-c/core/issues/1591), requested for play#200 — **experimental, not promised until it stabilises** | nothing |
 | `./cli` | [#859](https://github.com/rig-c/core/issues/859) | resolved and spawned rather than imported; which entry it runs is the table in *What an install has* above |
 | `./package.json` | [#859](https://github.com/rig-c/core/issues/859) | nothing |
@@ -1179,14 +1179,15 @@ from the install and calls `readModel` then `poseRawSetup` on the build it
 just wrote (`SMOKE_CORE_POSES_FROM_AN_INSTALL_WITH_NO_SPINE_CORE`: the
 fixture's bones in order, the `hand` bone's world matrix with determinant 1,
 and `readModel("{}")` refused as the `CoreInputError` the entry exports). Then
-it bundles `import { readModel, poseRawSetup } from '@rig-c/core/core'` with vite —
+it bundles the same entry with vite —
 library mode, one entry, the browser build vite makes by default, no node
 polyfill, at the version this tree's `bun.lock` resolves, installed into a
 directory of its own and never into the install — and runs **the bundle**
 under Bun with `globalThis.document` undefined on the same document, holding
 every bone it poses to the direct import's
 (`SMOKE_CORE_BUNDLES_FOR_A_BROWSER_WITH_NO_NODE_MODULE`; its line prints the
-vite version, the bundle's bytes and the `hand` matrix). ⚠️ The bundle
+vite version, the bundle's bytes and the `hand` matrix). Both probes call
+`f32` on an exact decimal tie and on negative zero. ⚠️ The bundle
 carrying the string `node:` zero times is checked and is **not sufficient**,
 measured: vite replaces a node builtin it meets in a browser build with an
 empty module and only warns, so a core module importing `node:fs` — even
@@ -1195,10 +1196,11 @@ So the config the smoke writes refuses every node builtin at resolution, by
 name (`NODE_MODULE_REACHED`), and the warning is a fault as well; the
 `import-node-in-core` plant puts an import of `node:fs` at the top of the
 packed `src/core/index.ts` and has to go red at that step alone. In a clone,
-`CUR123` holds the entry's static closure: every module it reaches by value is
-under `src/core/`, none names a package or a node builtin by value, and the
-one module outside `src/core/` it names is `src/model.ts`, as a type — that
-module imports `node:crypto`, and a type import is erased. The adapter in
+`CUR123` holds the entry's static closure. Its value modules live under
+`src/core/` plus `src/errors.ts`, which supplies the compiler's error class to
+`f32` and has only a type import. None names a package or a node builtin by
+value. The core reaches `src/model.ts` only as a type, which the bundler
+erases. The adapter in
 `src/render_core.ts` (`corePosed`, `pieces`, `clipCover`, `placementOf`)
 reaches `src/atlas.ts` and `src/model.ts` by value and is not on this entry.
 

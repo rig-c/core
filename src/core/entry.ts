@@ -8,10 +8,9 @@
  * the observed list, so the core's files keep their names and may move: the
  * entry moves with them, and a symbol leaves only as a breaking change.
  *
- * 🔒 It re-exports and does nothing else. What it reaches by value is the
- * core and nothing outside `src/core/` — the core links no `node:` module and
- * no runtime, and its imports of `../model.ts` are type imports — so a bundler
- * targeting a browser takes this entry's closure without a node polyfill.
+ * 🔒 It re-exports and does nothing else. Its value imports reach the core
+ * and the dependency-free compiler error classes used by `f32`. It links no
+ * `node:` module or runtime, and its imports of `../model.ts` are type-only.
  * `CUR123` holds the closure, by name; the install smoke bundles it for a
  * browser and holds the bundle to zero `node:` strings.
  *
@@ -27,7 +26,8 @@
  * `CA12` holds the identity; `readSetupMesh`, issue #1538, the named setup
  * geometry read requested by the player, with `SetupMesh` and `SetupMeshTarget`;
  * `PhysicsParameters`, `PhysicsParameterPatch`, `PhysicsParameterRead`, the live
- * named constraint overrides requested on issue #1541).
+ * named constraint overrides requested on issue #1541; `f32`, used by
+ * rig-play's scene camera, issue #1795).
  * The list is `scripts/install_smoke.ts`'s `OBSERVED_SYMBOLS` rows for
  * `./core`, and a symbol added here and not there is not promised.
  */
@@ -50,3 +50,4 @@ export { eventsFired } from './events.ts';
 export { bezierPolyline, BEZIER_PIECES, IRR_OFFSET } from './animation.ts';
 export type { ModelPage, ModelPageRegion } from '../model.ts';
 export { RUNTIME_PI } from './world.ts';
+export { f32 } from './float32.ts';

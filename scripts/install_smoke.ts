@@ -704,6 +704,7 @@ const OBSERVED_SYMBOLS: ObservedEntry[] = [
   { entry: './core', observed: REQUESTED_IN_1417, needsRuntime: false, values: { bezierPolyline: 'function', BEZIER_PIECES: 'constant' }, types: [] },
   { entry: './core', observed: REQUESTED_IN_1538, needsRuntime: false, values: { readSetupMesh: 'function' }, types: ['SetupMesh', 'SetupMeshTarget'] },
   { entry: './core', observed: REQUESTED_IN_1541, needsRuntime: false, values: {}, types: ['PhysicsParameters', 'PhysicsParameterPatch', 'PhysicsParameterRead'] },
+  { entry: './core', observed: 'rig-play scene camera float32 storage, issue #1795', needsRuntime: false, values: { f32: 'function' }, types: [] },
 ];
 
 /**
@@ -1522,6 +1523,13 @@ if (core && (typeof core.readModel !== 'function' || typeof core.poseRawSetup !=
   core = null;
 }
 if (core) {
+  try {
+    if (!Object.is(core.f32(-1897.40625), -1897.4062) || !Object.is(core.f32(-0), 0)) {
+      said('f32 must choose the even last digit at a decimal tie and return positive zero for negative zero');
+    }
+  } catch (e) {
+    said('f32 on a decimal tie and negative zero threw ' + why(e));
+  }
   const text = readFileSync(join(HERE, plan.model), 'utf8');
   try {
     const view = core.readModel(text);
@@ -1651,9 +1659,9 @@ for (const line of bad) console.log('CORE_BAD ' + line);
 process.exit(bad.length === 0 && core !== null ? 0 : 1);
 `;
 
-/** The one file vite bundles: the two calls a player makes, through the entry, by its bare name. */
-const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup, readSetupMesh, openTrack, openTracks, CoreInputError } from '${NAME}/core';
-export const core = { readModel, poseRawSetup, readSetupMesh, openTrack, openTracks, CoreInputError };
+/** The one file vite bundles: the player calls, through the entry, by its bare name. */
+const BROWSER_ENTRY_SOURCE = `import { readModel, poseRawSetup, readSetupMesh, openTrack, openTracks, CoreInputError, f32 } from '${NAME}/core';
+export const core = { readModel, poseRawSetup, readSetupMesh, openTrack, openTracks, CoreInputError, f32 };
 `;
 
 /**
@@ -3092,7 +3100,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
       if (direct.status !== 0 || posed.matrix === undefined) {
         if (posed.bad.length === 0) fault(CORE_POSE_STEP, `${CORE_POSE_CASE}: the pose probe ${childExit(direct)} without a verdict. ${direct.out.trim().slice(0, 2000)}`);
       } else {
-        notes.push(`without ${RUNTIME}: ${CORE_POSE_CASE} — readModel then poseRawSetup through ${NAME}/core posed ${RIG_SPEC.bones.length} bone(s); ${CORE_PROBE_BONE} ${posed.matrix}`);
+        notes.push(`without ${RUNTIME}: ${CORE_POSE_CASE} — readModel then poseRawSetup through ${NAME}/core posed ${RIG_SPEC.bones.length} bone(s); ${CORE_PROBE_BONE} ${posed.matrix}; f32 held the decimal tie and signed zero`);
       }
 
       // The browser bundle.
@@ -3127,7 +3135,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, typecheckedCases: 
             fault(CORE_BROWSER_STEP, `${CORE_BROWSER_CASE}: the bundle posed the bones ${fromBundle.bones.slice(0, 600)} and ${NAME}/core imported directly posed ${posed.bones.slice(0, 600)}; the same numbers were required`);
           } else if (nodeStrings === 0) {
             notes.push(
-              `without ${RUNTIME}: ${CORE_BROWSER_CASE} — vite ${tool.version} bundled ${NAME}/core for a browser (library mode, ${modules} module(s) transformed, no node builtin resolved) into ${statSync(bundle).size} byte(s) carrying "node:" 0 times; run under Bun with globalThis.document undefined it posed ${CORE_PROBE_BONE} ${fromBundle.matrix ?? ''}, every bone identical to the direct import's`,
+              `without ${RUNTIME}: ${CORE_BROWSER_CASE} — vite ${tool.version} bundled ${NAME}/core for a browser (library mode, ${modules} module(s) transformed, no node builtin resolved) into ${statSync(bundle).size} byte(s) carrying "node:" 0 times; run under Bun with globalThis.document undefined it posed ${CORE_PROBE_BONE} ${fromBundle.matrix ?? ''}, every bone identical to the direct import's; f32 held the decimal tie and signed zero`,
             );
           }
         }

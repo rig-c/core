@@ -84532,10 +84532,11 @@ function runCurrencySuite(): number {
     // CUR123 — the entry a browser player links reaches only the core (issue #1275).
     //
     // `rig-c/core` is promised to bundle for a browser with no node polyfill, and
-    // what makes that true is a property of the entry's static closure: every
-    // module it reaches by value is under src/core/, no module in it names a
-    // package or a node builtin by value, and the one place it leaves src/core/ is
-    // a TYPE import of src/model.ts, which a bundler erases — model.ts itself
+    // what makes that true is a property of the entry's static closure: its value
+    // modules live under src/core/ plus src/errors.ts, the shared compiler
+    // error class f32 can throw. The error module may name only the DroppedState
+    // type from src/types.ts. The core may name src/model.ts as a type, which
+    // a bundler erases — model.ts itself
     // imports `node:crypto`, so a value import of it would carry node into the
     // browser. The same closure walk as CUR113, from a smaller root, over src/
     // read off the disk (a file not yet committed included). The install smoke
@@ -84546,6 +84547,7 @@ function runCurrencySuite(): number {
       const target = exportsMap['./core'];
       const entry = target === undefined ? '' : target.replace(/^\.\//, '');
       const TYPE_EXCEPTION = 'src/model.ts';
+      const ERROR_LEAF = 'src/errors.ts';
       const corePopulation = srcPopulation(root);
       const closureFaults = (pop: ReadonlyMap<string, string>): { modules: string[]; typeOnly: string[]; faults: string[] } => {
         const faults: string[] = [];
@@ -84562,15 +84564,18 @@ function runCurrencySuite(): number {
         faults.push(...closure.problems);
         const typeOnly = new Set<string>();
         for (const module of closure.modules) {
-          if (!module.startsWith('src/core/')) faults.push(`🔒 ${module} is outside src/core/ and ./core reaches it by value: ${chain(module)}`);
+          if (module !== ERROR_LEAF && !module.startsWith('src/core/')) faults.push(`🔒 ${module} is outside src/core/ and ./core reaches it by value: ${chain(module)}`);
           for (const { spec, typeOnly: isType } of specifiersOf(codeOnly(pop.get(module) ?? ''))) {
+            if (module === ERROR_LEAF && (!isType || spec !== './types.ts')) {
+              faults.push(`${ERROR_LEAF} links "${spec}", and the browser entry requires it to be a value leaf`);
+            }
             if (!spec.startsWith('.')) {
               if (!isType) faults.push(`🔒 ${module} imports "${spec}" by value, and ./core reaches it: ${chain(module)}`);
               continue;
             }
             if (!isType) continue;
             const reached = join(dirname(module), spec).split('\\').join('/');
-            if (reached.startsWith('src/core/')) continue;
+            if (reached.startsWith('src/core/') || (module === ERROR_LEAF && reached === 'src/types.ts')) continue;
             typeOnly.add(reached);
             if (reached !== TYPE_EXCEPTION) faults.push(`${module} type-imports ${reached}, and the one module outside src/core/ the entry's closure may name, as a type, is ${TYPE_EXCEPTION}`);
           }
@@ -84596,6 +84601,10 @@ function runCurrencySuite(): number {
           else caught123.push(label);
         }
       }
+      const leafPlant = closureFaults(plantedInto(corePopulation, ERROR_LEAF, "import { f32 } from './core/float32.ts';"));
+      if (!leafPlant.faults.some((fault) => fault.includes('requires it to be a value leaf'))) {
+        probes123.push('the error leaf accepted a value edge back into the core');
+      }
       const held123 = probes123.length === 0 && live123.modules.length > 1;
       say(
         'CUR123_THE_CORE_ENTRY_REACHES_ONLY_THE_CORE_BY_VALUE_AND_MODEL_TS_ONLY_AS_A_TYPE',
@@ -84603,8 +84612,8 @@ function runCurrencySuite(): number {
         probeDetail(
           held123,
           probes123,
-          `./core is ${entry}; its static value closure over src/ read off the disk is ${live123.modules.length} module(s), every one under src/core/ [${live123.modules.join(', ')}], none importing a package or a node builtin by value; ` +
-            `outside src/core/ it names only [${live123.typeOnly.join(', ')}], as a type; planted in ${member123 ?? '(none)'}, ${caught123.length} of ${plants123.length} are named — ${caught123.join('; ')}`,
+          `./core is ${entry}; its static value closure over src/ read off the disk is ${live123.modules.length} module(s), under src/core/ or the compiler error leaf [${live123.modules.join(', ')}], none importing a package or a node builtin by value; ` +
+            `outside the core and the error leaf it names [${live123.typeOnly.join(', ')}], as a type; planted in ${member123 ?? '(none)'}, ${caught123.length} of ${plants123.length} are named — ${caught123.join('; ')}; error leaf value-import plant refused`,
         ),
         'issue #1275: rig-c/core is the entry a runtime-free web player bundles for a browser, so it may reach nothing a browser lacks — src/model.ts imports node:crypto and is admitted only as a type, which the bundler erases; the install smoke bundles it and this names the module that would break that before a pack',
       );
@@ -96712,7 +96721,7 @@ import type { FramingSets, MakeCorePoser } from './src/render_shared.ts';
 import { animationCensusOf, animationReachLines, attachmentReachLines, buildRecipes, CLIPPED_CENSUS_FIELDS, clippedReachLines, GATE_BLOCKS, REMAINDER_CENSUS_BLOCKS, timelineKindLines, type GateBlock, censusOf, CONSTRAINT_CENSUS_FIELDS, constraintCensusOf, constraintKindLines, constraintReachLines, GATE_OPTIONS, gateBuild, gateBuilt, gateVerdict, PATH_CENSUS_FIELDS, pathCensusOf, pathReachLines, reachLines, slotCensusOf, slotReachLines, STEPPED_CENSUS_FIELDS, STEPPED_OPTIONS, steppedCensusOf, steppedReachLines, type AnimationCensusField, type BuiltRow, type ConstraintCensusField, type PathCensusField, type SteppedCensusField } from './tools/core_gate.ts';
 import { BEZIER_SIXTH, bezierPolyline, BONE_TIMELINE_KINDS, channelAt, keyIndexAt, posedBoneRows, sampleTime, SLOT_TIMELINE_KINDS, type ChannelEvaluator, type SamplePhase, type TimelinePlant } from './src/core/animation.ts';
 // The core entry's Bézier evaluation (issue #1417), its own statement so CA12 lands as one hunk.
-import { bezierPolyline as entryBezierPolyline, BEZIER_PIECES as ENTRY_BEZIER_PIECES } from './src/core/entry.ts';
+import { bezierPolyline as entryBezierPolyline, BEZIER_PIECES as ENTRY_BEZIER_PIECES, f32 as entryF32 } from './src/core/entry.ts';
 import { BEZIER_PIECES } from './src/core/animation.ts';
 import { attachmentStates, DEFORM_CURVE_END, deformAt, deformPercent, heldArray, SEQUENCE_MODES as CORE_SEQUENCE_MODES, sequenceFrameAt, type CoreDeformKey } from './src/core/deform.ts';
 import { drawOrderAt } from './src/core/draw_order.ts';
@@ -121269,6 +121278,75 @@ function runModelDocumentSuite(): { failures: number; gateHole: boolean } {
       probeDetail(ok, probes, `the unplanted document read; refused by path: ${read.join(', ')}`),
       'a digest the reader accepted in any spelling would be a binding the render could not trust, and a missing one would have to be read as "any file" — the silence the digest exists to remove',
     );
+  }
+
+  // MD12: compare the public spelling with the compiler helper, the compiled
+  // bone coordinates and literal expectations. The spec parser refuses overflow.
+  {
+    const max = 2 ** 128 - 2 ** 104;
+    const overflowTie = 2 ** 128 - 2 ** 103;
+    const rows: ReadonlyArray<readonly [string, number, number]> = [
+      ['decimal tie, positive', 1897.40625, 1897.4062],
+      ['decimal tie, negative', -1.62890625, -1.6289062],
+      ['binary tie, lower even', 1 + 2 ** -24, 1],
+      ['binary tie, upper even', 1 + 3 * 2 ** -24, 1.0000002],
+      ['positive zero', 0, 0],
+      ['negative zero', -0, 0],
+      ['negative underflow tie', -(2 ** -150), 0],
+      ['smallest subnormal', 2 ** -149, 1e-45],
+      ['negative subnormal', -(2 ** -149), -1e-45],
+      ['largest subnormal', 2 ** -126 - 2 ** -149, 1.1754942e-38],
+      ['smallest normal', 2 ** -126, 1.1754944e-38],
+      ['maximum finite', max, 3.4028235e38],
+      ['above maximum finite, rounds back', max + 2 ** 102, 3.4028235e38],
+      ['overflow tie', overflowTie, Infinity],
+      ['above overflow tie', overflowTie + 2 ** 102, Infinity],
+      ['negative overflow tie', -overflowTie, -Infinity],
+    ];
+    const faults: string[] = [];
+    const accepted = rows.filter(([, , expected]) => Number.isFinite(expected));
+    let compiled = 0;
+    let refused = 0;
+    for (const [label, input, expected] of rows) {
+      const actual = entryF32(input);
+      if (!Object.is(actual, f32(input)) || !Object.is(actual, expected)) {
+        faults.push(`${label}: public f32 returned ${String(actual)}, compiler f32 returned ${String(f32(input))}, expected ${String(expected)}`);
+      }
+    }
+    const rigPath = join(work, 'float32.rig.json');
+    const motionPath = join(work, 'float32.motion.json');
+    const opts = { rigPath, motionPath, outDir: work };
+    writeFileSync(motionPath, '{"spec":"rigc-motion/1","archetype":"float32","cut":"float32","easings":{},"animations":{}}');
+    const compileValues = (inputs: readonly number[]): ReturnType<typeof compileModel> => {
+      // Preserve the authored -0 through the JSON parser.
+      const bones = inputs.map((value, i) => `{"name":"probe_${i}","parent":"root","x":${Object.is(value, -0) ? '-0' : value}}`);
+      writeFileSync(rigPath, `{"spec":"rigc-rig/1","name":"float32","skeleton":{"width":64,"height":64},"bones":[{"name":"root"},${bones.join(',')}],"slots":[],"skins":{"default":{}}}`);
+      return compileModel(opts);
+    };
+    try {
+      const { model } = compileValues(accepted.map(([, input]) => input));
+      for (const [i, [label, input]] of accepted.entries()) {
+        const x = model.bones.find((bone) => bone.name === `probe_${i}`)?.x;
+        if (Object.is(x, entryF32(input))) compiled++;
+        else faults.push(`${label}: compiler emitted ${String(x)}, expected ${String(entryF32(input))}`);
+      }
+    } catch (error) {
+      faults.push(`finite rig inputs were refused: ${String(error)}`);
+    }
+    for (const [label, input, expected] of rows) {
+      if (Number.isFinite(expected)) continue;
+      try {
+        compileValues([input]);
+        faults.push(`${label}: the compiler accepted overflow`);
+      } catch (error) {
+        if (error instanceof CompileError && error.code === 'CE_KEYS_NUMBER_FLOAT32_FINITE') refused++;
+        else faults.push(`${label}: unexpected refusal ${String(error)}`);
+      }
+    }
+    const ok = faults.length === 0;
+    say('MD12_BROWSER_F32_MATCHES_COMPILER_AT_TIES_AND_FLOAT32_LIMITS', ok,
+      probeDetail(ok, faults, `${rows.length} public/compiler f32 readings match literal expectations; ${compiled} compiled bone coordinates match; ${refused} overflowing rig inputs refused by name`),
+      'issue #1795: a browser writer can share the compiler decimal rule, including exact ties, signed zero, subnormals, and the finite-to-infinite boundary');
   }
 
   probe.done();

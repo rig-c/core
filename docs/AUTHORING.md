@@ -2142,6 +2142,12 @@ past that line would be emitted as Infinity, which JSON writes as `null`: `1e309
 both refused by the field they are in, before anything is compiled (§5.1). The cut
 manifest and the motion spec are held to the same line.
 
+For a browser consumer that writes the same numeric values, import `f32` from
+`@rig-c/core/core`. It returns the shortest decimal that rounds to the same
+float32, taking the closest decimal of that length and breaking a tie toward
+the even last digit. It canonicalizes signed zero to positive zero. The
+compiler applies its key-time rule separately (§4.5).
+
 🔤 **Every field below holds one JSON type, and a value of another is refused.**
 Where a table says a field is a position, an angle, a scale, a mix, a count, a
 size or an index, it is a JSON **number** — `5`, never `"5"`; a flag is `true` or
